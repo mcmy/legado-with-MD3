@@ -198,7 +198,7 @@ const setLegadoRetmoteUrl = () => {
           API.getReadConfig(url)
             .then(function (config) {
               connectionStore.setNewConnect(false)
-              applyReadConfig(config)
+              if (store.readConfigSyncEnabled) applyReadConfig(config)
               instance.confirmButtonLoading = false
               store.clearSearchBooks()
               setApiEntryPoint(...parseLeagdoHttpUrlWithDefault(url))

@@ -7,6 +7,15 @@
     <div class="settings-title">设置</div>
     <div class="setting-list">
       <ul>
+        <li class="sync-config">
+          <i>同步配置</i>
+          <el-switch
+            v-model="readConfigSyncEnabled"
+            :loading="readConfigSyncLoading"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+        </li>
         <li class="theme-list">
           <i>阅读主题</i>
           <span
@@ -204,15 +213,14 @@
 import '../assets/fonts/popfont.css'
 import '../assets/fonts/iconfont.css'
 import settings from '../config/themeConfig'
-import API from '@api'
 import { useDebounceFn } from '@vueuse/shared'
 
 const store = useBookStore()
 const saveConfigDebounce = useDebounceFn(
-  () => API.saveReadConfig(store.config),
+  () => store.saveReadConfig(),
   500,
 )
-//阅读界面设置改变时保存同步配置
+// 阅读界面设置改变时保存配置: 默认仅保存浏览器本地, 开启同步后再同步到手机端
 watch(
   () => store.config,
   () => {
@@ -222,6 +230,48 @@ watch(
     deep: 2, //深度为2
   },
 )
+const readConfigSyncLoading = ref(false)
+const resolveReadConfigConflict = async (
+  serverConfig: Awaited<ReturnType<typeof store.enableReadConfigSync>>['serverConfig'],
+) => {
+  return ElMessageBox.confirm(
+    '浏览器配置和手机备份配置不一致，请选择要保留哪一份。',
+    '同步配置',
+    {
+      confirmButtonText: '浏览器覆盖备份',
+      cancelButtonText: '备份覆盖浏览器',
+      distinguishCancelAndClose: true,
+      type: 'warning',
+    },
+  )
+    .then(() => store.enableReadConfigSync('browser', serverConfig))
+    .catch(action => {
+      if (action === 'cancel') {
+        return store.enableReadConfigSync('server', serverConfig)
+      }
+      throw action
+    })
+}
+const readConfigSyncEnabled = computed({
+  get: () => store.readConfigSyncEnabled,
+  set: async value => {
+    if (!value) {
+      store.setReadConfigSyncEnabled(false)
+      return
+    }
+    readConfigSyncLoading.value = true
+    try {
+      const result = await store.enableReadConfigSync()
+      if (result.status === 'conflict') {
+        await resolveReadConfigConflict(result.serverConfig)
+      }
+    } catch {
+      store.setReadConfigSyncEnabled(false)
+    } finally {
+      readConfigSyncLoading.value = false
+    }
+  },
+})
 
 //主题颜色
 const theme = computed(() => store.theme)
