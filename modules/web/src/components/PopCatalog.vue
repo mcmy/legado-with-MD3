@@ -34,6 +34,12 @@ const { catalog, popCataVisible, miniInterface } = storeToRefs(store)
 const isNight = computed(() => store.theme)
 const theme = computed(() => store.theme)
 const popupTheme = computed(() => {
+  if (store.config.customTheme.enabled) {
+    return {
+      background: store.config.customTheme.popupBgColor,
+      color: store.config.customTheme.textColor,
+    }
+  }
   return {
     background: settings.themes[theme.value].popup,
   }

@@ -21,6 +21,35 @@
             ><em v-else class="moon-icon">{{ moonIcon }}</em></span
           >
         </li>
+        <li class="custom-theme">
+          <i>自定颜色</i>
+          <el-switch
+            v-model="customThemeEnabled"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <div class="color-list">
+            <label class="color-item">
+              <span>文字</span>
+              <input v-model="customTextColor" type="color" />
+            </label>
+            <label class="color-item">
+              <span>背景</span>
+              <input v-model="customBodyBgColor" type="color" />
+            </label>
+            <label class="color-item">
+              <span>正文</span>
+              <input v-model="customContentBgColor" type="color" />
+            </label>
+            <label class="color-item">
+              <span>弹窗</span>
+              <input v-model="customPopupBgColor" type="color" />
+            </label>
+          </div>
+          <span class="font-item reset-color" @click="resetCustomTheme">
+            重置
+          </span>
+        </li>
         <li class="font-list">
           <i>正文字体</i>
           <span
@@ -222,12 +251,47 @@ const themeColors = [
   },
 ]
 const popupTheme = computed(() => {
+  if (store.config.customTheme.enabled) {
+    return {
+      background: store.config.customTheme.popupBgColor,
+      color: store.config.customTheme.textColor,
+    }
+  }
   return {
     background: settings.themes[theme.value].popup,
   }
 })
 const setTheme = (theme: number) => {
   store.config.theme = theme
+}
+const customThemeEnabled = computed({
+  get: () => store.config.customTheme.enabled,
+  set: value => (store.config.customTheme.enabled = value),
+})
+const customTextColor = computed({
+  get: () => store.config.customTheme.textColor,
+  set: value => (store.config.customTheme.textColor = value),
+})
+const customBodyBgColor = computed({
+  get: () => store.config.customTheme.bodyBgColor,
+  set: value => (store.config.customTheme.bodyBgColor = value),
+})
+const customContentBgColor = computed({
+  get: () => store.config.customTheme.contentBgColor,
+  set: value => (store.config.customTheme.contentBgColor = value),
+})
+const customPopupBgColor = computed({
+  get: () => store.config.customTheme.popupBgColor,
+  set: value => (store.config.customTheme.popupBgColor = value),
+})
+const resetCustomTheme = () => {
+  store.config.customTheme = {
+    enabled: false,
+    textColor: '#666666',
+    bodyBgColor: '#0f0f0f',
+    contentBgColor: '#000000',
+    popupBgColor: '#111111',
+  }
 }
 
 //预置字体
@@ -405,7 +469,7 @@ const setInfiniteLoading = (loading: boolean) => {
           min-width: 48px;
           margin-right: 16px;
           vertical-align: middle;
-          color: #666;
+          color: inherit;
         }
 
         .theme-item {
@@ -435,6 +499,7 @@ const setInfiniteLoading = (loading: boolean) => {
       }
 
       .font-list,
+      .custom-theme,
       .infinite-loading {
         margin-top: 28px;
 
@@ -468,6 +533,40 @@ const setInfiniteLoading = (loading: boolean) => {
         .infinite-loading-item:hover {
           border: 1px solid #ed4259;
           color: #ed4259;
+        }
+      }
+
+      .custom-theme {
+        .color-list {
+          display: inline-flex;
+          flex-wrap: wrap;
+          gap: 10px 16px;
+          margin: 12px 16px 0 64px;
+          vertical-align: middle;
+        }
+
+        .color-item {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font:
+            12px / 16px PingFangSC-Regular,
+            '-apple-system',
+            Simsun;
+        }
+
+        input[type='color'] {
+          width: 34px;
+          height: 34px;
+          padding: 0;
+          border: none;
+          background: transparent;
+          cursor: pointer;
+        }
+
+        .reset-color {
+          margin-top: 12px;
+          line-height: 34px;
         }
       }
 
@@ -505,7 +604,7 @@ const setInfiniteLoading = (loading: boolean) => {
           }
 
           .lang {
-            color: #a6a6a6;
+            color: inherit;
             font-weight: 400;
             font-family: FZZCYSK;
           }
@@ -535,6 +634,7 @@ const setInfiniteLoading = (loading: boolean) => {
   }
 
   :deep(.font-list),
+  :deep(.custom-theme),
   .infinite-loading {
     .font-item,
     .infinite-loading-item {
@@ -568,6 +668,7 @@ const setInfiniteLoading = (loading: boolean) => {
   }
 
   :deep(.font-list),
+  :deep(.custom-theme),
   .infinite-loading {
     .font-item,
     .infinite-loading-item {

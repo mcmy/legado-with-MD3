@@ -201,6 +201,19 @@ const fontSize = computed(() => {
 const bodyColor = computed(() => settings.themes[theme.value].body)
 const chapterColor = computed(() => settings.themes[theme.value].content)
 const popupColor = computed(() => settings.themes[theme.value].popup)
+const customTheme = computed(() => store.config.customTheme)
+const readTextColor = computed(() => {
+  if (customTheme.value.enabled) return customTheme.value.textColor
+  return isNight.value ? '#666' : '#262626'
+})
+const toolTextColor = computed(() => {
+  if (customTheme.value.enabled) return customTheme.value.textColor
+  return isNight.value ? '#666' : '#000'
+})
+const toolSubTextColor = computed(() => {
+  if (customTheme.value.enabled) return customTheme.value.textColor
+  return isNight.value ? '#666' : 'rgba(0, 0, 0, 0.4)'
+})
 
 const readWidth = computed(() => {
   if (!miniInterface.value) {
@@ -218,19 +231,28 @@ const popupWidth = computed(() => {
 })
 const bodyTheme = computed(() => {
   return {
-    background: bodyColor.value,
+    background: customTheme.value.enabled
+      ? customTheme.value.bodyBgColor
+      : bodyColor.value,
   }
 })
 const chapterTheme = computed(() => {
   return {
-    background: chapterColor.value,
+    background: customTheme.value.enabled
+      ? customTheme.value.contentBgColor
+      : chapterColor.value,
+    color: readTextColor.value,
     width: readWidth.value,
   }
 })
 const showToolBar = ref(false)
 const leftBarTheme = computed(() => {
   return {
-    background: popupColor.value,
+    background: customTheme.value.enabled
+      ? customTheme.value.popupBgColor
+      : popupColor.value,
+    color: toolTextColor.value,
+    '--tool-sub-color': toolSubTextColor.value,
     marginLeft: miniInterface.value
       ? 0
       : -(store.config.readWidth / 2 + 68) + 'px',
@@ -239,7 +261,11 @@ const leftBarTheme = computed(() => {
 })
 const rightBarTheme = computed(() => {
   return {
-    background: popupColor.value,
+    background: customTheme.value.enabled
+      ? customTheme.value.popupBgColor
+      : popupColor.value,
+    color: toolTextColor.value,
+    '--tool-sub-color': toolSubTextColor.value,
     marginRight: miniInterface.value
       ? 0
       : -(store.config.readWidth / 2 + 52) + 'px',
@@ -688,16 +714,15 @@ onBeforeRouteLeave(async (to, from, next) => {
   :deep(.tool-icon) {
     border: 1px solid rgba(0, 0, 0, 0.1);
     margin-top: -1px;
-    color: #000;
+    color: inherit;
 
     .icon-text {
-      color: rgba(0, 0, 0, 0.4);
+      color: var(--tool-sub-color);
     }
   }
 
   :deep(.chapter) {
     border: 1px solid #d8d8d8;
-    color: #262626;
   }
 }
 
@@ -711,16 +736,15 @@ onBeforeRouteLeave(async (to, from, next) => {
   :deep(.tool-icon) {
     border: 1px solid #444;
     margin-top: -1px;
-    color: #666;
+    color: inherit;
 
     .icon-text {
-      color: #666;
+      color: var(--tool-sub-color);
     }
   }
 
   :deep(.chapter) {
     border: 1px solid #444;
-    color: #666;
   }
 
   :deep(.popper__arrow) {

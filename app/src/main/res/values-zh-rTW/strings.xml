@@ -1275,4 +1275,5 @@
     <string name="bookshelf_empty_global_search">沒有書籍，嘗試全域搜尋</string>
     <string name="global_search">全域搜尋</string>
     <string name="cache_management">快取管理</string>
+    <string name="quick_read_style">快速切換主題</string>
 </resources>

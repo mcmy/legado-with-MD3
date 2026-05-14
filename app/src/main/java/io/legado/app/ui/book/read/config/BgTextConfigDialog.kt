@@ -130,6 +130,7 @@ class BgTextConfigDialog : BaseBottomSheetDialogFragment(R.layout.dialog_read_bg
     private fun initData() = with(ReadBookConfig.durConfig) {
         binding.tvName.text = name.ifBlank { "文字" }
         binding.swDarkStatusIcon.isChecked = curStatusIconDark()
+        binding.swQuickStyle.isChecked = ReadBookConfig.isQuickStyleSelect()
         binding.sbBgAlpha.value = ReadBookConfig.bgAlpha.toFloat()
         binding.dottedRatio.valueFormat = {
             (ReadBookConfig.dottedRatio * 100).toInt().toString()
@@ -171,6 +172,9 @@ class BgTextConfigDialog : BaseBottomSheetDialogFragment(R.layout.dialog_read_bg
         binding.swDarkStatusIcon.setOnCheckedChangeListener { _, isChecked ->
             setCurStatusIconDark(isChecked)
             (activity as? ReadBookActivity)?.upSystemUiVisibility()
+        }
+        binding.swQuickStyle.setOnCheckedChangeListener { _, isChecked ->
+            ReadBookConfig.setQuickStyleSelect(enabled = isChecked)
         }
         binding.tvBgColor.setOnClickListener {
             val bgColor =

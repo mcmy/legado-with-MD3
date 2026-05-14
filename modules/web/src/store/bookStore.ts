@@ -18,6 +18,13 @@ const default_config: webReadConfig = {
   infiniteLoading: false,
   customFontName: '',
   jumpDuration: 1000,
+  customTheme: {
+    enabled: false,
+    textColor: '#666666',
+    bodyBgColor: '#0f0f0f',
+    contentBgColor: '#000000',
+    popupBgColor: '#111111',
+  },
   spacing: {
     paragraph: 1,
     line: 0.8,
@@ -165,7 +172,18 @@ export const useBookStore = defineStore('book', {
       )
     },
     setConfig(config?: webReadConfig) {
-      this.config = Object.assign({}, this.config, config)
+      this.config = {
+        ...this.config,
+        ...config,
+        customTheme: {
+          ...this.config.customTheme,
+          ...config?.customTheme,
+        },
+        spacing: {
+          ...this.config.spacing,
+          ...config?.spacing,
+        },
+      }
     },
     setReadSettingsVisible(visible: boolean) {
       this.readSettingsVisible = visible

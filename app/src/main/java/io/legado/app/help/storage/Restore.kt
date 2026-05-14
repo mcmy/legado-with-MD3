@@ -28,6 +28,7 @@ import io.legado.app.data.entities.TxtTocRule
 import io.legado.app.data.entities.readRecord.ReadRecord
 import io.legado.app.data.entities.readRecord.ReadRecordDetail
 import io.legado.app.data.entities.readRecord.ReadRecordSession
+import io.legado.app.help.CacheManager
 import io.legado.app.help.DirectLinkUpload
 import io.legado.app.help.LauncherIconHelp
 import io.legado.app.help.book.isLocal
@@ -284,6 +285,13 @@ object Restore {
             AppLog.put("恢复封面规则出错\n${it.localizedMessage}", it)
         }
         if (!BackupConfig.ignoreReadConfig) {
+            File(path, Backup.webReadConfigFileName).takeIf {
+                it.exists()
+            }?.runCatching {
+                CacheManager.put(Backup.webReadConfigKey, readText())
+            }?.onFailure {
+                AppLog.put("恢复web阅读配置出错\n${it.localizedMessage}", it)
+            }
             //恢复阅读界面配置
             File(path, ReadBookConfig.configFileName).takeIf {
                 it.exists()

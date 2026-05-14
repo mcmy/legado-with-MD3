@@ -10,6 +10,7 @@ import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.AppWebDav
+import io.legado.app.help.CacheManager
 import io.legado.app.help.DirectLinkUpload
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.LocalConfig
@@ -57,6 +58,8 @@ object Backup {
     val zipFilePath = "${appCtx.externalFiles.absolutePath}${File.separator}tmp_backup.zip"
 
     private const val TAG = "Backup"
+    const val webReadConfigFileName = "webReadConfig.json"
+    const val webReadConfigKey = "webReadConfig"
 
     private val mutex = Mutex()
 
@@ -84,6 +87,7 @@ object Backup {
             ReadBookConfig.shareConfigFileName,
             OldThemeConfig.configFileName,
             BookCover.configFileName,
+            webReadConfigFileName,
             "config.xml"
         )
     }
@@ -180,6 +184,12 @@ object Backup {
         BookCover.getConfig()?.let {
             FileUtils.createFileIfNotExist(backupPath + File.separator + BookCover.configFileName)
                 .writeText(GSON.toJson(it))
+        }
+        if (!BackupConfig.ignoreReadConfig) {
+            CacheManager.get(webReadConfigKey, true)?.let {
+                FileUtils.createFileIfNotExist(backupPath + File.separator + webReadConfigFileName)
+                    .writeText(it)
+            }
         }
         currentCoroutineContext().ensureActive()
         appCtx.getSharedPreferences(backupPath, "config")?.let { sp ->

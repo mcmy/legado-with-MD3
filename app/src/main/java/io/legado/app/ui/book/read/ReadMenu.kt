@@ -235,6 +235,8 @@ class ReadMenu @JvmOverloads constructor(
         titleBar.setBackgroundColor(alphaBgColor)
         titleBar.toolbar.setBackgroundColor(alphaBgColor)
         bottomView.setBackgroundColor(alphaBgColor)
+        btnQuickStyle.backgroundTintList = ColorStateList.valueOf(bgColor)
+        btnQuickStyle.iconTint = ColorStateList.valueOf(acColor)
         (tvPre.background as? RippleDrawable)?.setColor(ColorStateList.valueOf(bgcColor))
         (tvNext.background as? RippleDrawable)?.setColor(ColorStateList.valueOf(bgcColor))
         cdSlider.setCardBackgroundColor(alphaBgColor)
@@ -275,6 +277,7 @@ class ReadMenu @JvmOverloads constructor(
             item.icon?.setTint(acColor)
         }
         binding.titleBar.toolbar.overflowIcon?.setTint(acColor)
+        binding.btnQuickStyle.iconTint = ColorStateList.valueOf(acColor)
     }
 
     fun reset() {
@@ -322,12 +325,14 @@ class ReadMenu @JvmOverloads constructor(
         this.visible()
         binding.titleBar.visible()
         binding.bottomMenu.visible()
+        binding.btnQuickStyle.isVisible = ReadBookConfig.quickStyleSelects.isNotEmpty()
         updateToolBarColor()
         changeReplace(ReadBook.book?.getUseReplaceRule() ?: false)
         updateBadge("replace_badge", ReadBook.curTextChapter?.effectiveReplaceRules?.size ?: 0)
         if (anim) {
             binding.titleBar.startAnimation(menuTopIn)
             binding.bottomMenu.startAnimation(menuBottomIn)
+            binding.btnQuickStyle.startAnimation(fadeIn)
             updateBrightnessVisibility(true)
         } else {
             menuInListener.onAnimationStart(menuBottomIn)
@@ -345,6 +350,7 @@ class ReadMenu @JvmOverloads constructor(
             if (anim) {
                 binding.titleBar.startAnimation(menuTopOut)
                 binding.bottomMenu.startAnimation(menuBottomOut)
+                binding.btnQuickStyle.startAnimation(fadeOut)
                 updateBrightnessVisibility(false)
 
             } else {
@@ -446,6 +452,13 @@ class ReadMenu @JvmOverloads constructor(
         vwBrightnessPosAdjust.setOnClickListener {
             AppConfig.brightnessVwPos = !AppConfig.brightnessVwPos
             upBrightnessVwPos()
+        }
+
+        btnQuickStyle.setOnClickListener {
+            if (ReadBookConfig.switchToNextQuickStyle()) {
+                callBack.onQuickStyleChanged()
+                reset()
+            }
         }
 
         seekReadPage.addOnChangeListener { _, value, fromUser ->
@@ -914,6 +927,7 @@ class ReadMenu @JvmOverloads constructor(
         fun onMenuShow()
         fun onMenuHide()
         fun changeReplaceRuleState()
+        fun onQuickStyleChanged()
     }
 
     data class ToolButton(

@@ -1535,4 +1535,5 @@
     <string name="download_setting">Download</string>
     <string name="image_cache">Image Cache</string>
     <string name="network">Network</string>
+    <string name="quick_read_style">Quick theme switch</string>
 </resources>

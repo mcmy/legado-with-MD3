@@ -26,12 +26,10 @@ import io.legado.app.utils.getFile
 import io.legado.app.utils.getMeanColor
 import io.legado.app.utils.getPrefBoolean
 import io.legado.app.utils.getPrefInt
-import io.legado.app.utils.getPrefString
 import io.legado.app.utils.hexString
 import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.putPrefBoolean
 import io.legado.app.utils.putPrefInt
-import io.legado.app.utils.putPrefString
 import io.legado.app.utils.resizeAndRecycle
 import splitties.init.appCtx
 import java.io.File
@@ -164,6 +162,30 @@ object ReadBookConfig {
         return false
     }
 
+    val quickStyleSelects: List<Int>
+        get() = configList.mapIndexedNotNull { index, config ->
+            index.takeIf { config.quickStyleSelect }
+        }
+
+    fun isQuickStyleSelect(index: Int = styleSelect): Boolean {
+        return configList.getOrNull(index)?.quickStyleSelect == true
+    }
+
+    fun setQuickStyleSelect(index: Int = styleSelect, enabled: Boolean) {
+        configList.getOrNull(index)?.quickStyleSelect = enabled
+    }
+
+    fun nextQuickStyleSelect(): Int? {
+        val selects = quickStyleSelects
+        if (selects.isEmpty()) return null
+        val currentIndex = selects.indexOf(styleSelect)
+        return if (currentIndex >= 0) {
+            selects[(currentIndex + 1) % selects.size]
+        } else {
+            selects.first()
+        }
+    }
+
     fun clearBgAndCache() {
         val bgs = hashSetOf<String>()
         configList.forEach { config ->
@@ -228,6 +250,11 @@ object ReadBookConfig {
                 appCtx.putPrefBoolean(PreferKey.shareLayout, value)
             }
         }
+
+    fun switchToNextQuickStyle(): Boolean {
+        styleSelect = nextQuickStyleSelect() ?: return false
+        return true
+    }
     
     val regexColorRules: ArrayList<RegexColorRule> get() = durConfig.regexColorRules
 
@@ -747,6 +774,7 @@ object ReadBookConfig {
         var bgType: Int = 0,//白天背景类型 0:颜色, 1:assets图片, 2其它图片
         var bgTypeNight: Int = 0,//夜间背景类型
         var bgTypeEInk: Int = 0,//EInk背景类型
+        var quickStyleSelect: Boolean = false,//加入快速切换主题
         private var darkStatusIcon: Boolean = true,//白天是否暗色状态栏
         private var darkStatusIconNight: Boolean = false,//晚上是否暗色状态栏
         private var darkStatusIconEInk: Boolean = true,
