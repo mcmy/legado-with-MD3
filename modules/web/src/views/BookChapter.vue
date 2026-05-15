@@ -355,6 +355,8 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
       err => {
         const content = ['获取章节内容失败！']
         chapterData.value.push({ index, content, title })
+        store.setContentLoading(true)
+        noPoint.value = false
         store.setShowContent(true)
         throw err
       },

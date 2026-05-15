@@ -213,9 +213,14 @@ export const useBookStore = defineStore('book', {
         const localConfig = readLocalWebConfig()
         this.setConfig(localConfig)
         if (this.readConfigSyncEnabled) {
-          const serverConfig = await API.getReadConfig()
-          this.setConfig(serverConfig)
-          this.saveLocalReadConfig()
+          try {
+            const serverConfig = await API.getReadConfig()
+            this.setConfig(serverConfig)
+            this.saveLocalReadConfig()
+          } catch {
+            this.setReadConfigSyncEnabled(false)
+            ElMessage.warning('同步配置加载失败，已暂时使用浏览器本地配置')
+          }
         }
         webReadConfigLoadedDate = new Date()
         console.log(

@@ -9,6 +9,7 @@ import android.graphics.drawable.RippleDrawable
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.View
 import android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
 import android.view.animation.AlphaAnimation
 import android.view.animation.Animation
@@ -85,14 +86,11 @@ class ReadMenu @JvmOverloads constructor(
         loadAnimation(context, R.anim.anim_readbook_bottom_out)
     }
 
-    private val fadeIn = AlphaAnimation(0f, 1f).apply {
-        duration = 280
-        fillAfter = true
-    }
-
-    private val fadeOut = AlphaAnimation(1f, 0f).apply {
-        duration = 280
-        fillAfter = true
+    private fun fadeAnimation(fromAlpha: Float, toAlpha: Float): Animation {
+        return AlphaAnimation(fromAlpha, toAlpha).apply {
+            duration = 280
+            fillAfter = true
+        }
     }
 
     private val colorSurfaceContainer: Int
@@ -183,15 +181,7 @@ class ReadMenu @JvmOverloads constructor(
             binding.vwMenuBg.setOnClickListener(null)
         }
 
-        override fun onAnimationEnd(animation: Animation) {
-            this@ReadMenu.invisible()
-            binding.titleBar.invisible()
-            binding.bottomMenu.invisible()
-            canShowMenu = false
-            isMenuOutAnimating = false
-            onMenuOutEnd?.invoke()
-            callBack.upSystemUiVisibility()
-        }
+        override fun onAnimationEnd(animation: Animation) = finishMenuOut()
 
         override fun onAnimationRepeat(animation: Animation) = Unit
     }
@@ -321,6 +311,9 @@ class ReadMenu @JvmOverloads constructor(
     }
 
     fun runMenuIn(anim: Boolean = !AppConfig.isEInkMode) {
+        isMenuOutAnimating = false
+        onMenuOutEnd = null
+        clearMenuAnimations()
         callBack.onMenuShow()
         this.visible()
         binding.titleBar.visible()
@@ -332,7 +325,7 @@ class ReadMenu @JvmOverloads constructor(
         if (anim) {
             binding.titleBar.startAnimation(menuTopIn)
             binding.bottomMenu.startAnimation(menuBottomIn)
-            binding.btnQuickStyle.startAnimation(fadeIn)
+            binding.btnQuickStyle.startFadeAnimation(0f, 1f)
             updateBrightnessVisibility(true)
         } else {
             menuInListener.onAnimationStart(menuBottomIn)
@@ -342,6 +335,9 @@ class ReadMenu @JvmOverloads constructor(
 
     fun runMenuOut(anim: Boolean = !AppConfig.isEInkMode, onMenuOutEnd: (() -> Unit)? = null) {
         if (isMenuOutAnimating) {
+            if (this.onMenuOutEnd == null) {
+                this.onMenuOutEnd = onMenuOutEnd
+            }
             return
         }
         callBack.onMenuHide()
@@ -350,24 +346,58 @@ class ReadMenu @JvmOverloads constructor(
             if (anim) {
                 binding.titleBar.startAnimation(menuTopOut)
                 binding.bottomMenu.startAnimation(menuBottomOut)
-                binding.btnQuickStyle.startAnimation(fadeOut)
+                binding.btnQuickStyle.startFadeAnimation(1f, 0f)
                 updateBrightnessVisibility(false)
+                postDelayed({
+                    if (isMenuOutAnimating) {
+                        finishMenuOut()
+                    }
+                }, menuBottomOut.duration + 80L)
 
             } else {
                 menuOutListener.onAnimationStart(menuBottomOut)
                 menuOutListener.onAnimationEnd(menuBottomOut)
             }
+        } else {
+            val pendingAction = this.onMenuOutEnd
+            this.onMenuOutEnd = null
+            pendingAction?.invoke()
         }
     }
 
     fun updateBrightnessVisibility(boolean: Boolean) {
         if (showBrightnessView) {
             if(boolean){
-                binding.llBrightness.startAnimation(fadeIn)
+                binding.llBrightness.startFadeAnimation(0f, 1f)
             }else{
-                binding.llBrightness.startAnimation(fadeOut)
+                binding.llBrightness.startFadeAnimation(1f, 0f)
             }
         }
+    }
+
+    private fun View.startFadeAnimation(fromAlpha: Float, toAlpha: Float) {
+        clearAnimation()
+        startAnimation(fadeAnimation(fromAlpha, toAlpha))
+    }
+
+    private fun clearMenuAnimations() = binding.run {
+        titleBar.clearAnimation()
+        bottomMenu.clearAnimation()
+        btnQuickStyle.clearAnimation()
+        llBrightness.clearAnimation()
+    }
+
+    private fun finishMenuOut() {
+        clearMenuAnimations()
+        this@ReadMenu.invisible()
+        binding.titleBar.invisible()
+        binding.bottomMenu.invisible()
+        canShowMenu = false
+        isMenuOutAnimating = false
+        val pendingAction = onMenuOutEnd
+        onMenuOutEnd = null
+        pendingAction?.invoke()
+        callBack.upSystemUiVisibility()
     }
 
     private fun brightnessAuto(): Boolean {
@@ -894,17 +924,25 @@ class ReadMenu @JvmOverloads constructor(
     }
 
     private fun upBrightnessVwPos() {
-        if (AppConfig.brightnessVwPos) {
-            binding.root.modifyBegin()
-                .clear(R.id.ll_brightness, ConstraintModify.Anchor.LEFT)
-                .rightToRightOf(R.id.ll_brightness, R.id.vw_menu_root)
-                .commit()
-        } else {
-            binding.root.modifyBegin()
-                .clear(R.id.ll_brightness, ConstraintModify.Anchor.RIGHT)
-                .leftToLeftOf(R.id.ll_brightness, R.id.vw_menu_root)
-                .commit()
-        }
+        binding.root.modifyBegin()
+            .clear(R.id.ll_brightness, ConstraintModify.Anchor.LEFT)
+            .clear(R.id.ll_brightness, ConstraintModify.Anchor.RIGHT)
+            .clear(R.id.ll_brightness, ConstraintModify.Anchor.START)
+            .clear(R.id.ll_brightness, ConstraintModify.Anchor.END)
+            .clear(R.id.btn_quick_style, ConstraintModify.Anchor.LEFT)
+            .clear(R.id.btn_quick_style, ConstraintModify.Anchor.RIGHT)
+            .clear(R.id.btn_quick_style, ConstraintModify.Anchor.START)
+            .clear(R.id.btn_quick_style, ConstraintModify.Anchor.END)
+            .apply {
+                if (AppConfig.brightnessVwPos) {
+                    rightToRightOf(R.id.ll_brightness, R.id.vw_menu_root)
+                    leftToLeftOf(R.id.btn_quick_style, R.id.vw_menu_root)
+                } else {
+                    leftToLeftOf(R.id.ll_brightness, R.id.vw_menu_root)
+                    rightToRightOf(R.id.btn_quick_style, R.id.vw_menu_root)
+                }
+            }
+            .commit()
     }
 
     interface CallBack {

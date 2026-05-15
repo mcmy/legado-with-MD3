@@ -15,12 +15,16 @@ export const useLoading = (
   const closeLoading = () => (isLoading.value = false)
   const showLoading = () => (isLoading.value = true)
   watch(isLoading, loading => {
-    if (!loading) return loadingInstance?.close()
+    loadingInstance?.close()
+    loadingInstance = null
+    if (!loading) return
+    const loadingTarget = unref(target)
+    if (loadingTarget == null || loadingTarget === '') return
     loadingInstance = ElLoading.service({
-      target: unref(target),
+      target: loadingTarget,
       spinner: spinner,
       text: text,
-      lock: true,
+      lock: false,
       background: 'rgba(0, 0, 0, 0)',
     })
   })
