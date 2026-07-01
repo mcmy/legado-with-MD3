@@ -29,6 +29,7 @@ import io.legado.app.ui.widget.components.ActionItem
 import io.legado.app.ui.widget.components.AppFloatingActionButton
 import io.legado.app.ui.widget.components.SelectionActions
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.list.ListScaffold
 import io.legado.app.ui.widget.components.list.ListUiState
 import io.legado.app.ui.widget.components.text.AppText
@@ -43,7 +44,7 @@ fun <T> RuleListScaffold(
     onBackClick: () -> Unit,
     onSearchToggle: (Boolean) -> Unit,
     onSearchQueryChange: (String) -> Unit,
-    searchPlaceholder: String = "搜索...",
+    searchPlaceholder: String? = null,
     topBarActions: @Composable RowScope.() -> Unit = {},
     bottomContent: @Composable (ColumnScope.(GlassTopAppBarScrollBehavior) -> Unit)? = null,
     dropDownMenuContent: (@Composable ColumnScope.(dismiss: () -> Unit) -> Unit)? = null,
@@ -61,10 +62,9 @@ fun <T> RuleListScaffold(
                     visible = state.selectedIds.isEmpty(),
                     alignment = Alignment.BottomEnd,
                 ),
-                tooltipText = "添加"
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add")
-            }
+                tooltipText = "添加",
+                icon = Icons.Default.Add
+            )
         }
     },
     snackbarHostState: SnackbarHostState,
@@ -106,7 +106,7 @@ fun <T> RuleListScaffold(
             onSelectInvert = onSelectInvert,
             primaryAction = ActionItem(
                 text = stringResource(R.string.delete),
-                icon = { Icon(Icons.Default.Delete, null) },
+                icon = Icons.Default.Delete,
                 onClick = { showDeleteConfirmDialog = true }
             ),
             secondaryActions = selectionSecondaryActions

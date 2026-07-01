@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -51,6 +54,7 @@ fun AppAlertDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 12.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
                         content()
                     }
@@ -69,7 +73,6 @@ fun AppAlertDialog(
                             modifier = Modifier.weight(1f),
                             onClick = {
                                 onDismiss()
-                                onDismissRequest()
                             }
                         )
                     }
@@ -91,19 +94,23 @@ fun AppAlertDialog(
             AlertDialog(
                 onDismissRequest = onDismissRequest,
                 modifier = modifier,
-                containerColor = LegadoTheme.colorScheme.surfaceContainerHigh,
+                containerColor = LegadoTheme.colorScheme.surfaceContainer,
                 iconContentColor = LegadoTheme.colorScheme.primary,
                 titleContentColor = LegadoTheme.colorScheme.onSurface,
                 textContentColor = LegadoTheme.colorScheme.onSurfaceVariant,
                 tonalElevation = AlertDialogDefaults.TonalElevation,
                 title = title?.let { { Text(text = it) } },
                 text = {
-                    Column {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
                         if (text != null) {
-                            Text(
-                                text = text,
-                                modifier = Modifier.padding(bottom = if (content != null) 16.dp else 0.dp)
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = text,
+                                    modifier = Modifier.padding(bottom = if (content != null) 16.dp else 0.dp)
+                                )
+                            }
                         }
                         if (content != null) {
                             content()
@@ -123,7 +130,6 @@ fun AppAlertDialog(
                         SecondaryButton(
                             onClick = {
                                 onDismiss()
-                                onDismissRequest()
                             },
                             text = dismissText
                         )
@@ -144,6 +150,7 @@ fun <T> AppAlertDialog(
     onDismissRequest: () -> Unit,
     title: String? = null,
     text: String? = null,
+    textProvider: @Composable (T.() -> String)? = null,
     confirmText: String = "确定",
     onConfirm: ((T) -> Unit)? = null,
     dismissText: String = "取消",
@@ -159,11 +166,18 @@ fun <T> AppAlertDialog(
 
     val currentData = cachedData
     if (currentData != null) {
+        val currentText = text ?: textProvider?.invoke(currentData)
+        var lastValidText by remember { mutableStateOf(currentText) }
+        
+        if (currentText != null) {
+            lastValidText = currentText
+        }
+
         AppAlertDialog(
             show = data != null,
             onDismissRequest = onDismissRequest,
             title = title,
-            text = text,
+            text = currentText ?: lastValidText,
             modifier = modifier,
             confirmText = confirmText,
             onConfirm = onConfirm?.let { { it(currentData) } },

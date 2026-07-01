@@ -12,12 +12,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import io.legado.app.ui.config.themeConfig.ThemeConfig
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
-import top.yukonga.miuix.kmp.theme.TextStyles
 
 @Composable
 fun rememberCustomFont(fontPath: String?): FontFamily? {
@@ -108,14 +108,20 @@ fun MiuixThemeWrapper(
         }
 
         val miuixColorScheme = MiuixTheme.colorScheme
-        val mappedColorScheme = remember(miuixColorScheme) {
-            val customBgColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.themeBackgroundColor != 0) {
-                Color(ThemeConfig.themeBackgroundColor)
+        val customColors = ThemeConfig.customThemeColors(darkTheme)
+        val isDeepPersonalizationActive = ThemeConfig.isDeepPersonalizationActive
+        val mappedColorScheme = remember(
+            miuixColorScheme,
+            customColors,
+            isDeepPersonalizationActive,
+        ) {
+            val customBgColor = if (isDeepPersonalizationActive && customColors.background != 0) {
+                Color(customColors.background)
             } else {
                 miuixColorScheme.background
             }
-            val customFontColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.primaryTextColor != 0) {
-                Color(ThemeConfig.primaryTextColor)
+            val customFontColor = if (isDeepPersonalizationActive && customColors.primaryText != 0) {
+                Color(customColors.primaryText)
             } else {
                 miuixColorScheme.onSurface
             }
@@ -154,7 +160,7 @@ fun MiuixThemeWrapper(
                 onErrorContainer = miuixColorScheme.onErrorContainer,
 
                 outline = miuixColorScheme.outline,
-                outlineVariant = miuixColorScheme.dividerLine,
+                outlineVariant = miuixColorScheme.secondary.copy(alpha = 0.32f),
                 scrim = miuixColorScheme.windowDimming,
 
                 surfaceBright = miuixColorScheme.surface,
@@ -180,7 +186,9 @@ fun MiuixThemeWrapper(
 
                 cardContainer = miuixColorScheme.surfaceContainer,
                 onCardContainer = miuixColorScheme.onSurface,
-                onSheetContent = miuixColorScheme.surface.copy(alpha = 0.5f)
+                onSheetContent = miuixColorScheme.surface.copy(alpha = 0.5f),
+                cardPrimaryContainer = miuixColorScheme.primary.copy(alpha = 0.1f)
+                    .compositeOver(miuixColorScheme.surface)
             )
         }
 
@@ -235,20 +243,9 @@ fun MaterialThemeWrapper(
             materialTypography.toLegadoTypography().withFont(customFontFamily)
         }
         val semanticColors = remember(colorScheme) {
-            val customBgColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.themeBackgroundColor != 0) {
-                Color(ThemeConfig.themeBackgroundColor)
-            } else {
-                colorScheme.background
-            }
-            val customFontColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.primaryTextColor != 0) {
-                Color(ThemeConfig.primaryTextColor)
-            } else {
-                colorScheme.onSurface
-            }
-
             colorScheme.toLegadoColorScheme(
-                customBgColor = customBgColor,
-                customFontColor = customFontColor,
+                customBgColor = colorScheme.background,
+                customFontColor = colorScheme.onSurface,
                 customTopBarColor = colorScheme.surface,
                 customNavBarColor = colorScheme.surface
             )

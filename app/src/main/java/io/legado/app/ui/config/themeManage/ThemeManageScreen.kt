@@ -19,16 +19,14 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -36,7 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
@@ -45,11 +43,13 @@ import androidx.compose.ui.unit.dp
 import io.legado.app.R
 import io.legado.app.help.config.SavedTheme
 import io.legado.app.help.config.ThemeImportExport
+import io.legado.app.help.config.ThemePackageManager
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.SplicedColumnGroup
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.text.AppText
@@ -58,11 +58,14 @@ import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import io.legado.app.utils.restart
 import io.legado.app.utils.toastOnUi
+import kotlinx.coroutines.flow.collectLatest
+import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThemeManageScreen(
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    viewModel: ThemeManageViewModel = koinViewModel(),
 ) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     val context = LocalContext.current
@@ -78,34 +81,53 @@ fun ThemeManageScreen(
     val savedThemes = remember(savedThemesVersion) { ThemeImportExport.savedThemes.toList() }
 
     val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
+        ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
         uri?.let {
             val target = exportTarget
-            if (target != null) {
-                exportTarget = null
-                if (ThemeImportExport.exportSavedThemeToFile(context, target, it)) {
-                    context.toastOnUi("主题导出成功")
-                } else {
-                    context.toastOnUi("主题导出失败")
-                }
-            } else if (ThemeImportExport.exportToFile(context, it)) {
-                context.toastOnUi("主题导出成功")
-            } else {
-                context.toastOnUi("主题导出失败")
-            }
+            exportTarget = null
+            viewModel.onIntent(
+                ThemeManageIntent.ExportPackage(
+                    uri = it.toString(),
+                    themeName = target?.name,
+                    themeData = target?.data,
+                )
+            )
         }
     }
 
-    val importLauncher = rememberLauncherForActivityResult(
+    val importPackageLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let {
-            if (ThemeImportExport.importFromUri(context, it)) {
-                context.toastOnUi("主题导入成功，部分设置需要重启生效")
-                showRestartDialog = true
-            } else {
-                context.toastOnUi("主题导入失败")
+            viewModel.onIntent(ThemeManageIntent.ImportPackage(it.toString()))
+        }
+    }
+
+    val importLegacyLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            viewModel.onIntent(ThemeManageIntent.ImportLegacyJson(it.toString()))
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.effects.collectLatest { effect ->
+            when (effect) {
+                is ThemeManageEffect.ShowResult -> {
+                    val message = buildString {
+                        append(context.getString(effect.messageRes))
+                        effect.detail?.takeIf(String::isNotBlank)?.let {
+                            append('\n')
+                            append(it)
+                        }
+                    }
+                    context.toastOnUi(message)
+                    if (effect.restartRequired) {
+                        showRestartDialog = true
+                    }
+                }
             }
         }
     }
@@ -114,7 +136,7 @@ fun ThemeManageScreen(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             GlassMediumFlexibleTopAppBar(
-                title = "主题管理",
+                title = stringResource(R.string.theme_pack),
                 scrollBehavior = scrollBehavior,
                 navigationIcon = {
                     TopBarNavigationButton(onClick = onBackClick)
@@ -135,26 +157,38 @@ fun ThemeManageScreen(
             item(span = { GridItemSpan(maxLineSpan) }) {
                 SplicedColumnGroup {
                     ClickableSettingItem(
-                        title = "保存当前设置",
-                        description = "保存当前主题配置为新主题",
+                        title = stringResource(R.string.theme_manage_save_current),
+                        description = stringResource(R.string.theme_manage_save_current_summary),
                         onClick = {
                             newThemeName = ""
                             showSaveDialog = true
                         }
                     )
                     ClickableSettingItem(
-                        title = "导出当前主题",
-                        description = "将当前主题配置导出为JSON文件",
+                        title = stringResource(R.string.theme_manage_export_current),
+                        description = stringResource(R.string.theme_manage_export_current_summary),
                         onClick = {
                             exportTarget = null
-                            exportLauncher.launch("legado_theme_${System.currentTimeMillis()}.json")
+                            exportLauncher.launch(
+                                "materado_theme_${System.currentTimeMillis()}." +
+                                    ThemePackageManager.FILE_EXTENSION
+                            )
                         }
                     )
                     ClickableSettingItem(
-                        title = "导入主题配置",
-                        description = "从JSON文件导入主题配置",
+                        title = stringResource(R.string.theme_manage_import_package),
+                        description = stringResource(R.string.theme_manage_import_package_summary),
                         onClick = {
-                            importLauncher.launch(arrayOf("application/json"))
+                            importPackageLauncher.launch(
+                                arrayOf("application/zip", "application/octet-stream")
+                            )
+                        }
+                    )
+                    ClickableSettingItem(
+                        title = stringResource(R.string.theme_manage_import_config),
+                        description = stringResource(R.string.theme_manage_import_config_summary),
+                        onClick = {
+                            importLegacyLauncher.launch(arrayOf("application/json", "text/json"))
                         }
                     )
                 }
@@ -163,7 +197,7 @@ fun ThemeManageScreen(
             if (savedThemes.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     AppText(
-                        text = "已保存的主题",
+                        text = stringResource(R.string.theme_manage_saved_themes),
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
@@ -177,7 +211,9 @@ fun ThemeManageScreen(
                         onEdit = { editTarget = theme },
                         onExport = {
                             exportTarget = theme
-                            exportLauncher.launch("${theme.name}.json")
+                            exportLauncher.launch(
+                                "${theme.name}.${ThemePackageManager.FILE_EXTENSION}"
+                            )
                         },
                         onDelete = { deleteTarget = theme }
                     )
@@ -209,8 +245,8 @@ fun ThemeManageScreen(
     AppAlertDialog(
         show = showSaveDialog,
         onDismissRequest = { showSaveDialog = false },
-        title = "保存主题",
-        confirmText = "保存",
+        title = stringResource(R.string.theme_manage_save_theme),
+        confirmText = stringResource(R.string.theme_manage_save),
         onConfirm = {
             if (newThemeName.isNotBlank()) {
                 ThemeImportExport.saveCurrentAsTheme(newThemeName)
@@ -218,13 +254,13 @@ fun ThemeManageScreen(
                 showSaveDialog = false
             }
         },
-        dismissText = "取消",
+        dismissText = stringResource(R.string.cancel),
         onDismiss = { showSaveDialog = false },
         content = {
             AppTextField(
                 value = newThemeName,
                 onValueChange = { newThemeName = it },
-                placeholder = { AppText(text = "请输入主题名称") },
+                placeholder = { AppText(text = stringResource(R.string.theme_manage_name_hint)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -235,8 +271,8 @@ fun ThemeManageScreen(
     AppAlertDialog(
         show = applyTarget != null,
         onDismissRequest = { applyTarget = null },
-        title = "应用主题",
-        confirmText = "应用",
+        title = stringResource(R.string.theme_manage_apply_theme),
+        confirmText = stringResource(R.string.theme_manage_apply),
         onConfirm = {
             applyTarget?.let { theme ->
                 ThemeImportExport.applySavedTheme(theme)
@@ -244,17 +280,17 @@ fun ThemeManageScreen(
             }
             applyTarget = null
         },
-        dismissText = "取消",
+        dismissText = stringResource(R.string.cancel),
         onDismiss = { applyTarget = null },
-        text = "确定应用主题「${applyTarget?.name}」？应用后需要重启才能完全生效。"
+        text = stringResource(R.string.theme_manage_apply_message, applyTarget?.name.orEmpty())
     )
 
     // Delete theme dialog
     AppAlertDialog(
         show = deleteTarget != null,
         onDismissRequest = { deleteTarget = null },
-        title = "删除主题",
-        confirmText = "删除",
+        title = stringResource(R.string.theme_manage_delete_theme),
+        confirmText = stringResource(R.string.delete),
         onConfirm = {
             deleteTarget?.let { theme ->
                 ThemeImportExport.deleteSavedTheme(theme)
@@ -262,9 +298,9 @@ fun ThemeManageScreen(
             }
             deleteTarget = null
         },
-        dismissText = "取消",
+        dismissText = stringResource(R.string.cancel),
         onDismiss = { deleteTarget = null },
-        text = "确定删除主题「${deleteTarget?.name}」？此操作不可恢复。"
+        text = stringResource(R.string.theme_manage_delete_message, deleteTarget?.name.orEmpty())
     )
 
     // Edit theme sheet
@@ -303,40 +339,64 @@ private fun SavedThemeItem(
             else if (theme.data.cPrimary != 0) Color(theme.data.cPrimary)
             else MaterialTheme.colorScheme.primary
 
-            val darkPrimary = if (theme.data.cNPrimary != 0) Color(theme.data.cNPrimary)
-            else lightPrimary
+            val darkPrimary = if (theme.data.themeColorNight != 0) {
+                Color(theme.data.themeColorNight)
+            } else if (theme.data.cNPrimary != 0) {
+                Color(theme.data.cNPrimary)
+            } else {
+                lightPrimary
+            }
 
             val lightBg = if (theme.data.themeBackgroundColor != 0) Color(theme.data.themeBackgroundColor)
             else Color(0xFFF7F2FA)
 
-            val darkBg = if (theme.data.isPureBlack) Color.Black else Color(0xFF1C1B1F)
+            val darkBg = if (theme.data.themeBackgroundColorNight != 0) {
+                Color(theme.data.themeBackgroundColorNight)
+            } else if (theme.data.enableDeepPersonalization &&
+                theme.data.themeBackgroundColor != 0
+            ) {
+                Color(theme.data.themeBackgroundColor)
+            } else if (theme.data.isPureBlack) {
+                Color.Black
+            } else {
+                Color(0xFF1C1B1F)
+            }
 
             // 预览区域
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1.2f)
+                    .aspectRatio(1.4f)
             ) {
                 // 日间行
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(
-                            Brush.horizontalGradient(
-                                0.5f to lightBg,
-                                0.8f to lightPrimary
-                            )
-                        )
+                        .background(lightBg)
                 ) {
                     AppText(
-                        text = "日间",
+                        text = stringResource(R.string.theme_manage_preview_day),
                         style = MaterialTheme.typography.labelMediumEmphasized,
                         color = if (theme.data.primaryTextColor != 0) Color(theme.data.primaryTextColor).copy(alpha = 0.6f)
                         else Color.Black.copy(alpha = 0.5f),
                         modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(12.dp)
+                            .align(Alignment.CenterStart)
+                            .padding(start = 12.dp)
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 16.dp)
+                            .size(28.dp)
+                            .shadow(
+                                elevation = 6.dp,
+                                shape = RoundedCornerShape(6.dp),
+                                ambientColor = lightPrimary,
+                                spotColor = lightPrimary
+                            )
+                            .background(lightPrimary, RoundedCornerShape(6.dp))
                     )
                 }
 
@@ -345,20 +405,37 @@ private fun SavedThemeItem(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(
-                            Brush.horizontalGradient(
-                                0.5f to darkBg,
-                                0.8f to darkPrimary
-                            )
-                        )
+                        .background(darkBg)
                 ) {
                     AppText(
-                        text = "夜间",
+                        text = stringResource(R.string.theme_manage_preview_night),
                         style = MaterialTheme.typography.labelMediumEmphasized,
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = if (theme.data.primaryTextColorNight != 0) {
+                            Color(theme.data.primaryTextColorNight).copy(alpha = 0.6f)
+                        } else if (theme.data.enableDeepPersonalization &&
+                            theme.data.primaryTextColor != 0
+                        ) {
+                            Color(theme.data.primaryTextColor).copy(alpha = 0.6f)
+                        } else {
+                            Color.White.copy(alpha = 0.5f)
+                        },
                         modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(12.dp)
+                            .align(Alignment.CenterStart)
+                            .padding(start = 12.dp)
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 16.dp)
+                            .size(28.dp)
+                            .shadow(
+                                elevation = 6.dp,
+                                shape = RoundedCornerShape(6.dp),
+                                ambientColor = darkPrimary,
+                                spotColor = darkPrimary
+                            )
+                            .background(darkPrimary, RoundedCornerShape(6.dp))
                     )
                 }
             }
@@ -377,28 +454,18 @@ private fun SavedThemeItem(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "编辑",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(onClick = onExport, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Share,
-                            contentDescription = "导出",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "删除",
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
+                    SmallPlainButton(
+                        onClick = onEdit,
+                        icon = Icons.Default.Edit
+                    )
+                    SmallPlainButton(
+                        onClick = onExport,
+                        icon = Icons.Default.Share
+                    )
+                    SmallPlainButton(
+                        onClick = onDelete,
+                        icon = Icons.Default.Delete
+                    )
                 }
             }
         }

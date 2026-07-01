@@ -36,7 +36,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import androidx.core.net.toUri
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.preference.PreferenceManager
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.legado.app.R
@@ -47,9 +46,10 @@ import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.config.AppConfig
+import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
 import io.legado.app.ui.book.audio.AudioPlayActivity
 import io.legado.app.ui.book.manga.ReadMangaActivity
-import io.legado.app.ui.book.read.ReadBookActivity
+import io.legado.app.ui.main.MainActivity
 import io.legado.app.ui.main.bookshelf.BookShelfItem
 import splitties.systemservices.clipboardManager
 import splitties.systemservices.connectivityManager
@@ -69,14 +69,17 @@ fun Context.startActivityForBook(
     book: Book,
     configIntent: Intent.() -> Unit = {},
 ) {
-    val cls = when {
-        book.isAudio -> AudioPlayActivity::class.java
-        !book.isLocal && book.isImage && AppConfig.showMangaUi -> ReadMangaActivity::class.java
-        else -> ReadBookActivity::class.java
+    val intent = when {
+        book.isAudio -> Intent(this, AudioPlayActivity::class.java)
+        !book.isLocal && book.isImage && ReadMangaConfig.showMangaUi ->
+            Intent(this, ReadMangaActivity::class.java)
+
+        else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
-    val intent = Intent(this, cls)
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    intent.putExtra("bookUrl", book.bookUrl)
+    if (book.isAudio || (!book.isLocal && book.isImage && ReadMangaConfig.showMangaUi)) {
+        intent.putExtra("bookUrl", book.bookUrl)
+    }
     intent.apply(configIntent)
     startActivity(intent)
 }
@@ -85,14 +88,17 @@ fun Context.startActivityForBook(
     book: BookShelfItem,
     configIntent: Intent.() -> Unit = {},
 ) {
-    val cls = when {
-        book.isAudio -> AudioPlayActivity::class.java
-        !book.isLocal && book.isImage && AppConfig.showMangaUi -> ReadMangaActivity::class.java
-        else -> ReadBookActivity::class.java
+    val intent = when {
+        book.isAudio -> Intent(this, AudioPlayActivity::class.java)
+        !book.isLocal && book.isImage && ReadMangaConfig.showMangaUi ->
+            Intent(this, ReadMangaActivity::class.java)
+
+        else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
-    val intent = Intent(this, cls)
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    intent.putExtra("bookUrl", book.bookUrl)
+    if (book.isAudio || (!book.isLocal && book.isImage && ReadMangaConfig.showMangaUi)) {
+        intent.putExtra("bookUrl", book.bookUrl)
+    }
     intent.apply(configIntent)
     startActivity(intent)
 }
@@ -222,6 +228,9 @@ fun Context.getPrefString(key: String, defValue: String? = null) =
 
 fun Context.putPrefString(key: String, value: String?) =
     defaultSharedPreferences.edit { putString(key, value) }
+
+fun Context.putPrefStringSync(key: String, value: String?) =
+    defaultSharedPreferences.edit(commit = true) { putString(key, value) }
 
 fun Context.getPrefStringSet(
     key: String,
@@ -455,8 +464,6 @@ val Context.channel: String
 val Context.isDebuggable: Boolean
     get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
-val Context.dataStore by preferencesDataStore(name = "settings")
-
 val Context.bookshelfLayoutMode: Int
     get() = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
         AppConfig.bookshelfLayoutModeLandscape
@@ -469,20 +476,6 @@ val Context.bookshelfLayoutGrid: Int
         AppConfig.bookshelfLayoutGridLandscape
     } else {
         AppConfig.bookshelfLayoutGridPortrait
-    }
-
-var Context.exploreLayoutGrid: Int
-    get() = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-        AppConfig.exploreLayoutGridLandscape
-    } else {
-        AppConfig.exploreLayoutGridPortrait
-    }
-    set(value) {
-        if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            AppConfig.exploreLayoutGridLandscape = value
-        } else {
-            AppConfig.exploreLayoutGridPortrait = value
-        }
     }
 
 fun Context.themeColor(attr: Int): Int {

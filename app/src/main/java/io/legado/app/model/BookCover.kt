@@ -19,41 +19,44 @@ import com.bumptech.glide.request.RequestOptions
 import com.bumptech.glide.request.target.Target
 import com.bumptech.glide.request.target.Target.SIZE_ORIGINAL
 import io.legado.app.R
-import io.legado.app.constant.PreferKey
+import io.legado.app.ui.config.coverConfig.CoverConfig
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
 import io.legado.app.help.CacheManager
 import io.legado.app.help.DefaultData
 import io.legado.app.help.config.AppConfig
+import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
 import io.legado.app.help.glide.BlurTransformation
 import io.legado.app.help.glide.ImageLoader
 import io.legado.app.help.glide.OkHttpModelLoader
 import io.legado.app.model.analyzeRule.AnalyzeRule
 import io.legado.app.model.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import io.legado.app.model.analyzeRule.AnalyzeUrl
+import io.legado.app.domain.usecase.CoverAlbumUseCase
 import io.legado.app.utils.BitmapUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
-import io.legado.app.utils.getPrefString
 import kotlinx.coroutines.currentCoroutineContext
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import splitties.init.appCtx
 import java.io.File
 import kotlin.random.Random
 
 @Keep
-object BookCover {
+object BookCover : KoinComponent {
 
     private const val coverRuleConfigKey = "legadoCoverRuleConfig"
     const val configFileName = "coverRule.json"
+    private val coverAlbumUseCase: CoverAlbumUseCase by inject()
 
     val defaultDrawable: Drawable
         @SuppressLint("UseCompatLoadingForDrawables")
         get() {
             val isNightTheme = AppConfig.isNightTheme
-            val key = if (isNightTheme) PreferKey.defaultCoverDark else PreferKey.defaultCover
-            val paths = appCtx.getPrefString(key)?.split(",")?.filter { it.isNotBlank() }
+            val paths = coverAlbumUseCase.selectedImagePaths(isNightTheme)
 
-            if (paths.isNullOrEmpty()) {
+            if (paths.isEmpty()) {
                 return appCtx.resources.getDrawable(R.drawable.image_cover_default, null)
             }
 
@@ -63,16 +66,12 @@ object BookCover {
             }.getOrDefault(appCtx.resources.getDrawable(R.drawable.image_cover_default, null))
         }
 
-    // 兼容旧代码，空实现
-    fun upDefaultCover() {}
-
     fun getRandomDefaultPath(
         seed: Any? = null,
         isNight: Boolean = AppConfig.isNightTheme
     ): String? {
-        val key = if (isNight) PreferKey.defaultCoverDark else PreferKey.defaultCover
-        val paths = appCtx.getPrefString(key)?.split(",")?.filter { it.isNotBlank() }
-        if (paths.isNullOrEmpty()) return null
+        val paths = coverAlbumUseCase.selectedImagePaths(isNight)
+        if (paths.isEmpty()) return null
         val random = if (seed != null) Random(seed.hashCode()) else Random
         return paths[random.nextInt(paths.size)]
     }
@@ -176,7 +175,7 @@ object BookCover {
         if (transformation != null) {
             builder = builder.transform(transformation)
         }
-        builder = if (AppConfig.disableMangaCrossFade) {
+        builder = if (ReadMangaConfig.disableMangaCrossFade) {
             builder
         } else {
             builder.transition(DrawableTransitionOptions.withCrossFade())

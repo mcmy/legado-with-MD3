@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -39,13 +40,10 @@ import androidx.compose.material.icons.outlined.AddCircleOutline
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,23 +69,25 @@ import io.legado.app.lib.dialogs.selector
 import io.legado.app.model.remote.RemoteBook
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.ActionItem
+import io.legado.app.ui.widget.components.AppPullToRefresh
 import io.legado.app.ui.widget.components.AppRadioButton
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.EmptyMessage
 import io.legado.app.ui.widget.components.SelectionActions
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.ConfirmDismissButtonsRow
-import io.legado.app.ui.widget.components.button.MediumIconButton
-import io.legado.app.ui.widget.components.button.SmallIconButton
-import io.legado.app.ui.widget.components.button.SmallTonalIconButton
-import io.legado.app.ui.widget.components.topbar.TopBarActionButton
+import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.ui.widget.components.button.series.SmallTonalButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.card.TextCard
 import io.legado.app.ui.widget.components.list.ListScaffold
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
+import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.text.AppText
+import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.utils.ConvertUtils
 import io.legado.app.utils.startActivityForBook
 import io.legado.app.utils.toastOnUi
@@ -167,9 +167,9 @@ fun RemoteBookScreen(
         },
         endAction = if (showSheet is RemoteBookSheet.Servers) {
             {
-                MediumIconButton(
+                MediumPlainButton(
                     onClick = { showSheet = RemoteBookSheet.ServerConfig(null) },
-                    imageVector = Icons.Default.Add
+                    icon = Icons.Default.Add
                 )
             }
         } else {
@@ -303,7 +303,7 @@ fun RemoteBookScreen(
             onSelectInvert = { viewModel.dispatch(RemoteBookIntent.SelectInvert) },
             primaryAction = ActionItem(
                 text = "添加至书架",
-                icon = { Icon(Icons.Default.CloudDownload, null) },
+                icon = Icons.Default.CloudDownload,
                 onClick = {
                     val selectedBooks = uiState.items
                         .filter { it.id in uiState.selectedIds }
@@ -316,18 +316,19 @@ fun RemoteBookScreen(
         ),
         onAddClick = null,
     ) { paddingValues ->
-        val pullToRefreshState = rememberPullToRefreshState()
-        PullToRefreshBox(
+        AppPullToRefresh(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
             isRefreshing = uiState.isLoading,
-            state = pullToRefreshState,
-            onRefresh = { viewModel.dispatch(RemoteBookIntent.Refresh) }
+            onRefresh = { viewModel.dispatch(RemoteBookIntent.Refresh) },
+            topPadding = paddingValues.calculateTopPadding()
         ) {
             if (uiState.items.isEmpty()) {
                 if (uiState.isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    AppCircularProgressIndicator(modifier = Modifier
+                        .fillMaxSize()
+                        .wrapContentSize(Alignment.Center))
                 } else {
                     EmptyMessage(
                         modifier = Modifier
@@ -429,16 +430,16 @@ private fun ServerItem(
             {
                 Row {
                     onEdit?.let {
-                        SmallIconButton(
+                        SmallPlainButton(
                             onClick = it,
-                            imageVector = Icons.Default.Edit,
+                            icon = Icons.Default.Edit,
                             contentDescription = "Edit"
                         )
                     }
                     onDelete?.let {
-                        SmallIconButton(
+                        SmallPlainButton(
                             onClick = it,
-                            imageVector = Icons.Default.Delete,
+                            icon = Icons.Default.Delete,
                             contentDescription = "Delete"
                         )
                     }
@@ -601,9 +602,9 @@ private fun PathNavigationBar(
         }
 
         if (canGoBack) {
-            SmallTonalIconButton(
+            SmallTonalButton(
                 onClick = onNavigateBack,
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
                 contentDescription = "返回上级"
             )
         }
@@ -702,7 +703,7 @@ private fun RemoteBookItem(
             if (!book.isDir) {
                 Spacer(modifier = Modifier.width(8.dp))
 
-                SmallIconButton(
+                SmallPlainButton(
                     onClick = {
                         if (book.isOnBookShelf) {
                             onUpdateClick(book)
@@ -710,7 +711,7 @@ private fun RemoteBookItem(
                             onAddClick(book)
                         }
                     },
-                    imageVector = if (book.isOnBookShelf)
+                    icon = if (book.isOnBookShelf)
                         Icons.Outlined.CloudSync
                     else
                         Icons.Outlined.AddCircleOutline,

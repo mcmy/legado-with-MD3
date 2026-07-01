@@ -13,12 +13,11 @@ import android.widget.FrameLayout
 import io.legado.app.R
 import io.legado.app.constant.PageAnim
 import io.legado.app.data.entities.BookProgress
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.service.BaseReadAloudService
-import io.legado.app.ui.book.read.ContentEditDialog
+
 import io.legado.app.ui.book.read.page.api.DataSource
 import io.legado.app.ui.book.read.page.delegate.CoverPageDelegate
 import io.legado.app.ui.book.read.page.delegate.FadePageDelegate
@@ -37,10 +36,11 @@ import io.legado.app.ui.book.read.page.entities.column.TextBaseColumn
 import io.legado.app.ui.book.read.page.provider.ChapterProvider
 import io.legado.app.ui.book.read.page.provider.LayoutProgressListener
 import io.legado.app.ui.book.read.page.provider.TextPageFactory
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.utils.activity
 import io.legado.app.utils.invisible
 import io.legado.app.utils.longToastOnUi
-import io.legado.app.utils.showDialogFragment
+
 import io.legado.app.utils.throttle
 import java.text.BreakIterator
 import java.util.Locale
@@ -49,11 +49,17 @@ import kotlin.math.abs
 /**
  * 阅读视图
  */
-class ReadView(context: Context, attrs: AttributeSet) :
+class ReadView(
+    context: Context,
+    attrs: AttributeSet? = null,
+    callBack: CallBack? = null,
+    contentCallBack: ContentTextView.CallBack? = null,
+) :
     FrameLayout(context, attrs),
     DataSource, LayoutProgressListener {
 
-    val callBack: CallBack get() = activity as CallBack
+    private var injectedCallBack: CallBack? = callBack
+    val callBack: CallBack get() = injectedCallBack ?: activity as CallBack
     var pageFactory: TextPageFactory = TextPageFactory(this)
     var pageDelegate: PageDelegate? = null
         private set(value) {
@@ -63,9 +69,9 @@ class ReadView(context: Context, attrs: AttributeSet) :
             upContent()
         }
     override var isScroll = false
-    val prevPage by lazy { PageView(context) }
-    val curPage by lazy { PageView(context) }
-    val nextPage by lazy { PageView(context) }
+    val prevPage by lazy { PageView(context, contentCallBack) }
+    val curPage by lazy { PageView(context, contentCallBack) }
+    val nextPage by lazy { PageView(context, contentCallBack) }
     val defaultAnimationSpeed = 300
     private var pressDown = false
     private var isMove = false
@@ -266,7 +272,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
     }
 
     fun cancelSelect(clearSearchResult: Boolean = false) {
-        if (isTextSelected) {
+        if (isTextSelected || clearSearchResult) {
             curPage.cancelSelect(clearSearchResult)
             isTextSelected = false
         }
@@ -392,39 +398,39 @@ class ReadView(context: Context, attrs: AttributeSet) :
         when {
             isTextSelected -> Unit
             mcRect.contains(startX, startY) -> if (!isAbortAnim) {
-                click(AppConfig.clickActionMC)
+                click(ReadConfig.clickActionMC)
             }
 
             bcRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionBC)
+                click(ReadConfig.clickActionBC)
             }
 
             blRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionBL)
+                click(ReadConfig.clickActionBL)
             }
 
             brRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionBR)
+                click(ReadConfig.clickActionBR)
             }
 
             mlRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionML)
+                click(ReadConfig.clickActionML)
             }
 
             mrRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionMR)
+                click(ReadConfig.clickActionMR)
             }
 
             tlRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionTL)
+                click(ReadConfig.clickActionTL)
             }
 
             tcRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionTC)
+                click(ReadConfig.clickActionTC)
             }
 
             trRect.contains(startX, startY) -> {
-                click(AppConfig.clickActionTR)
+                click(ReadConfig.clickActionTR)
             }
         }
     }
@@ -446,7 +452,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
             5 -> ReadAloud.prevParagraph(context)
             6 -> ReadAloud.nextParagraph(context)
             7 -> callBack.addBookmark()
-            8 -> activity?.showDialogFragment(ContentEditDialog())
+            8 -> callBack.openContentEdit()
             9 -> callBack.changeReplaceRuleState()
             10 -> callBack.openChapterList()
             11 -> callBack.openSearchActivity(null)
@@ -546,7 +552,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
                 pageDelegate = NoAnimPageDelegate(this)
             }
         }
-        (pageDelegate as? ScrollPageDelegate)?.noAnim = AppConfig.noAnimScrollPage
+        (pageDelegate as? ScrollPageDelegate)?.noAnim = ReadConfig.noAnimScrollPage
         if (upRecorder) {
             (pageDelegate as? HorizontalPageDelegate)?.upRecorder()
             autoPager.upRecorder()
@@ -597,7 +603,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
      * 更新滑动距离
      */
     fun upPageSlopSquare() {
-        val pageTouchSlop = AppConfig.pageTouchSlop
+        val pageTouchSlop = ReadConfig.pageTouchSlop
         this.pageSlopSquare = if (pageTouchSlop == 0) slopSquare else pageTouchSlop
         pageSlopSquare2 = this.pageSlopSquare * this.pageSlopSquare
     }
@@ -652,8 +658,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
     /**
      * 从选择位置开始朗读
      */
-    suspend fun aloudStartSelect() {
-        val selectStartPos = curPage.selectStartPos
+    suspend fun aloudStartSelect(selectStartPos: TextPos) {
         var pagePos = selectStartPos.relativePagePos
         val line = selectStartPos.lineIndex
         val column = selectStartPos.columnIndex
@@ -691,7 +696,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
     }
 
     fun invalidateTextPage() {
-        if (!AppConfig.optimizeRender) {
+        if (!ReadConfig.optimizeRender) {
             return
         }
         pageFactory.run {
@@ -716,7 +721,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
     }
 
     fun submitRenderTask() {
-        if (!AppConfig.optimizeRender) {
+        if (!ReadConfig.optimizeRender) {
             return
         }
         curPage.submitRenderTask()
@@ -760,6 +765,7 @@ class ReadView(context: Context, attrs: AttributeSet) :
         fun showTextActionMenu()
         fun autoPageStop()
         fun openChapterList()
+        fun openContentEdit()
         fun addBookmark()
         fun changeReplaceRuleState()
         fun openSearchActivity(searchWord: String?)

@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.material3.ContainedLoadingIndicator
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,11 +23,11 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.legado.app.ui.theme.LegadoTheme
+import io.legado.app.ui.widget.components.button.series.SmallTonalButton
 import io.legado.app.ui.widget.components.icon.AppIcons
-import io.legado.app.ui.widget.components.button.SmallTonalTextButton
+import io.legado.app.ui.widget.components.progressIndicator.AppContainedLoadingIndicator
 import io.legado.app.ui.widget.components.text.AnimatedTextLine
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun EmptyMessage(
     message: String,
@@ -58,7 +56,7 @@ fun EmptyMessage(
             label = "LoadingStateAnimation"
         ) { loading ->
             if (loading) {
-                ContainedLoadingIndicator()
+                AppContainedLoadingIndicator()
             } else {
                 AnimatedTextLine(
                     text = currentFace,
@@ -86,10 +84,10 @@ fun EmptyMessage(
 
         if (buttonText != null && onButtonClick != null) {
             Spacer(modifier = Modifier.height(8.dp))
-            SmallTonalTextButton(
+            SmallTonalButton(
                 onClick = onButtonClick,
                 text = buttonText,
-                imageVector = buttonImageVector
+                icon = buttonImageVector
             )
         }
     }

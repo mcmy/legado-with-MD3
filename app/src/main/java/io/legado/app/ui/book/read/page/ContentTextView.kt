@@ -9,7 +9,6 @@ import android.view.View
 import io.legado.app.R
 import io.legado.app.data.entities.Bookmark
 import io.legado.app.help.book.isOnLineTxt
-import io.legado.app.help.config.AppConfig
 import io.legado.app.model.ReadBook
 import io.legado.app.ui.association.OpenUrlConfirmActivity
 import io.legado.app.ui.book.read.page.delegate.PageDelegate
@@ -25,6 +24,7 @@ import io.legado.app.ui.book.read.page.entities.column.TextColumn
 import io.legado.app.ui.book.read.page.entities.column.TextHtmlColumn
 import io.legado.app.ui.book.read.page.provider.ChapterProvider
 import io.legado.app.ui.book.read.page.provider.TextPageFactory
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.ui.widget.dialog.PhotoDialog
 import io.legado.app.utils.activity
 import io.legado.app.utils.dpToPx
@@ -40,14 +40,16 @@ import kotlin.math.min
  * 阅读内容视图
  */
 class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
-    var selectAble = AppConfig.textSelectAble
+    var selectAble = ReadConfig.selectText
     val selectedPaint by lazy {
         Paint().apply {
             color = context.getCompatColor(R.color.btn_bg_press_2)
             style = Paint.Style.FILL
         }
     }
-    private var callBack: CallBack
+    private var callBack: CallBack? = null
+    private val requireCallBack: CallBack
+        get() = callBack ?: activity as CallBack
     private val visibleRect = ChapterProvider.visibleRect
     val selectStart = TextPos(0, -1, -1)
     private val selectEnd = TextPos(0, -1, -1)
@@ -59,8 +61,8 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     var reverseEndCursor = false
 
     //滚动参数
-    private val pageFactory get() = callBack.pageFactory
-    private val pageDelegate get() = callBack.pageDelegate
+    private val pageFactory get() = requireCallBack.pageFactory
+    private val pageDelegate get() = requireCallBack.pageDelegate
     private var pageOffset = 0
     private var autoPager: AutoPager? = null
     private var isScroll = false
@@ -71,12 +73,12 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     //绘制图片的paint
     val imagePaint by lazy {
         Paint().apply {
-            isAntiAlias = AppConfig.useAntiAlias
+            isAntiAlias = ReadConfig.useAntiAlias
         }
     }
 
-    init {
-        callBack = activity as CallBack
+    fun setCallBack(callBack: CallBack) {
+        this.callBack = callBack
     }
 
     /**
@@ -116,7 +118,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     private fun drawPage(canvas: Canvas) {
         var relativeOffset = relativeOffset(0)
         textPage.draw(this, canvas, relativeOffset)
-        if (!callBack.isScroll) return
+        if (!requireCallBack.isScroll) return
         //滚动翻页
         if (!pageFactory.hasNext()) return
         val textPage1 = relativePage(1)
@@ -190,10 +192,10 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             if (curPage.render(view)) {
                 invalidate = true
             }
-            if (hasNext() && nextPage.render(view) && callBack.isScroll) {
+            if (hasNext() && nextPage.render(view) && requireCallBack.isScroll) {
                 invalidate = true
             }
-            if (hasNextPlus() && nextPlusPage.render(view) && callBack.isScroll
+            if (hasNextPlus() && nextPlusPage.render(view) && requireCallBack.isScroll
                 && relativeOffset(2) < ChapterProvider.visibleHeight
             ) {
                 invalidate = true
@@ -222,7 +224,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     ) {
         touch(x, y) { _, textPos, _, _, column ->
             when (column) {
-                is ImageColumn -> callBack.onImageLongPress(x, y, column.src)
+                is ImageColumn -> requireCallBack.onImageLongPress(x, y, column.src)
                 is TextColumn -> {
                     if (!selectAble) return@touch
                     column.selected = true
@@ -264,7 +266,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                     handled = true
                 }
 
-                is ImageColumn -> when (AppConfig.clickImgWay) {
+                is ImageColumn -> when (ReadConfig.clickImgWay) {
                     "1" -> { //预览图片
                         activity?.showDialogFragment(PhotoDialog(column.src, isBook = true))
                         handled = true
@@ -275,10 +277,10 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                                 val click = column.click
                                 val src = column.src
                                 if (!click.isNullOrBlank()) {
-                                    callBack.clickImg(click, src)
+                                    requireCallBack.clickImg(click, src)
                                     handled = true
                                 } else {
-                                    handled = callBack.oldClickImg(src)
+                                    handled = requireCallBack.oldClickImg(src)
                                 }
                             }
                         }
@@ -290,7 +292,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                         if (doubleClick) {
                             val click = column.click
                             if (!click.isNullOrBlank()) {
-                                callBack.clickImg(click, column.src)
+                                requireCallBack.clickImg(click, column.src)
                                 handled = true
                             }
                         } else {
@@ -301,7 +303,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                         if (!debounceClick) {
                             val click = column.click
                             if (!click.isNullOrBlank()) {
-                                callBack.clickImg(click, column.src)
+                                requireCallBack.clickImg(click, column.src)
                                 handled = true
                             }
                         }
@@ -405,7 +407,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             relativeOffset = relativeOffset(relativePos)
             if (relativePos > 0) {
                 //滚动翻页
-                if (!callBack.isScroll) return
+                if (!requireCallBack.isScroll) return
                 if (relativeOffset >= ChapterProvider.visibleHeight) return
             }
             val textPage = relativePage(relativePos)
@@ -448,7 +450,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             relativeOffset = relativeOffset(relativePos)
             if (relativePos > 0) {
                 //滚动翻页
-                if (!callBack.isScroll) return
+                if (!requireCallBack.isScroll) return
                 if (relativeOffset >= ChapterProvider.visibleHeight) return
             }
             val textPage = relativePage(relativePos)
@@ -497,7 +499,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             relativeOffset = relativeOffset(relativePos)
             if (relativePos > 0) {
                 //滚动翻页
-                if (!callBack.isScroll) break
+                if (!requireCallBack.isScroll) break
                 if (relativeOffset >= ChapterProvider.visibleHeight) break
             }
             val textPage = relativePage(relativePos)
@@ -522,7 +524,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
             relativeOffset = relativeOffset(relativePos)
             if (relativePos > 0) {
                 //滚动翻页
-                if (!callBack.isScroll) break
+                if (!requireCallBack.isScroll) break
                 if (relativeOffset >= ChapterProvider.visibleHeight) break
             }
             val textPage = relativePage(relativePos)
@@ -594,7 +596,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
         if (!selectStart.isSelected() && !selectEnd.isSelected()) {
             return
         }
-        val last = if (callBack.isScroll) 2 else 0
+        val last = if (requireCallBack.isScroll) 2 else 0
         val textPos = TextPos(0, 0, 0)
         for (relativePos in 0..last) {
             textPos.relativePagePos = relativePos
@@ -608,7 +610,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                         val compareEnd = textPos.compare(selectEnd)
                         column.selected = compareStart >= 0 && compareEnd <= 0
                         column.isSearchResult =
-                            column.selected && callBack.isSelectingSearchResult
+                            column.selected && requireCallBack.isSelectingSearchResult
                         if (column.isSearchResult) {
                             textPage.searchResult.add(column)
                         }
@@ -620,13 +622,13 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     }
 
     private fun upSelectedStart(x: Float, y: Float, top: Float) {
-        callBack.run {
+        requireCallBack.run {
             upSelectedStart(x + imgBgPaddingStart, y + headerHeight, top + headerHeight)
         }
     }
 
     private fun upSelectedEnd(x: Float, y: Float) {
-        callBack.run {
+        requireCallBack.run {
             upSelectedEnd(x + imgBgPaddingStart, y + headerHeight)
         }
     }
@@ -637,7 +639,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     }
 
     fun cancelSelect(clearSearchResult: Boolean = false) {
-        val last = if (callBack.isScroll) 2 else 0
+        val last = if (requireCallBack.isScroll) 2 else 0
         for (relativePos in 0..last) {
             val textPage = relativePage(relativePos)
             textPage.lines.forEach { textLine ->
@@ -655,7 +657,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
         selectStart.reset()
         selectEnd.reset()
         postInvalidate()
-        callBack.onCancelSelect()
+        requireCallBack.onCancelSelect()
     }
 
     fun getSelectedText(): String {
@@ -742,7 +744,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
     }
 
     override fun canScrollVertically(direction: Int): Boolean {
-        return callBack.isScroll && pageFactory.hasNext()
+        return requireCallBack.isScroll && pageFactory.hasNext()
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -757,7 +759,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
                 scrollY = 0
             }
         }
-        return callBack.onLongScreenshotTouchEvent(event)
+        return requireCallBack.onLongScreenshotTouchEvent(event)
     }
 
     companion object {

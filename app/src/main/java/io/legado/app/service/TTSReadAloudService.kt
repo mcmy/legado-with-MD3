@@ -10,6 +10,7 @@ import io.legado.app.constant.AppPattern
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.MediaHelp
 import io.legado.app.help.config.AppConfig
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.lib.dialogs.SelectItem
 import io.legado.app.model.ReadAloud
@@ -31,6 +32,7 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
     private var ttsInitFinish = false
     private val ttsUtteranceListener = TTSUtteranceListener()
     private var speakJob: Coroutine<*>? = null
+    private var utteranceStartPos = 0
     private val TAG = "TTSReadAloudService"
 
     override fun onCreate() {
@@ -152,14 +154,17 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
      * 更新朗读速度
      */
     override fun upSpeechRate(reset: Boolean) {
-        if (AppConfig.ttsFlowSys) {
+        if (ReadConfig.ttsFollowSys) {
             if (reset) {
                 clearTTS()
                 initTts()
             }
         } else {
-            val speechRate = (AppConfig.ttsSpeechRate + 5) / 10f
+            val speechRate = (ReadConfig.ttsSpeechRate + 5) / 10f
             textToSpeech?.setSpeechRate(speechRate)
+            if (reset && !pause) {
+                play()
+            }
         }
     }
 
@@ -191,6 +196,7 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
 
         override fun onStart(s: String) {
             LogUtils.d(TAG, "onStart nowSpeak:$nowSpeak pageIndex:$pageIndex utteranceId:$s")
+            utteranceStartPos = paragraphStartPos
             textChapter?.let {
                 if (contentList[nowSpeak].matches(AppPattern.notReadAloudRegex)) {
                     nextParagraph()
@@ -213,6 +219,7 @@ class TTSReadAloudService : BaseReadAloudService(), TextToSpeech.OnInitListener 
 
         override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
             super.onRangeStart(utteranceId, start, end, frame)
+            paragraphStartPos = utteranceStartPos + start
             val msg =
                 "onRangeStart nowSpeak:$nowSpeak pageIndex:$pageIndex utteranceId:$utteranceId start:$start end:$end frame:$frame"
             LogUtils.d(TAG, msg)

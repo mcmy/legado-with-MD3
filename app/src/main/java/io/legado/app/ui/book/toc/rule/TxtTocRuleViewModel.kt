@@ -1,16 +1,14 @@
 package io.legado.app.ui.book.toc.rule
 
 import android.app.Application
-import androidx.compose.runtime.Immutable
 import androidx.lifecycle.viewModelScope
+import io.legado.app.R
 import io.legado.app.base.BaseRuleViewModel
 import io.legado.app.data.entities.TxtTocRule
 import io.legado.app.data.repository.TxtTocRuleRepository
 import io.legado.app.data.repository.UploadRepository
 import io.legado.app.ui.widget.components.importComponents.BaseImportUiState
 import io.legado.app.ui.widget.components.list.InteractionState
-import io.legado.app.ui.widget.components.list.ListUiState
-import io.legado.app.ui.widget.components.list.SelectableItem
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
@@ -21,26 +19,6 @@ import io.legado.app.utils.sendToClip
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-
-@Immutable
-data class TxtTocRuleItemUi(
-    override val id: Long,
-    val name: String,
-    val isEnabled: Boolean,
-    val rule: TxtTocRule,
-    val example: String = ""
-) : SelectableItem<Long>
-
-data class TxtTocRuleUiState(
-    override val items: List<TxtTocRuleItemUi> = emptyList(),
-    override val selectedIds: Set<Long> = emptySet(),
-    override val searchKey: String = "",
-    val interaction: InteractionState = InteractionState()
-) : ListUiState<TxtTocRuleItemUi> {
-    override val isSearch: Boolean get() = interaction.isSearchMode
-    override val isLoading: Boolean get() = interaction.isUploading
-}
-
 
 class TxtTocRuleViewModel(
     application: Application,
@@ -54,9 +32,54 @@ class TxtTocRuleViewModel(
 
     override val rawDataFlow: Flow<List<TxtTocRule>> = repository.flowAll()
 
+    fun onIntent(intent: TxtTocRuleIntent) {
+        when (intent) {
+            is TxtTocRuleIntent.SetSearchMode -> setSearchMode(intent.active)
+            is TxtTocRuleIntent.UpdateSearchQuery -> setSearchKey(intent.query)
+            TxtTocRuleIntent.ClearSelection -> setSelection(emptySet())
+            TxtTocRuleIntent.SelectAll -> selectAll()
+            TxtTocRuleIntent.InvertSelection -> invertSelection()
+            is TxtTocRuleIntent.SetSelection -> setSelection(intent.ids)
+            is TxtTocRuleIntent.ToggleSelection -> toggleSelection(intent.id)
+            TxtTocRuleIntent.EnableSelection -> {
+                enableSelectionByIds(uiState.value.selectedIds)
+                setSelection(emptySet())
+            }
+            TxtTocRuleIntent.DisableSelection -> {
+                disableSelectionByIds(uiState.value.selectedIds)
+                setSelection(emptySet())
+            }
+            TxtTocRuleIntent.DeleteSelection -> {
+                delSelectionByIds(uiState.value.selectedIds)
+                setSelection(emptySet())
+            }
+            TxtTocRuleIntent.UploadSelection -> {
+                val state = uiState.value
+                uploadSelectedRules(state.selectedIds, state.items)
+            }
+            is TxtTocRuleIntent.ExportSelection -> {
+                val state = uiState.value
+                exportToUri(intent.uri, state.items, state.selectedIds)
+            }
+            is TxtTocRuleIntent.MoveItem -> moveItemInList(intent.from, intent.to)
+            TxtTocRuleIntent.SaveSortOrder -> saveSortOrder()
+            is TxtTocRuleIntent.SaveRule -> save(intent.rule, intent.isNew)
+            is TxtTocRuleIntent.DeleteRule -> delete(intent.rule)
+            is TxtTocRuleIntent.SetRuleEnabled -> update(intent.rule.copy(enable = intent.enabled))
+            is TxtTocRuleIntent.CopyRule -> copyRule(intent.rule)
+            is TxtTocRuleIntent.ImportSource -> importSource(intent.text)
+            TxtTocRuleIntent.CancelImport -> cancelImport()
+            is TxtTocRuleIntent.ToggleImportSelection -> toggleImportSelection(intent.index)
+            is TxtTocRuleIntent.ToggleImportAll -> toggleImportAll(intent.isSelected)
+            is TxtTocRuleIntent.UpdateImportItem -> updateImportItem(intent.index, intent.rule)
+            TxtTocRuleIntent.SaveImportedRules -> saveImportedRules()
+        }
+    }
+
     override fun TxtTocRule.toUiItem() =
         TxtTocRuleItemUi(id, name, enable, this, example = example ?: "")
 
+    @Suppress("DEPRECATION")
     override fun filterData(data: List<TxtTocRule>, key: String): List<TxtTocRule> {
         val filtered = if (key.isEmpty()) data
         else data.filter { it.name.contains(key, ignoreCase = true) }
@@ -82,7 +105,7 @@ class TxtTocRuleViewModel(
         )
     }
 
-    fun saveSortOrder() {
+    private fun saveSortOrder() {
         val currentLocal = _localItems.value ?: return
         viewModelScope.launch {
             repository.saveOrder(currentLocal.map { it.rule })
@@ -90,9 +113,9 @@ class TxtTocRuleViewModel(
         }
     }
 
-    fun save(rule: TxtTocRule) {
+    private fun save(rule: TxtTocRule, isNew: Boolean) {
         viewModelScope.launch {
-            if (rule.id == 0L) {
+            if (isNew) {
                 repository.insert(rule)
             } else {
                 repository.update(rule)
@@ -100,9 +123,10 @@ class TxtTocRuleViewModel(
         }
     }
 
-    fun update(vararg rules: TxtTocRule) = viewModelScope.launch { repository.update(*rules) }
-    fun insert(vararg rules: TxtTocRule) = viewModelScope.launch { repository.insert(*rules) }
-    fun delete(vararg rules: TxtTocRule) = viewModelScope.launch { repository.delete(*rules) }
+    private fun update(vararg rules: TxtTocRule) = viewModelScope.launch { repository.update(*rules) }
+    private fun insert(vararg rules: TxtTocRule) = viewModelScope.launch { repository.insert(*rules) }
+    private fun delete(vararg rules: TxtTocRule) = viewModelScope.launch { repository.delete(*rules) }
+
     fun enableSelectionByIds(ids: Set<Long>) =
         viewModelScope.launch { repository.enableByIds(ids, true) }
 
@@ -110,6 +134,15 @@ class TxtTocRuleViewModel(
         viewModelScope.launch { repository.enableByIds(ids, false) }
 
     fun delSelectionByIds(ids: Set<Long>) = viewModelScope.launch { repository.deleteByIds(ids) }
+
+    private fun selectAll() {
+        setSelection(uiState.value.items.map { it.id }.toSet())
+    }
+
+    private fun invertSelection() {
+        val state = uiState.value
+        setSelection(state.items.map { it.id }.toSet() - state.selectedIds)
+    }
 
     override suspend fun generateJson(entities: List<TxtTocRule>): String = GSON.toJson(entities)
 
@@ -140,20 +173,20 @@ class TxtTocRuleViewModel(
         }
     }
 
-    fun copyRule(rule: TxtTocRule) {
+    private fun copyRule(rule: TxtTocRule) {
         context.sendToClip(GSON.toJson(rule))
     }
 
     fun pasteRule(): TxtTocRule? {
         val text = context.getClipText()
         if (text.isNullOrBlank()) {
-            context.toastOnUi("剪贴板没有内容")
+            context.toastOnUi(R.string.clipboard_empty)
             return null
         }
         return try {
             GSON.fromJsonObject<TxtTocRule>(text).getOrThrow()
         } catch (e: Exception) {
-            context.toastOnUi("格式不对")
+            context.toastOnUi(R.string.invalid_format)
             null
         }
     }

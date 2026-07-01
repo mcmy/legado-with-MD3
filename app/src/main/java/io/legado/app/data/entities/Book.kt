@@ -1,6 +1,7 @@
 package io.legado.app.data.entities
 
 import android.os.Parcelable
+import io.legado.app.help.book.applyTagGroupRulesForBook
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Ignore
@@ -33,7 +34,10 @@ import kotlin.math.max
 @TypeConverters(Book.Converters::class)
 @Entity(
     tableName = "books",
-    indices = [Index(value = ["name", "author"], unique = false)]
+    indices = [
+        Index(value = ["name", "author"], unique = false),
+        Index(value = ["durChapterTime"], unique = false)
+    ]
 )
 data class Book(
     // 详情页Url(本地书源存储完整文件路径)
@@ -120,6 +124,16 @@ data class Book(
     @ColumnInfo(defaultValue = "0")
     var syncTime: Long = 0L
 ) : Parcelable, BaseBook {
+
+    init {
+        kind = kind?.take(1000)
+        intro = intro?.take(5000)
+        customTag = customTag?.take(1000)
+        customIntro = customIntro?.take(5000)
+        remark = remark?.take(1000)
+        latestChapterTitle = latestChapterTitle?.take(200)
+        durChapterTitle = durChapterTitle?.take(200)
+    }
 
     @delegate:Transient
     @delegate:Ignore
@@ -280,6 +294,14 @@ data class Book(
         return this.durChapterIndex
     }
 
+    fun setTranslationMode(enabled: Boolean) {
+        config.translationMode = enabled
+    }
+
+    fun getTranslationMode(): Boolean {
+        return config.translationMode
+    }
+
     // dailyChapters 的 setter 和 getter
     fun setDailyChapters(dailyChapters: Int) {
         config.dailyChapters = dailyChapters
@@ -352,6 +374,9 @@ data class Book(
             newBook.type = type
         }
         newBook.readConfig = readConfig
+        if (newBook.wordCount.isNullOrBlank()) {
+            newBook.wordCount = wordCount
+        }
         return newBook
     }
 
@@ -363,6 +388,7 @@ data class Book(
     }
 
     fun save() {
+        applyTagGroupRulesForBook(this)
         if (appDb.bookDao.has(bookUrl)) {
             appDb.bookDao.update(this)
         } else {
@@ -408,7 +434,9 @@ data class Book(
         var webtoonSidePaddingDp: Int? = null,
         var mangaBackground: String? = null,
 
-        var fixedType: Boolean = false // 固定书籍类型,不随书源更新
+        var fixedType: Boolean = false, // 固定书籍类型,不随书源更新
+
+        var translationMode: Boolean = false // 是否启用翻译阅读模式
 
     ) : Parcelable
 

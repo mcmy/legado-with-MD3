@@ -20,15 +20,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.service.WebService
+import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.SplicedColumnGroup
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
-import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import io.legado.app.ui.widget.components.filePicker.FilePickerSheet
 import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.DropdownListSettingItem
@@ -36,6 +37,7 @@ import io.legado.app.ui.widget.components.settingItem.InputSettingItem
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
+import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import io.legado.app.utils.restart
 import io.legado.app.utils.takePersistablePermissionSafely
 import org.koin.androidx.compose.koinViewModel
@@ -47,6 +49,7 @@ fun OtherConfigScreen(
     viewModel: OtherConfigViewModel = koinViewModel()
 ) {
     val context = LocalContext.current
+    val readAloudPreferences by viewModel.readAloudPreferences.collectAsStateWithLifecycle()
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -147,7 +150,7 @@ fun OtherConfigScreen(
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         } else {
-                            Toast.makeText(context, "无需申请", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, R.string.permission_not_required, Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
@@ -200,22 +203,22 @@ fun OtherConfigScreen(
                 SwitchSettingItem(
                     title = stringResource(R.string.media_button_on_exit_title),
                     description = stringResource(R.string.media_button_on_exit_summary),
-                    checked = OtherConfig.mediaButtonOnExit,
-                    onCheckedChange = { OtherConfig.mediaButtonOnExit = it }
+                    checked = readAloudPreferences.mediaButtonOnExit,
+                    onCheckedChange = { viewModel.setMediaButtonOnExit(it) }
                 )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.read_aloud_by_media_button_title),
                     description = stringResource(R.string.read_aloud_by_media_button_summary),
-                    checked = OtherConfig.readAloudByMediaButton,
-                    onCheckedChange = { OtherConfig.readAloudByMediaButton = it }
+                    checked = readAloudPreferences.readAloudByMediaButton,
+                    onCheckedChange = { viewModel.setReadAloudByMediaButton(it) }
                 )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.ignore_audio_focus_title),
                     description = stringResource(R.string.ignore_audio_focus_summary),
-                    checked = OtherConfig.ignoreAudioFocus,
-                    onCheckedChange = { OtherConfig.ignoreAudioFocus = it }
+                    checked = readAloudPreferences.ignoreAudioFocus,
+                    onCheckedChange = { viewModel.setIgnoreAudioFocus(it) }
                 )
 
                 SwitchSettingItem(
@@ -234,26 +237,12 @@ fun OtherConfigScreen(
 
                 SwitchSettingItem(
                     title = stringResource(R.string.show_manga_ui),
-                    checked = OtherConfig.showMangaUi,
-                    onCheckedChange = { OtherConfig.showMangaUi = it }
+                    checked = ReadMangaConfig.showMangaUi,
+                    onCheckedChange = { ReadMangaConfig.showMangaUi = it }
                 )
             }
 
                 SplicedColumnGroup(title = stringResource(R.string.other_setting)) {
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.use_animation),
-                    description = stringResource(R.string.opt_animation),
-                    checked = OtherConfig.sharedElementEnterTransitionEnable,
-                    onCheckedChange = { OtherConfig.sharedElementEnterTransitionEnable = it }
-                )
-
-                SwitchSettingItem(
-                    title = stringResource(R.string.delay_book_load),
-                    description = stringResource(R.string.reduce_stutter),
-                    checked = OtherConfig.delayBookLoadEnable,
-                    onCheckedChange = { OtherConfig.delayBookLoadEnable = it }
-                )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.web_service_wake_lock),
@@ -301,7 +290,7 @@ fun OtherConfigScreen(
                 SwitchSettingItem(
                     title = stringResource(R.string.add_to_text_context_menu_t),
                     description = stringResource(R.string.add_to_text_context_menu_s),
-                    checked = viewModel.isProcessTextEnabled(),
+                    checked = OtherConfig.processText,
                     onCheckedChange = { viewModel.setProcessTextEnable(it) }
                 )
 

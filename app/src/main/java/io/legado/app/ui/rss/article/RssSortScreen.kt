@@ -1,31 +1,31 @@
 package io.legado.app.ui.rss.article
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Dataset
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,8 +37,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Stable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,11 +52,13 @@ import io.legado.app.ui.rss.read.title
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveHorizontalPaddingTab
 import io.legado.app.ui.widget.components.AppScaffold
+import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.EmptyMessage
-import io.legado.app.ui.widget.components.button.SmallIconButton
-import io.legado.app.ui.widget.components.button.SmallOutlinedIconToggleButton
-import io.legado.app.ui.widget.components.topbar.TopBarActionButton
-import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import io.legado.app.ui.widget.components.SearchBar
+import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.ui.widget.components.button.series.SmallToggleButton
+import io.legado.app.ui.widget.components.button.series.ToggleStyle
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
@@ -65,7 +69,16 @@ import io.legado.app.ui.widget.components.tabRow.AppTabRow
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
+import io.legado.app.ui.widget.components.topbar.TopBarActionButton
+import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import kotlinx.coroutines.launch
+
+@Stable
+data class RssSourceVariableSheetState(
+    val title: String,
+    val variable: String,
+    val comment: String
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,14 +86,20 @@ fun RssSortScreen(
     title: String,
     sortList: List<Pair<String, String>>,
     preferredSortUrl: String?,
+    searchKey: String?,
+    hasSearch: Boolean,
     hasLogin: Boolean,
     redirectPolicy: RedirectPolicy,
     showReadRecordSheet: Boolean,
     readRecords: List<RssReadRecord>,
+    sourceVariableSheet: RssSourceVariableSheetState?,
     onBackClick: () -> Unit,
+    onSearch: (String) -> Unit,
     onLogin: () -> Unit,
     onRefreshSort: () -> Unit,
     onSetSourceVariable: () -> Unit,
+    onDismissSourceVariable: () -> Unit,
+    onSaveSourceVariable: (String) -> Unit,
     onEditSource: () -> Unit,
     onSwitchLayout: () -> Unit,
     onReadRecord: () -> Unit,
@@ -105,13 +124,23 @@ fun RssSortScreen(
     val tabTitles = sortList.map { it.first }
 
     var showMainMenu by remember { mutableStateOf(false) }
+    var showSearchSheet by remember { mutableStateOf(false) }
+    var searchQuery by remember(searchKey) { mutableStateOf(searchKey.orEmpty()) }
     var showRedirectMenu by remember { mutableStateOf(false) }
     var showGroupMenu by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = showMainMenu || showRedirectMenu || showGroupMenu) {
+    BackHandler(enabled = showMainMenu || showSearchSheet || showRedirectMenu || showGroupMenu) {
         showMainMenu = false
+        showSearchSheet = false
         showRedirectMenu = false
         showGroupMenu = false
+    }
+
+    fun submitSearch(query: String) {
+        val normalized = query.trim()
+        if (normalized.isEmpty()) return
+        showSearchSheet = false
+        onSearch(normalized)
     }
 
     LaunchedEffect(sortList.size) {
@@ -132,6 +161,13 @@ fun RssSortScreen(
                     TopBarNavigationButton(onClick = onBackClick, imageVector = AppIcons.Back)
                 },
                 actions = {
+                    if (hasSearch) {
+                        TopBarActionButton(
+                            onClick = { showSearchSheet = true },
+                            imageVector = AppIcons.Search,
+                            contentDescription = stringResource(R.string.search)
+                        )
+                    }
                     TopBarActionButton(
                         onClick = { showMainMenu = true },
                         imageVector = AppIcons.MoreVert,
@@ -242,10 +278,11 @@ fun RssSortScreen(
 
                             if (BookshelfConfig.shouldShowExpandButton) {
                                 Box {
-                                    SmallOutlinedIconToggleButton(
+                                    SmallToggleButton(
                                         checked = showGroupMenu,
                                         onCheckedChange = { showGroupMenu = it },
-                                        imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                                        style = ToggleStyle.Outlined,
+                                        icon = Icons.AutoMirrored.Filled.FormatListBulleted,
                                         contentDescription = stringResource(R.string.group_manage)
                                     )
                                     RoundDropdownMenu(
@@ -306,6 +343,50 @@ fun RssSortScreen(
         onClear = onClearReadRecord,
         onOpen = onOpenReadRecord
     )
+
+    RssSourceVariableSheet(
+        state = sourceVariableSheet,
+        onDismissRequest = onDismissSourceVariable,
+        onSave = onSaveSourceVariable
+    )
+
+    RssSearchSheet(
+        show = showSearchSheet,
+        query = searchQuery,
+        onQueryChange = { searchQuery = it },
+        onSearch = ::submitSearch,
+        onDismissRequest = { showSearchSheet = false }
+    )
+}
+
+@Composable
+private fun RssSearchSheet(
+    show: Boolean,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: (String) -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    AppModalBottomSheet(
+        show = show,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.search),
+        endAction = {
+            SmallPlainButton(
+                onClick = { onSearch(query) },
+                icon = AppIcons.Search,
+                contentDescription = stringResource(R.string.search)
+            )
+        }
+    ) {
+        SearchBar(
+            query = query,
+            onQueryChange = onQueryChange,
+            onSearch = onSearch,
+            placeholder = stringResource(R.string.search_placeholder),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -321,9 +402,9 @@ private fun RssReadRecordSheet(
         onDismissRequest = onDismissRequest,
         title = stringResource(R.string.read_record),
         endAction = {
-            SmallIconButton(
+            SmallPlainButton(
                 onClick = onClear,
-                imageVector = Icons.Default.CleaningServices,
+                icon = Icons.Default.CleaningServices,
                 contentDescription = stringResource(R.string.clear)
             )
         }
@@ -365,6 +446,51 @@ private fun RssReadRecordSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RssSourceVariableSheet(
+    state: RssSourceVariableSheetState?,
+    onDismissRequest: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var variable by remember(state) { mutableStateOf(state?.variable.orEmpty()) }
+
+    AppModalBottomSheet(
+        data = state,
+        onDismissRequest = onDismissRequest,
+        title = state?.title,
+        endAction = {
+            MediumPlainButton(
+                onClick = { onSave(variable) },
+                icon = Icons.Default.Done,
+                contentDescription = stringResource(R.string.ok)
+            )
+        }
+    ) { sheetState ->
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(bottom = 32.dp)
+        ) {
+            AppText(
+                text = sheetState.comment,
+                style = LegadoTheme.typography.bodyMedium,
+                color = LegadoTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+            )
+            AppTextField(
+                value = variable,
+                onValueChange = { variable = it },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 8
+            )
         }
     }
 }

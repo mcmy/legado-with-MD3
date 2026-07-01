@@ -4,104 +4,90 @@ import android.app.Application
 import android.net.Uri
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.viewModelScope
-import com.google.gson.stream.JsonWriter
 import io.legado.app.R
 import io.legado.app.base.BaseRuleEvent
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.AppLog
-import io.legado.app.constant.BookType
 import io.legado.app.constant.EventBus
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookGroup
 import io.legado.app.data.entities.BookSource
-import io.legado.app.data.entities.BookSourcePart
 import io.legado.app.data.repository.BookGroupRepository
+import io.legado.app.data.repository.BookRepository
+import io.legado.app.data.repository.BookSourceRepository
+import io.legado.app.data.repository.BookshelfRepository
 import io.legado.app.data.repository.UploadRepository
+import io.legado.app.domain.usecase.AddBookUseCase
 import io.legado.app.domain.usecase.BatchCacheDownloadUseCase
+import io.legado.app.domain.usecase.ExportBookshelfUseCase
+import io.legado.app.domain.usecase.ImportBookshelfUseCase
+import io.legado.app.domain.usecase.RefreshTocUseCase
 import io.legado.app.domain.usecase.UpdateBooksGroupUseCase
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.book.BookHelp
-import io.legado.app.help.book.addType
-import io.legado.app.help.book.isUpError
-import io.legado.app.help.book.removeType
-import io.legado.app.help.book.sync
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
-import io.legado.app.help.http.decompressed
-import io.legado.app.help.http.newCallResponseBody
-import io.legado.app.help.http.okHttpClient
-import io.legado.app.help.http.text
 import io.legado.app.model.CacheBook
-import io.legado.app.model.ReadBook
 import io.legado.app.model.SourceCallBack
-import io.legado.app.model.webBook.WebBook
 import io.legado.app.service.CacheBookService
 import io.legado.app.ui.config.bookshelfConfig.BookshelfConfig
-import io.legado.app.utils.FileUtils
-import io.legado.app.utils.GSON
-import io.legado.app.utils.NetworkUtils
-import io.legado.app.utils.cnCompare
 import io.legado.app.utils.eventBus.FlowEventBus
-import io.legado.app.utils.fromJsonArray
-import io.legado.app.utils.isAbsUrl
-import io.legado.app.utils.isJsonArray
 import io.legado.app.utils.move
 import io.legado.app.utils.onEachParallel
 import io.legado.app.utils.postEvent
-import io.legado.app.utils.printOnDebug
-import io.legado.app.utils.readText
 import io.legado.app.utils.toastOnUi
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.ImmutableMap
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.io.OutputStreamWriter
 import java.util.LinkedList
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.max
 import kotlin.math.min
 
 class BookshelfViewModel(
     application: Application,
+    private val bookRepository: BookRepository,
     private val bookGroupRepository: BookGroupRepository,
+    private val bookSourceRepository: BookSourceRepository,
+    private val bookshelfRepository: BookshelfRepository,
     private val uploadRepository: UploadRepository,
     private val batchCacheDownloadUseCase: BatchCacheDownloadUseCase,
-    private val updateBooksGroupUseCase: UpdateBooksGroupUseCase
+    private val updateBooksGroupUseCase: UpdateBooksGroupUseCase,
+    private val refreshTocUseCase: RefreshTocUseCase,
+    private val addBookUseCase: AddBookUseCase,
+    private val importBookshelfUseCase: ImportBookshelfUseCase,
+    private val exportBookshelfUseCase: ExportBookshelfUseCase
 ) : BaseViewModel(application) {
     private var addBookJob: Coroutine<*>? = null
 
@@ -115,8 +101,9 @@ class BookshelfViewModel(
     private val isInFolderRootFlow = MutableStateFlow(BookshelfConfig.bookGroupStyle == 2)
     private val isRefreshingFlow = MutableStateFlow(false)
     private val bookGroupStyleFlow = MutableStateFlow(BookshelfConfig.bookGroupStyle)
-    private val draggingBooksFlow = MutableStateFlow<List<BookShelfItem>?>(null)
-    private val pendingSavedBooksFlow = MutableStateFlow<List<BookShelfItem>?>(null)
+    private val draggingBooksFlow = MutableStateFlow<List<BookUiItem>?>(null)
+    private val pendingSavedBooksFlow = MutableStateFlow<List<BookUiItem>?>(null)
+    private val isInitialLoadingFlow = MutableStateFlow(true)
 
     private data class BookshelfSortConfig(
         val sort: Int,
@@ -155,15 +142,27 @@ class BookshelfViewModel(
     protected val _eventChannel = Channel<BaseRuleEvent>()
     val events = _eventChannel.receiveAsFlow()
 
-    val groupsFlow: StateFlow<List<BookGroup>> = bookGroupRepository.flowShow()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val groupsFlow: SharedFlow<List<BookGroup>> = bookGroupRepository.flowShow()
+        .onEach {
+            if (it.isNotEmpty()) {
+                isInitialLoadingFlow.value = false
+            }
+        }
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
     val allGroupsFlow: StateFlow<List<BookGroup>> = bookGroupRepository.flowAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private data class GroupPreviewState(
-        val previews: ImmutableMap<Long, ImmutableList<BookShelfItem>>,
+        val previews: ImmutableMap<Long, ImmutableList<BookUiItem>>,
         val counts: ImmutableMap<Long, Int>,
+        val allBookCount: Int
+    )
+
+    private data class DataForPreviews(
+        val groups: List<BookGroup>,
+        val bookGroupStyle: Int,
+        val systemCountsMap: Map<Long, Int>,
         val allBookCount: Int
     )
 
@@ -181,48 +180,50 @@ class BookshelfViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookshelfGroupSelectorState())
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val booksFlow = groupIdFlow
+    val booksFlow: Flow<List<BookUiItem>> = groupIdFlow
         .flatMapLatest { groupId ->
             combine(
-                appDb.bookDao.flowBookShelfByGroup(groupId),
+                bookRepository.flowBookShelfByGroup(groupId),
                 groupsFlow,
                 sortConfigFlow
             ) { list, groups, sortConfig ->
-                sortBooks(
+                bookshelfRepository.sortBooks(
                     list,
                     groups.find { it.groupId == groupId },
-                    sortConfig
-                )
+                    sortConfig.sort,
+                    sortConfig.sortOrder
+                ).map { it.toUiItem() }
             }
         }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val allGroupBooksFlow: StateFlow<Map<Long, List<BookShelfItem>>> = combine(
-        groupsFlow, sortConfigFlow
-    ) { groups, sortConfig ->
-        groups to sortConfig
-    }.flatMapLatest { (groups, sortConfig) ->
-        if (groups.isEmpty()) {
-            flowOf(emptyMap())
-        } else {
-            val flows = groups.map { group ->
-                appDb.bookDao.flowBookShelfByGroup(group.groupId).map { books ->
-                    group.groupId to sortBooks(books, group, sortConfig)
+    private val allGroupBooksImmutableFlow: Flow<ImmutableMap<Long, ImmutableList<BookUiItem>>> =
+        combine(groupsFlow, sortConfigFlow) { groups, sortConfig ->
+            groups to sortConfig
+        }.flatMapLatest { (groups, sortConfig) ->
+            if (groups.isEmpty()) {
+                flowOf(persistentMapOf())
+            } else {
+                val flows = groups.map { group ->
+                    bookRepository.flowBookShelfByGroup(group.groupId).map { books ->
+                        group.groupId to bookshelfRepository.sortBooks(
+                            books,
+                            group,
+                            sortConfig.sort,
+                            sortConfig.sortOrder
+                        ).map { it.toUiItem() }.toImmutableList()
+                    }
+                }
+                combine(flows) { results ->
+                    results.fold(persistentMapOf<Long, ImmutableList<BookUiItem>>()) { acc, (id, list) ->
+                        acc.put(id, list)
+                    }
                 }
             }
-            combine(flows) { it.toMap() }
-        }
-    }.distinctUntilChanged()
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+        }.distinctUntilChanged()
+            .flowOn(Dispatchers.Default)
 
-    private val allGroupBooksImmutableFlow: StateFlow<ImmutableMap<Long, ImmutableList<BookShelfItem>>> =
-        allGroupBooksFlow.map { map ->
-            map.mapValues { it.value.toImmutableList() }.toImmutableMap()
-        }.flowOn(Dispatchers.Default)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), persistentMapOf())
-
-    private val visibleBooksFlow = combine(
+    private val visibleBooksFlow: Flow<List<BookUiItem>> = combine(
         booksFlow,
         searchKeyFlow,
         searchModeFlow
@@ -230,11 +231,23 @@ class BookshelfViewModel(
         filterBooks(books, searchKey, isSearchMode)
     }.distinctUntilChanged()
 
+    private val selectedGroupCanReorderFlow = combine(
+        isEditModeFlow,
+        searchModeFlow,
+        groupIdFlow,
+        groupsFlow,
+        sortConfigFlow
+    ) { isEditMode, isSearchMode, groupId, groups, sortConfig ->
+        val group = groups.find { it.groupId == groupId }
+        val bookSort = group?.bookSort?.takeIf { it >= 0 } ?: sortConfig.sort
+        isEditMode && !isSearchMode && bookSort == 3
+    }.distinctUntilChanged()
+
     private val selectedVisibleBookUrlsFlow = combine(
         selectedBookUrlsFlow,
         visibleBooksFlow
     ) { selectedBookUrls, visibleBooks ->
-        val visibleBookUrls = visibleBooks.mapTo(hashSetOf()) { it.bookUrl }
+        val visibleBookUrls = visibleBooks.mapTo(hashSetOf()) { it.book.bookUrl }
         selectedBookUrls.intersect(visibleBookUrls)
     }.distinctUntilChanged()
 
@@ -242,66 +255,64 @@ class BookshelfViewModel(
     private val groupPreviewsFlow = combine(
         groupsFlow,
         bookGroupStyleFlow,
-        appDb.bookDao.flowSystemGroupCounts()
-    ) { groups, bookGroupStyle, systemCounts ->
-        Triple(groups, bookGroupStyle, systemCounts.associate { it.groupId to it.count })
-    }.flatMapLatest { (groups, bookGroupStyle, systemCountsMap) ->
+        bookRepository.flowSystemGroupCounts(),
+        bookRepository.flowAllBookShelfCount()
+    ) { groups, bookGroupStyle, systemCounts, totalCount ->
+        DataForPreviews(
+            groups,
+            bookGroupStyle,
+            systemCounts.associate { it.groupId to it.count },
+            totalCount
+        )
+    }.flatMapLatest { data ->
+        val groups = data.groups
+        val bookGroupStyle = data.bookGroupStyle
+        val systemCountsMap = data.systemCountsMap
+        val allBookCount = data.allBookCount
+
         if (bookGroupStyle !in 2..3) {
-            appDb.bookDao.flowAllBookShelfCount().map { count ->
-                GroupPreviewState(persistentMapOf(), persistentMapOf(), count)
-            }
+            flowOf(GroupPreviewState(persistentMapOf(), persistentMapOf(), allBookCount))
         } else if (groups.isEmpty()) {
-            flowOf(GroupPreviewState(persistentMapOf(), persistentMapOf(), 0))
+            flowOf(GroupPreviewState(persistentMapOf(), persistentMapOf(), allBookCount))
         } else {
             val groupFlows = groups.map { group ->
                 val countFlow: Flow<Int> = if (group.groupId > 0) {
-                    appDb.bookDao.flowUserGroupBookCount(group.groupId)
+                    bookRepository.flowUserGroupBookCount(group.groupId)
                 } else {
                     flowOf(systemCountsMap[group.groupId] ?: 0)
                 }
-                val previewFlow = appDb.bookDao.flowGroupPreview(group.groupId)
+                val previewFlow = bookRepository.flowGroupPreview(group.groupId)
                 combine(countFlow, previewFlow) { count, preview ->
-                    Triple(group.groupId, count, preview)
+                    Triple(group.groupId, count, preview.map { it.toUiItem() })
                 }
             }
             combine(groupFlows) { results ->
-                var previews = persistentMapOf<Long, ImmutableList<BookShelfItem>>()
+                var previews = persistentMapOf<Long, ImmutableList<BookUiItem>>()
                 var counts = persistentMapOf<Long, Int>()
-                var allBookCount = 0
                 results.forEach { (groupId, count, preview) ->
                     counts = counts.put(groupId, count)
                     previews = previews.put(groupId, preview.toImmutableList())
-                    if (groupId == BookGroup.IdAll) allBookCount = count
                 }
                 GroupPreviewState(previews, counts, allBookCount)
             }
         }
     }.distinctUntilChanged().flowOn(Dispatchers.Default)
 
-    private val coreInternalStateFlow = combine(
+    private val internalStateFlow = combine(
         groupIdFlow,
         searchKeyFlow,
         searchModeFlow,
         loadingTextFlow,
-        updatingBooksFlow
-    ) { groupId, searchKey, isSearchMode, loadingText, updatingBooks ->
+        combine(updatingBooksFlow, upBooksCountFlow, sortConfigFlow) { a, b, c ->
+            Triple(a, b, c)
+        }
+    ) { groupId, searchKey, isSearchMode, loadingText, (updatingBooks, upBooksCount, sortConfig) ->
         InternalState(
             groupId = groupId,
             searchKey = searchKey,
             isSearchMode = isSearchMode,
             loadingText = loadingText,
             updatingBooks = updatingBooks,
-            upBooksCount = 0,
-            sortConfig = readSortConfig()
-        )
-    }
-
-    private val internalStateFlow = combine(
-        coreInternalStateFlow,
-        upBooksCountFlow,
-        sortConfigFlow
-    ) { core, upBooksCount, sortConfig ->
-        core.copy(
             upBooksCount = upBooksCount,
             sortConfig = sortConfig
         )
@@ -324,57 +335,52 @@ class BookshelfViewModel(
         val isInFolderRoot: Boolean,
         val isRefreshing: Boolean,
         val bookGroupStyle: Int,
-        val draggingBooks: List<BookShelfItem>?,
-        val pendingSavedBooks: List<BookShelfItem>?
-    )
-
-    private val editStateFlow = combine(
-        activeOverlayFlow,
-        isEditModeFlow,
-        selectedVisibleBookUrlsFlow,
-        isInFolderRootFlow
-    ) { activeOverlay, isEditMode, selectedBookUrls, isInFolderRoot ->
-        EditState(activeOverlay, isEditMode, selectedBookUrls, isInFolderRoot)
-    }
-
-    private data class EditState(
-        val activeOverlay: BookshelfOverlay?,
-        val isEditMode: Boolean,
-        val selectedBookUrls: Set<String>,
-        val isInFolderRoot: Boolean
+        val draggingBooks: List<BookUiItem>?,
+        val pendingSavedBooks: List<BookUiItem>?
     )
 
     private val interactionStateFlow = combine(
-        editStateFlow,
-        isRefreshingFlow,
-        bookGroupStyleFlow,
-        draggingBooksFlow,
-        pendingSavedBooksFlow
-    ) { editState, isRefreshing, bookGroupStyle, draggingBooks, pendingSavedBooks ->
+        activeOverlayFlow,
+        isEditModeFlow,
+        selectedVisibleBookUrlsFlow,
+        isInFolderRootFlow,
+        isRefreshingFlow
+    ) { activeOverlay, isEditMode, selectedBookUrls, isInFolderRoot, isRefreshing ->
         BookshelfInteractionState(
-            activeOverlay = editState.activeOverlay,
-            isEditMode = editState.isEditMode,
-            selectedBookUrls = editState.selectedBookUrls,
-            isInFolderRoot = editState.isInFolderRoot,
+            activeOverlay = activeOverlay,
+            isEditMode = isEditMode,
+            selectedBookUrls = selectedBookUrls,
+            isInFolderRoot = isInFolderRoot,
             isRefreshing = isRefreshing,
+            bookGroupStyle = 0,
+            draggingBooks = null,
+            pendingSavedBooks = null
+        )
+    }.combine(
+        combine(bookGroupStyleFlow, draggingBooksFlow, pendingSavedBooksFlow) { a, b, c ->
+            Triple(a, b, c)
+        }
+    ) { interaction, (bookGroupStyle, draggingBooks, pendingSavedBooks) ->
+        interaction.copy(
             bookGroupStyle = bookGroupStyle,
             draggingBooks = draggingBooks,
             pendingSavedBooks = pendingSavedBooks
         )
     }
 
+    private val groupPreviewsStateFlow = MutableStateFlow(
+        GroupPreviewState(persistentMapOf(), persistentMapOf(), 0)
+    )
+
     private val dataStateFlow = combine(
-        combine(
-            booksFlow,
-            groupsFlow,
-            allGroupsFlow,
-            groupPreviewsFlow,
-            internalStateFlow
-        ) { books, groups, allGroups, previews, internal ->
-            BookshelfDataCore(books, groups, allGroups, previews, internal)
-        },
-        allGroupBooksImmutableFlow
-    ) { core, allGroupBooks ->
+        booksFlow,
+        groupsFlow,
+        allGroupsFlow,
+        groupPreviewsStateFlow,
+        internalStateFlow
+    ) { books, groups, allGroups, previews, internal ->
+        BookshelfDataCore(books, groups, allGroups, previews, internal)
+    }.combine(allGroupBooksImmutableFlow) { core, allGroupBooks ->
         BookshelfDataState(
             books = core.books,
             groups = core.groups.map { it.toBookGroupUi() },
@@ -386,7 +392,7 @@ class BookshelfViewModel(
     }
 
     private data class BookshelfDataCore(
-        val books: List<BookShelfItem>,
+        val books: List<BookUiItem>,
         val groups: List<BookGroup>,
         val allGroups: List<BookGroup>,
         val previews: GroupPreviewState,
@@ -394,19 +400,20 @@ class BookshelfViewModel(
     )
 
     private data class BookshelfDataState(
-        val books: List<BookShelfItem>,
+        val books: List<BookUiItem>,
         val groups: List<BookGroupUi>,
         val allGroups: List<BookGroupUi>,
         val previews: GroupPreviewState,
         val internal: InternalState,
-        val allGroupBooks: ImmutableMap<Long, ImmutableList<BookShelfItem>>
+        val allGroupBooks: ImmutableMap<Long, ImmutableList<BookUiItem>>
     )
 
     val uiState: StateFlow<BookshelfUiState> = combine(
         dataStateFlow,
         interactionStateFlow,
-        visibleBooksFlow
-    ) { data, interaction, filteredBooks ->
+        visibleBooksFlow,
+        isInitialLoadingFlow
+    ) { data, interaction, filteredBooks, isInitialLoading ->
         val books = data.books
         val groups = data.groups
         val allGroups = data.allGroups
@@ -429,6 +436,7 @@ class BookshelfViewModel(
         BookshelfUiState(
             items = filteredBooks.toImmutableList(),
             selectedIds = selectedIds.toImmutableSet(),
+            isInitialLoading = isInitialLoading,
             groups = groups.toImmutableList(),
             allGroups = allGroups.toImmutableList(),
             groupPreviews = previews.previews,
@@ -452,10 +460,16 @@ class BookshelfViewModel(
             bookshelfSort = internal.sortConfig.sort,
             bookshelfSortOrder = internal.sortConfig.sortOrder,
             title = title,
-            subtitle = if (interaction.isEditMode) {
-                context.getString(R.string.bookshelf_total_count, previews.allBookCount)
-            } else {
-                null
+            subtitle = when {
+                interaction.isEditMode -> {
+                    context.getString(R.string.bookshelf_total_count, previews.allBookCount)
+                }
+
+                internal.isSearchMode -> {
+                    context.getString(R.string.bookshelf_total_count, filteredBooks.size)
+                }
+
+                else -> null
             },
             currentGroupName = currentGroupName,
             draggingBooks = interaction.draggingBooks?.toImmutableList(),
@@ -465,6 +479,10 @@ class BookshelfViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BookshelfUiState())
 
     init {
+        viewModelScope.launch {
+            delay(500)
+            isInitialLoadingFlow.value = false
+        }
         viewModelScope.launch {
             FlowEventBus.with<Unit>(EventBus.UP_ALL_BOOK_TOC).collect {
                 upAllBookToc()
@@ -485,62 +503,35 @@ class BookshelfViewModel(
                 }
         }
 
-        if (BookshelfConfig.autoRefreshBook) {
-            upAllBookToc()
+        viewModelScope.launch {
+            groupPreviewsFlow.collect { groupPreviewsStateFlow.value = it }
+        }
+        viewModelScope.launch {
+            combine(booksFlow, selectedGroupCanReorderFlow) { books, canReorderBooks ->
+                books to canReorderBooks
+            }.collect { (books, canReorderBooks) ->
+                syncDragState(books, canReorderBooks)
+            }
+        }
+
+        viewModelScope.launch {
+            isInitialLoadingFlow.filter { !it }.collect {
+                if (BookshelfConfig.autoRefreshBook) {
+                    upAllBookToc()
+                }
+            }
         }
     }
 
     private fun filterBooks(
-        books: List<BookShelfItem>,
+        books: List<BookUiItem>,
         searchKey: String,
         isSearchMode: Boolean
-    ): List<BookShelfItem> {
+    ): List<BookUiItem> {
         return if (!isSearchMode || searchKey.isBlank()) {
             books
         } else {
-            books.filter { it.matchesSearchKey(searchKey) }
-        }
-    }
-
-    private fun sortBooks(
-        list: List<BookShelfItem>,
-        group: BookGroup?,
-        sortConfig: BookshelfSortConfig
-    ): List<BookShelfItem> {
-        val bookSort = if (group != null && group.bookSort >= 0) {
-            group.bookSort
-        } else {
-            sortConfig.sort
-        }
-        val isDescending = sortConfig.sortOrder == 1
-
-        return when (bookSort) {
-            1 -> if (isDescending) list.sortedByDescending { it.latestChapterTime }
-            else list.sortedBy { it.latestChapterTime }
-
-            2 -> if (isDescending)
-                list.sortedWith { o1, o2 -> o2.name.cnCompare(o1.name) }
-            else
-                list.sortedWith { o1, o2 -> o1.name.cnCompare(o2.name) }
-
-            3 -> if (isDescending) list.sortedByDescending { it.order }
-            else list.sortedBy { it.order }
-
-            4 -> if (isDescending) list.sortedByDescending {
-                max(
-                    it.latestChapterTime,
-                    it.durChapterTime
-                )
-            }
-            else list.sortedBy { max(it.latestChapterTime, it.durChapterTime) }
-
-            5 -> if (isDescending)
-                list.sortedWith { o1, o2 -> o2.author.cnCompare(o1.author) }
-            else
-                list.sortedWith { o1, o2 -> o1.author.cnCompare(o2.author) }
-
-            else -> if (isDescending) list.sortedByDescending { it.durChapterTime }
-            else list.sortedBy { it.durChapterTime }
+            books.filter { it.matches(searchKey) }
         }
     }
 
@@ -624,11 +615,11 @@ class BookshelfViewModel(
     }
 
     fun selectAllVisible() {
-        selectedBookUrlsFlow.value = uiState.value.items.mapTo(hashSetOf()) { it.bookUrl }
+        selectedBookUrlsFlow.value = uiState.value.items.mapTo(hashSetOf()) { it.book.bookUrl }
     }
 
     fun invertVisibleSelection() {
-        val visibleBookUrls = uiState.value.items.mapTo(hashSetOf()) { it.bookUrl }
+        val visibleBookUrls = uiState.value.items.mapTo(hashSetOf()) { it.book.bookUrl }
         selectedBookUrlsFlow.value = visibleBookUrls - selectedBookUrlsFlow.value
     }
 
@@ -670,13 +661,13 @@ class BookshelfViewModel(
         }
     }
 
-    fun saveBookOrder(reorderedBooks: List<BookShelfItem>) {
+    fun saveBookOrder(reorderedBooks: List<BookUiItem>) {
         if (reorderedBooks.isEmpty()) return
         val isDescending = BookshelfConfig.bookshelfSortOrder == 1
         val maxOrder = reorderedBooks.size
         execute {
-            val updates = reorderedBooks.mapIndexedNotNull { index, book ->
-                appDb.bookDao.getBook(book.bookUrl)?.apply {
+            val updates = reorderedBooks.mapIndexedNotNull { index, bookUi ->
+                appDb.bookDao.getBook(bookUi.book.bookUrl)?.apply {
                     order = if (isDescending) maxOrder - index else index + 1
                 }
             }
@@ -707,17 +698,19 @@ class BookshelfViewModel(
         }
     }
 
-    fun refreshBooks(books: List<BookShelfItem>) {
+    fun refreshBooks(books: List<BookUiItem>) {
         if (isRefreshingFlow.value) return
         isRefreshingFlow.value = true
-        enqueueTocUpdate(books, resetRefreshWhenIdle = true)
+        val limit = BookshelfConfig.bookshelfRefreshingLimit
+        val list = if (limit > 0) books.take(limit) else books
+        enqueueTocUpdate(list.map { it.book }, resetRefreshWhenIdle = true)
     }
 
-    fun startDraggingBooks(books: List<BookShelfItem>) {
+    fun startDraggingBooks(books: List<BookUiItem>) {
         draggingBooksFlow.value = books
     }
 
-    fun moveDraggingBook(fromIndex: Int, toIndex: Int, fallbackBooks: List<BookShelfItem>) {
+    fun moveDraggingBook(fromIndex: Int, toIndex: Int, fallbackBooks: List<BookUiItem>) {
         if (fromIndex == toIndex) return
         val sourceBooks = draggingBooksFlow.value ?: fallbackBooks
         if (fromIndex !in sourceBooks.indices || toIndex !in sourceBooks.indices) return
@@ -727,19 +720,19 @@ class BookshelfViewModel(
     }
 
     fun finishDraggingBooks() {
-        val reorderedBooks = draggingBooksFlow.value ?: return
-        pendingSavedBooksFlow.value = reorderedBooks
+        val reorderedUiBooks = draggingBooksFlow.value ?: return
+        pendingSavedBooksFlow.value = reorderedUiBooks
         draggingBooksFlow.value = null
-        saveBookOrder(reorderedBooks)
+        saveBookOrder(reorderedUiBooks)
     }
 
-    fun syncDragState(books: List<BookShelfItem>, canReorderBooks: Boolean) {
+    private fun syncDragState(books: List<BookUiItem>, canReorderBooks: Boolean) {
         if (!canReorderBooks) {
             clearDragState()
             return
         }
         val pending = pendingSavedBooksFlow.value ?: return
-        if (books.map { it.bookUrl } == pending.map { it.bookUrl }) {
+        if (books.map { it.book.bookUrl } == pending.map { it.book.bookUrl }) {
             pendingSavedBooksFlow.value = null
         }
     }
@@ -752,16 +745,16 @@ class BookshelfViewModel(
     fun gotoTop() {
         scrollTrigger.tryEmit(Unit)
     }
-
-    // 更新逻辑移入
     fun upAllBookToc() {
         execute {
             addToWaitUp(appDb.bookDao.hasUpdateBooks)
         }
     }
 
-    fun upToc(books: List<BookShelfItem>) {
-        enqueueTocUpdate(books, resetRefreshWhenIdle = false)
+    fun upToc(books: List<BookUiItem>) {
+        val limit = BookshelfConfig.bookshelfRefreshingLimit
+        val list = if (limit > 0) books.take(limit) else books
+        enqueueTocUpdate(list.map { it.book }, resetRefreshWhenIdle = false)
     }
 
     private fun enqueueTocUpdate(
@@ -877,51 +870,8 @@ class BookshelfViewModel(
     }
 
     private suspend fun updateToc(bookUrl: String) {
-        val book = appDb.bookDao.getBook(bookUrl) ?: return
-        val source = appDb.bookSourceDao.getBookSource(book.origin)
-        if (source == null) {
-            if (!book.isUpError) {
-                book.addType(BookType.updateError)
-                appDb.bookDao.update(book)
-            }
-            return
-        }
-        if (source.eventListener) {
-            if (eventListenerSource.putIfAbsent(source, true) == null) {
-                SourceCallBack.callBackSource(
-                    viewModelScope,
-                    SourceCallBack.START_SHELF_REFRESH,
-                    source
-                )
-            }
-        }
-        kotlin.runCatching {
-            val oldBook = book.copy()
-            if (book.tocUrl.isBlank()) {
-                WebBook.getBookInfoAwait(source, book)
-            } else {
-                WebBook.runPreUpdateJs(source, book)
-            }
-            val toc = WebBook.getChapterListAwait(source, book).getOrThrow()
-            book.sync(oldBook)
-            book.removeType(BookType.updateError)
-            if (book.bookUrl == bookUrl) {
-                appDb.bookDao.update(book)
-            } else {
-                appDb.bookDao.replace(oldBook, book)
-                BookHelp.updateCacheFolder(oldBook, book)
-            }
-            appDb.bookChapterDao.delByBook(bookUrl)
-            appDb.bookChapterDao.insert(*toc.toTypedArray())
-            ReadBook.onChapterListUpdated(book)
+        refreshTocUseCase.execute(bookUrl) { source, book ->
             addDownload(source, book)
-        }.onFailure {
-            currentCoroutineContext().ensureActive()
-            AppLog.put("${book.name} 更新目录失败\n${it.localizedMessage}", it)
-            appDb.bookDao.getBook(book.bookUrl)?.let { book ->
-                book.addType(BookType.updateError)
-                appDb.bookDao.update(book)
-            }
         }
     }
 
@@ -971,58 +921,11 @@ class BookshelfViewModel(
     }
 
     fun addBookByUrl(bookUrls: String) {
-        var successCount = 0
         loadingTextFlow.value = "添加中..."
         addBookJob = execute {
-            val hasBookUrlPattern: List<BookSourcePart> by lazy {
-                appDb.bookSourceDao.hasBookUrlPattern
+            val successCount = addBookUseCase.execute(bookUrls) {
+                loadingTextFlow.value = "添加中... ($it)"
             }
-            val urls = bookUrls.split("\n")
-            for (url in urls) {
-                val bookUrl = url.trim()
-                if (bookUrl.isEmpty()) continue
-                if (appDb.bookDao.getBook(bookUrl) != null) {
-                    successCount++
-                    continue
-                }
-                val baseUrl = NetworkUtils.getBaseUrl(bookUrl) ?: continue
-                var source = appDb.bookSourceDao.getBookSourceAddBook(baseUrl)
-                if (source == null) {
-                    for (bookSource in hasBookUrlPattern) {
-                        try {
-                            val bs = bookSource.getBookSource()!!
-                            if (bookUrl.matches(bs.bookUrlPattern!!.toRegex())) {
-                                source = bs
-                                break
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-                val bookSource = source ?: continue
-                val book = Book(
-                    bookUrl = bookUrl,
-                    origin = bookSource.bookSourceUrl,
-                    originName = bookSource.bookSourceName
-                )
-                kotlin.runCatching {
-                    WebBook.getBookInfoAwait(bookSource, book)
-                }.onSuccess {
-                    val dbBook = appDb.bookDao.getBook(it.name, it.author)
-                    if (dbBook != null) {
-                        val toc = WebBook.getChapterListAwait(bookSource, it).getOrThrow()
-                        dbBook.migrateTo(it, toc)
-                        appDb.bookDao.insert(it)
-                        appDb.bookChapterDao.insert(*toc.toTypedArray())
-                    } else {
-                        it.order = appDb.bookDao.minOrder - 1
-                        it.save()
-                    }
-                    successCount++
-                    loadingTextFlow.value = "添加中... ($successCount)"
-                }
-            }
-        }.onSuccess {
             if (successCount > 0) {
                 context.toastOnUi(R.string.success)
             } else {
@@ -1035,25 +938,9 @@ class BookshelfViewModel(
         }
     }
 
-    fun exportToUri(uri: Uri, items: List<BookShelfItem>) {
+    fun exportToUri(uri: Uri, items: List<BookUiItem>) {
         execute {
-            context.contentResolver.openOutputStream(uri)?.use { out ->
-                val writer = JsonWriter(OutputStreamWriter(out, "UTF-8"))
-                writer.setIndent("  ")
-                writer.beginArray()
-                items.forEach {
-                    val bookMap = hashMapOf<String, String?>()
-                    bookMap["name"] = it.name
-                    bookMap["author"] = it.author
-                    // intro is not in BookShelfItem, fetch from DB if needed or skip
-                    // For now, let's keep it simple and skip intro or fetch it
-                    val fullBook = appDb.bookDao.getBook(it.bookUrl)
-                    bookMap["intro"] = fullBook?.getDisplayIntro()
-                    GSON.toJson(bookMap, bookMap::class.java, writer)
-                }
-                writer.endArray()
-                writer.close()
-            }
+            exportBookshelfUseCase.exportToUri(uri, items).getOrThrow()
         }.onSuccess {
             _eventChannel.trySend(BaseRuleEvent.ShowSnackbar("导出成功"))
         }.onError {
@@ -1061,19 +948,9 @@ class BookshelfViewModel(
         }
     }
 
-    fun uploadBookshelf(items: List<BookShelfItem>) {
+    fun uploadBookshelf(items: List<BookUiItem>) {
         execute {
-            val json = withContext(Dispatchers.Default) {
-                val list = items.map {
-                    val bookMap = hashMapOf<String, String?>()
-                    bookMap["name"] = it.name
-                    bookMap["author"] = it.author
-                    val fullBook = appDb.bookDao.getBook(it.bookUrl)
-                    bookMap["intro"] = fullBook?.getDisplayIntro()
-                    bookMap
-                }
-                GSON.toJson(list)
-            }
+            val json = exportBookshelfUseCase.exportToJson(items).getOrThrow()
             uploadRepository.upload(
                 fileName = "bookshelf.json",
                 file = json,
@@ -1096,29 +973,10 @@ class BookshelfViewModel(
         }
     }
 
-    fun exportBookshelf(items: List<BookShelfItem>?, success: (file: File) -> Unit) {
+    fun exportBookshelf(items: List<BookUiItem>?, success: (file: File) -> Unit) {
         execute {
-            items?.let {
-                val path = "${context.filesDir}/books.json"
-                FileUtils.delete(path)
-                val file = FileUtils.createFileWithReplace(path)
-                FileOutputStream(file).use { out ->
-                    val writer = JsonWriter(OutputStreamWriter(out, "UTF-8"))
-                    writer.setIndent("  ")
-                    writer.beginArray()
-                    items.forEach {
-                        val bookMap = hashMapOf<String, String?>()
-                        bookMap["name"] = it.name
-                        bookMap["author"] = it.author
-                        val fullBook = appDb.bookDao.getBook(it.bookUrl)
-                        bookMap["intro"] = fullBook?.getDisplayIntro()
-                        GSON.toJson(bookMap, bookMap::class.java, writer)
-                    }
-                    writer.endArray()
-                    writer.close()
-                }
-                file
-            } ?: throw NoStackTraceException("书籍不能为空")
+            items ?: throw NoStackTraceException("书籍不能为空")
+            exportBookshelfUseCase.exportToFile(items).getOrThrow()
         }.onSuccess {
             success(it)
         }.onError {
@@ -1128,70 +986,29 @@ class BookshelfViewModel(
 
     fun importBookshelf(str: String, groupId: Long) {
         execute {
-            val text = str.trim()
-            when {
-                text.isAbsUrl() -> {
-                    okHttpClient.newCallResponseBody {
-                        url(text)
-                    }.decompressed().text().let {
-                        importBookshelf(it, groupId)
-                    }
-                }
-
-                text.isJsonArray() -> {
-                    importBookshelfByJson(text, groupId)
-                }
-
-                else -> {
-                    throw NoStackTraceException("格式不对")
-                }
-            }
+            importBookshelfUseCase.import(str, groupId) {
+                loadingTextFlow.value = it
+            }.getOrThrow()
+        }.onSuccess {
+            context.toastOnUi(R.string.success)
         }.onError {
             context.toastOnUi(it.localizedMessage ?: "ERROR")
+        }.onFinally {
+            loadingTextFlow.value = null
         }
     }
 
     fun importBookshelf(uri: Uri, groupId: Long) {
         execute {
-            uri.readText(context)
+            importBookshelfUseCase.import(uri, groupId) {
+                loadingTextFlow.value = it
+            }.getOrThrow()
         }.onSuccess {
-            importBookshelf(it, groupId)
+            context.toastOnUi(R.string.success)
         }.onError {
             context.toastOnUi(it.localizedMessage ?: "ERROR")
-        }
-    }
-
-    private fun importBookshelfByJson(json: String, groupId: Long) {
-        loadingTextFlow.value = "导入中..."
-        execute {
-            val bookSourceParts = appDb.bookSourceDao.allEnabledPart
-            val semaphore = Semaphore(AppConfig.threadCount)
-            GSON.fromJsonArray<Map<String, String?>>(json).getOrThrow().forEach { bookInfo ->
-                val name = bookInfo["name"] ?: ""
-                val author = bookInfo["author"] ?: ""
-                if (name.isEmpty() || appDb.bookDao.has(name, author)) {
-                    return@forEach
-                }
-                semaphore.withPermit {
-                    WebBook.preciseSearch(
-                        this, bookSourceParts, name, author,
-                        semaphore = semaphore
-                    ).onSuccess {
-                        val book = it.first
-                        if (groupId > 0) {
-                            book.group = groupId
-                        }
-                        book.save()
-                    }.onError { e ->
-                        context.toastOnUi(e.localizedMessage)
-                    }
-                }
-            }
-        }.onError {
-            it.printOnDebug()
         }.onFinally {
             loadingTextFlow.value = null
-            context.toastOnUi(R.string.success)
         }
     }
 

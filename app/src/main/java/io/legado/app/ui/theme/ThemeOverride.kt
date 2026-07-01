@@ -16,6 +16,7 @@ import io.legado.app.ui.config.themeConfig.ThemeConfig
 data class ThemeOverrideState(
     val seedColor: Color,
     val colorScheme: ColorScheme,
+    val isDark: Boolean = false,
 )
 
 fun buildThemeOverrideState(
@@ -45,7 +46,8 @@ fun buildThemeOverrideState(
 
     return ThemeOverrideState(
         seedColor = seedColor,
-        colorScheme = colorScheme
+        colorScheme = colorScheme,
+        isDark = isDark,
     )
 }
 
@@ -67,16 +69,17 @@ fun ProvideThemeOverride(
     }
 
     val currentTheme = appliedTheme
-        ?: ThemeOverrideState(
-            seedColor = baseTheme.seedColor,
-            colorScheme = baseTheme.colorScheme
-        )
 
-    ProvideColorSchemeOverride(
-        colorScheme = currentTheme.colorScheme,
-        seedColor = currentTheme.seedColor,
-        content = content
-    )
+    if (currentTheme != null) {
+        ProvideColorSchemeOverride(
+            colorScheme = currentTheme.colorScheme,
+            seedColor = currentTheme.seedColor,
+            overrideIsDark = currentTheme.isDark,
+            content = content
+        )
+    } else {
+        content()
+    }
 }
 
 @Composable

@@ -20,29 +20,33 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
-import io.legado.app.constant.PreferKey
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.SplicedColumnGroup
-import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import io.legado.app.ui.widget.components.dialog.ColorPickerSheet
 import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.DropdownListSettingItem
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
+import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CoverConfigScreen(
     onBackClick: () -> Unit,
+    onNavigateToCoverAlbums: () -> Unit,
     viewModel: CoverConfigViewModel = koinViewModel()
 ) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
+    val albumState by viewModel.albumState.collectAsStateWithLifecycle()
+    val selectedAlbum = albumState.albums
+        .firstOrNull { it.id == albumState.selectedAlbumId }
     var showCoverRuleSheet by remember { mutableStateOf(false) }
-    var manageKey by remember { mutableStateOf<String?>(null) }
+    var showAlbumSelect by remember { mutableStateOf(false) }
     var showColorPickerByField by remember { mutableStateOf<String?>(null) }
 
     AppScaffold(
@@ -84,6 +88,20 @@ fun CoverConfigScreen(
                     description = stringResource(R.string.use_default_cover_s),
                     checked = CoverConfig.useDefaultCover,
                     onCheckedChange = { CoverConfig.useDefaultCover = it }
+                )
+
+                ClickableSettingItem(
+                    title = stringResource(R.string.default_cover),
+                    description = selectedAlbum?.let {
+                        "${it.name} · ${
+                            stringResource(
+                                R.string.cover_album_day_night_count,
+                                it.lightImages.size,
+                                it.darkImages.size,
+                            )
+                        }"
+                    } ?: stringResource(R.string.cover_album_none),
+                    onClick = { showAlbumSelect = true }
                 )
 
                 SwitchSettingItem(
@@ -130,16 +148,24 @@ fun CoverConfigScreen(
                 )
             }
 
-            SplicedColumnGroup(title = stringResource(R.string.day)) {
-                val coverCount = CoverConfig.defaultCover.split(",").filter { it.isNotBlank() }.size
-                ClickableSettingItem(
-                    title = stringResource(R.string.default_cover),
-                    description = if (coverCount > 0) "已选择 $coverCount 张图片" else stringResource(
-                        R.string.select_image
+            SplicedColumnGroup(title = stringResource(R.string.network_book_badge_setting)) {
+                DropdownListSettingItem(
+                    title = stringResource(R.string.network_book_badge_setting),
+                    selectedValue = CoverConfig.exploreFilterState.toString(),
+                    displayEntries = arrayOf(
+                        stringResource(R.string.filter_show_all),
+                        stringResource(R.string.filter_hide_in_shelf),
+                        stringResource(R.string.filter_hide_same_name_author),
+                        stringResource(R.string.filter_show_not_in_shelf_only)
                     ),
-                    onClick = { manageKey = PreferKey.defaultCover }
+                    entryValues = arrayOf("0", "1", "2", "3"),
+                    onValueChange = {
+                        CoverConfig.exploreFilterState = it.toInt()
+                    }
                 )
+            }
 
+            SplicedColumnGroup(title = stringResource(R.string.day)) {
                 ClickableSettingItem(
                     title = stringResource(R.string.text_color),
                     option = "#${Integer.toHexString(CoverConfig.coverTextColor).uppercase()}",
@@ -186,17 +212,7 @@ fun CoverConfigScreen(
                 )
             }
 
-                SplicedColumnGroup(title = stringResource(R.string.night)) {
-                val coverCount =
-                    CoverConfig.defaultCoverDark.split(",").filter { it.isNotBlank() }.size
-                ClickableSettingItem(
-                    title = stringResource(R.string.default_cover),
-                    description = if (coverCount > 0) "已选择 $coverCount 张图片" else stringResource(
-                        R.string.select_image
-                    ),
-                    onClick = { manageKey = PreferKey.defaultCoverDark }
-                )
-
+            SplicedColumnGroup(title = stringResource(R.string.night)) {
                 ClickableSettingItem(
                     title = stringResource(R.string.text_color),
                     option = "#${Integer.toHexString(CoverConfig.coverTextColorN).uppercase()}",
@@ -251,12 +267,16 @@ fun CoverConfigScreen(
         onDismissRequest = { showCoverRuleSheet = false }
     )
 
-    manageKey?.let { key ->
-        CoverManageSheet(
+    if (showAlbumSelect) {
+        CoverAlbumSelectSheet(
             show = true,
-            preferenceKey = key,
-            onDismissRequest = { manageKey = null },
-            viewModel = viewModel
+            state = albumState,
+            onSelect = viewModel::selectAlbum,
+            onManage = {
+                showAlbumSelect = false
+                onNavigateToCoverAlbums()
+            },
+            onDismissRequest = { showAlbumSelect = false },
         )
     }
 

@@ -8,7 +8,8 @@ object OtherConfig {
 
     var language by prefDelegate(
         PreferKey.language,
-        "auto"
+        "auto",
+        sync = true
     )
 
     var updateToVariant by prefDelegate(
@@ -61,21 +62,6 @@ object OtherConfig {
         true
     )
 
-    var mediaButtonOnExit by prefDelegate(
-        PreferKey.mediaButtonOnExit,
-        true
-    )
-
-    var readAloudByMediaButton by prefDelegate(
-        PreferKey.readAloudByMediaButton,
-        false
-    )
-
-    var ignoreAudioFocus by prefDelegate(
-        PreferKey.ignoreAudioFocus,
-        false
-    )
-
     var autoClearExpired by prefDelegate(
         PreferKey.autoClearExpired,
         true
@@ -83,11 +69,6 @@ object OtherConfig {
 
     var showAddToShelfAlert by prefDelegate(
         PreferKey.showAddToShelfAlert,
-        true
-    )
-
-    var showMangaUi by prefDelegate(
-        PreferKey.showMangaUi,
         true
     )
 
@@ -102,16 +83,6 @@ object OtherConfig {
         set(value) {
             DownloadCacheConfig.cronetEnable = value
         }
-
-    var sharedElementEnterTransitionEnable by prefDelegate(
-        PreferKey.sharedElementEnterTransitionEnable,
-        false
-    )
-
-    var delayBookLoadEnable by prefDelegate(
-        PreferKey.delayBookLoadEnable,
-        true
-    )
 
     var webServiceWakeLock by prefDelegate(
         PreferKey.webServiceWakeLock,

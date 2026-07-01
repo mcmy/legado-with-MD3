@@ -14,15 +14,16 @@ import android.widget.PopupWindow
 import androidx.appcompat.view.SupportMenuInflater
 import androidx.appcompat.view.menu.MenuBuilder
 import androidx.appcompat.view.menu.MenuItemImpl
+import androidx.core.net.toUri
 import androidx.core.view.isVisible
 import io.legado.app.R
 import io.legado.app.base.adapter.ItemViewHolder
 import io.legado.app.base.adapter.RecyclerAdapter
-import io.legado.app.constant.PreferKey
+import io.legado.app.constant.AppLog
 import io.legado.app.databinding.ItemTextBinding
 import io.legado.app.databinding.PopupActionMenuBinding
-import io.legado.app.help.config.AppConfig
-import io.legado.app.utils.getPrefBoolean
+import io.legado.app.ui.config.readConfig.ReadConfig
+import io.legado.app.utils.dpToPx
 import io.legado.app.utils.gone
 import io.legado.app.utils.isAbsUrl
 import io.legado.app.utils.printOnDebug
@@ -30,11 +31,13 @@ import io.legado.app.utils.sendToClip
 import io.legado.app.utils.share
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.visible
-import androidx.core.net.toUri
-import io.legado.app.constant.AppLog
 
 @SuppressLint("RestrictedApi")
-class TextActionMenu(private val context: Context, private val callBack: CallBack) :
+class TextActionMenu(
+    private val context: Context,
+    private val callBack: CallBack,
+    private val expandTextMenu: () -> Boolean
+) :
     PopupWindow(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT) {
 
     private val binding = PopupActionMenuBinding.inflate(LayoutInflater.from(context))
@@ -42,10 +45,10 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
         setHasStableIds(true)
     }
 
-    private val menuItems: List<MenuItemImpl>
+    private var menuItems: List<MenuItemImpl> = emptyList()
     private val visibleMenuItems = arrayListOf<MenuItemImpl>()
     private val moreMenuItems = arrayListOf<MenuItemImpl>()
-    private val expandTextMenu get() = context.getPrefBoolean(PreferKey.expandTextMenu)
+    private val myMenu = MenuBuilder(context)
 
     init {
         @SuppressLint("InflateParams")
@@ -56,17 +59,11 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
         isFocusable = false
         animationStyle = R.style.TextActionMenuAnimation
 
-        val myMenu = MenuBuilder(context)
-        val otherMenu = MenuBuilder(context)
         SupportMenuInflater(context).inflate(R.menu.content_select_action, myMenu)
-        onInitializeMenu(otherMenu)
-        menuItems = myMenu.visibleItems + otherMenu.visibleItems
-        visibleMenuItems.addAll(menuItems.subList(0, 6))
-        moreMenuItems.addAll(menuItems.subList(6, menuItems.size))
         binding.recyclerView.adapter = adapter
         binding.recyclerViewMore.adapter = adapter
         setOnDismissListener {
-            if (!context.getPrefBoolean(PreferKey.expandTextMenu)) {
+            if (!expandTextMenu()) {
                 binding.ivMenuMore.setImageResource(R.drawable.ic_more_vert)
                 binding.recyclerViewMore.gone()
                 adapter.setItems(visibleMenuItems)
@@ -90,7 +87,19 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
     }
 
     fun upMenu() {
-        if (expandTextMenu) {
+        val otherMenu = MenuBuilder(context)
+        onInitializeMenu(otherMenu)
+        menuItems = myMenu.visibleItems + otherMenu.visibleItems
+        visibleMenuItems.clear()
+        moreMenuItems.clear()
+        if (menuItems.size > 6) {
+            visibleMenuItems.addAll(menuItems.subList(0, 6))
+            moreMenuItems.addAll(menuItems.subList(6, menuItems.size))
+        } else {
+            visibleMenuItems.addAll(menuItems)
+        }
+
+        if (expandTextMenu()) {
             adapter.setItems(menuItems)
             binding.ivMenuMore.gone()
         } else {
@@ -108,7 +117,7 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
         endX: Int,
         endBottomY: Int
     ) {
-        if (expandTextMenu) {
+        if (expandTextMenu()) {
             when {
                 startTopY > 500 -> {
                     showAtLocation(
@@ -171,6 +180,15 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
         ) {
             with(binding) {
                 textView.text = item.title
+                val icon = item.icon
+                if (icon != null && ReadConfig.showSelectMenuIcon) {
+                    val size = 18.dpToPx()
+                    icon.setBounds(0, 0, size, size)
+                    textView.setCompoundDrawables(icon, null, null, null)
+                    textView.compoundDrawablePadding = 6.dpToPx()
+                } else {
+                    textView.setCompoundDrawables(null, null, null, null)
+                }
             }
         }
 
@@ -184,11 +202,11 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
                 callBack.onMenuActionFinally()
             }
             holder.itemView.setOnLongClickListener {
-                if (AppConfig.contentSelectSpeakMod == 0) {
-                    AppConfig.contentSelectSpeakMod = 1
+                if (ReadConfig.contentSelectSpeakMod == 0) {
+                    ReadConfig.contentSelectSpeakMod = 1
                     context.toastOnUi("切换为从选择的地方开始一直朗读")
                 } else {
-                    AppConfig.contentSelectSpeakMod = 0
+                    ReadConfig.contentSelectSpeakMod = 0
                     context.toastOnUi("切换为朗读选择内容")
                 }
                 true
@@ -254,11 +272,23 @@ class TextActionMenu(private val context: Context, private val callBack: CallBac
     private fun onInitializeMenu(menu: Menu) {
         kotlin.runCatching {
             var menuItemOrder = 100
+            val pm = context.packageManager
+            val filterSet = ReadConfig.textSelectMenuFilter.split(",").filter { it.isNotEmpty() }.toSet()
             for (resolveInfo in getSupportedActivities()) {
-                menu.add(
+                val componentName = "${resolveInfo.activityInfo.packageName}/${resolveInfo.activityInfo.name}"
+                if (filterSet.contains(componentName)) {
+                    continue
+                }
+                val menuItem = menu.add(
                     Menu.NONE, Menu.NONE,
-                    menuItemOrder++, resolveInfo.loadLabel(context.packageManager)
-                ).intent = createProcessTextIntentForResolveInfo(resolveInfo)
+                    menuItemOrder++, resolveInfo.loadLabel(pm)
+                )
+                menuItem.intent = createProcessTextIntentForResolveInfo(resolveInfo)
+                if (ReadConfig.showSelectMenuIcon) {
+                    menuItem.icon = kotlin.runCatching {
+                        resolveInfo.loadIcon(pm)
+                    }.getOrNull()
+                }
             }
         }.onFailure {
             context.toastOnUi("获取文字操作菜单出错:${it.localizedMessage}")

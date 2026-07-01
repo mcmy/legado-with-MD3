@@ -88,7 +88,7 @@ fun RowScope.FloatingBottomBarItem(
                 interactionSource = null,
                 indication = null,
                 role = Role.Tab,
-                onClick = onClick
+                onClick = onClick,
             )
             .fillMaxHeight()
             .weight(1f)
@@ -108,6 +108,7 @@ fun FloatingBottomBar(
     modifier: Modifier = Modifier,
     selectedIndex: () -> Int,
     onSelected: (index: Int) -> Unit,
+    onReselected: (index: Int) -> Unit = {},
     backdrop: Backdrop,
     tabsCount: Int,
     isBlurEnabled: Boolean = true,
@@ -115,13 +116,14 @@ fun FloatingBottomBar(
     content: @Composable RowScope.() -> Unit
 ) {
     val isInLightTheme = !LegadoTheme.isDark
-    val accentColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.themeColor != 0) {
-        Color(ThemeConfig.themeColor)
+    val customColors = ThemeConfig.customThemeColors(LegadoTheme.isDark)
+    val accentColor = if (ThemeConfig.isDeepPersonalizationActive && customColors.primary != 0) {
+        Color(customColors.primary)
     } else {
         LegadoTheme.colorScheme.primary
     }
-    val containerColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.secondaryThemeColor != 0) {
-        Color(ThemeConfig.secondaryThemeColor).copy(alpha = if (isBlurEnabled) ThemeConfig.bottomBarBlurAlpha / 100f else 1f)
+    val containerColor = if (ThemeConfig.isDeepPersonalizationActive && customColors.secondary != 0) {
+        Color(customColors.secondary).copy(alpha = if (isBlurEnabled) ThemeConfig.bottomBarBlurAlpha / 100f else 1f)
     } else if (isBlurEnabled) {
         LegadoTheme.colorScheme.surfaceContainer.copy(alpha = ThemeConfig.bottomBarBlurAlpha / 100f)
     } else {
@@ -188,6 +190,8 @@ fun FloatingBottomBar(
                 animateToValue(targetIndex.toFloat())
                 if (targetIndex != selectedIndex()) {
                     onSelected(targetIndex)
+                } else {
+                    onReselected(targetIndex)
                 }
                 animationScope.launch {
                     offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
@@ -259,7 +263,10 @@ fun FloatingBottomBar(
                         if (isBlurEnabled) {
                             vibrancy()
                             blur(ThemeConfig.bottomBarBlurRadius.toFloat().dp.toPx())
-                            lens(ThemeConfig.bottomBarLensRadius.dp.toPx(), ThemeConfig.bottomBarLensRadius.dp.toPx())
+                            lens(
+                                ThemeConfig.bottomBarLensRadius.dp.toPx(),
+                                ThemeConfig.bottomBarLensRadius.dp.toPx()
+                            )
                         }
                     },
                     highlight = {
@@ -316,7 +323,10 @@ fun FloatingBottomBar(
                                 val progress = dampedDragAnimation.pressProgress
                                 vibrancy()
                                 blur(ThemeConfig.bottomBarBlurRadius.toFloat().dp.toPx())
-                                lens(ThemeConfig.bottomBarLensRadius.dp.toPx() * progress, ThemeConfig.bottomBarLensRadius.dp.toPx() * progress)
+                                lens(
+                                    ThemeConfig.bottomBarLensRadius.dp.toPx() * progress,
+                                    ThemeConfig.bottomBarLensRadius.dp.toPx() * progress
+                                )
                             }
                         },
                         highlight = {

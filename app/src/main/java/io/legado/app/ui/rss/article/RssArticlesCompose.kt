@@ -1,7 +1,6 @@
 package io.legado.app.ui.rss.article
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,8 +32,6 @@ import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridS
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,16 +57,15 @@ import io.legado.app.data.entities.RssArticle
 import io.legado.app.data.entities.RssSource
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveContentPadding
-import io.legado.app.ui.widget.components.EmptyMessage
+import io.legado.app.ui.widget.components.AppPullToRefresh
+import io.legado.app.ui.widget.components.LoadMoreFooter
 import io.legado.app.ui.widget.components.card.GlassCard
-import io.legado.app.ui.widget.components.cover.buildCoverImageRequest
+import io.legado.app.ui.widget.components.image.cover.buildCoverImageRequest
 import io.legado.app.utils.toastOnUi
-import io.legado.app.ui.config.themeConfig.ThemeConfig
-import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import org.koin.compose.koinInject
 
 private enum class RssArticleLayout {
@@ -121,29 +117,26 @@ fun RssArticlesPage(
     val articles by articleFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     LaunchedEffect(rssSource?.sourceUrl, sortName, sortUrl) {
-        rssSource?.let { source ->
-            if (isPreload) {
-                viewModel.loadArticles(source)
-            }
-        }
+        rssSource?.let(viewModel::loadArticles)
     }
 
     LaunchedEffect(loadState.errorMessage) {
         loadState.errorMessage?.takeIf { it.isNotBlank() }?.let(context::toastOnUi)
     }
 
-    val refreshState = rememberPullToRefreshState()
     val contentPadding = adaptiveContentPadding(
         top = paddingValues.calculateTopPadding(),
         bottom = 120.dp
     )
 
-    PullToRefreshBox(
+    AppPullToRefresh(
         isRefreshing = loadState.isRefreshing,
         onRefresh = { rssSource?.let(viewModel::loadArticles) },
-        state = refreshState,
-        modifier = modifier.fillMaxSize()
+        modifier = modifier.fillMaxSize(),
+        topPadding = paddingValues.calculateTopPadding()
     ) {
+        val showLoadMoreFooter = !loadState.isRefreshing &&
+            (loadState.isLoadingMore || loadState.errorMessage != null || !loadState.hasMore)
         when (layout) {
             RssArticleLayout.List, RssArticleLayout.LargeCard -> {
                 val listState = rememberLazyListState()
@@ -169,11 +162,16 @@ fun RssArticlesPage(
                             onClick = onRead
                         )
                     }
-                    item {
-                        LoadMoreFooter(
-                            state = loadState,
-                            onRetry = { rssSource?.let(viewModel::loadMore) }
-                        )
+                    if (showLoadMoreFooter) {
+                        item {
+                            LoadMoreFooter(
+                                isLoading = loadState.isLoadingMore,
+                                errorMsg = loadState.errorMessage,
+                                isEnd = !loadState.hasMore,
+                                onRetry = { rssSource?.let(viewModel::loadMore) },
+                                autoLoad = false
+                            )
+                        }
                     }
                 }
             }
@@ -204,11 +202,16 @@ fun RssArticlesPage(
                             onClick = onRead
                         )
                     }
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        LoadMoreFooter(
-                            state = loadState,
-                            onRetry = { rssSource?.let(viewModel::loadMore) }
-                        )
+                    if (showLoadMoreFooter) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            LoadMoreFooter(
+                                isLoading = loadState.isLoadingMore,
+                                errorMsg = loadState.errorMessage,
+                                isEnd = !loadState.hasMore,
+                                onRetry = { rssSource?.let(viewModel::loadMore) },
+                                autoLoad = false
+                            )
+                        }
                     }
                 }
             }
@@ -239,11 +242,16 @@ fun RssArticlesPage(
                             onClick = onRead
                         )
                     }
-                    item(span = StaggeredGridItemSpan.FullLine) {
-                        LoadMoreFooter(
-                            state = loadState,
-                            onRetry = { rssSource?.let(viewModel::loadMore) }
-                        )
+                    if (showLoadMoreFooter) {
+                        item(span = StaggeredGridItemSpan.FullLine) {
+                            LoadMoreFooter(
+                                isLoading = loadState.isLoadingMore,
+                                errorMsg = loadState.errorMessage,
+                                isEnd = !loadState.hasMore,
+                                onRetry = { rssSource?.let(viewModel::loadMore) },
+                                autoLoad = false
+                            )
+                        }
                     }
                 }
             }
@@ -305,35 +313,6 @@ private fun StaggeredLoadMoreDetector(
     }
 }
 
-@Composable
-private fun LoadMoreFooter(
-    state: RssArticlesLoadState,
-    onRetry: () -> Unit
-) {
-    val text = when {
-        state.isLoadingMore -> "加载中..."
-        !state.hasMore -> "没有更多了"
-        state.errorMessage != null -> "加载失败，点击重试"
-        else -> "上拉加载更多"
-    }
-    val contentModifier = if (state.errorMessage != null) {
-        Modifier.clickable(onClick = onRetry)
-    } else {
-        Modifier
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        EmptyMessage(
-            message = text,
-            isLoading = state.isLoadingMore,
-            modifier = contentModifier
-        )
-    }
-}
 
 @Composable
 private fun RssArticleItem(
@@ -399,7 +378,9 @@ private fun RssArticleItem(
             }
 
             RssArticleLayout.LargeCard -> {
-                Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Column(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)) {
                     RssArticleImage(
                         article = article,
                         showPlaceholder = false,
@@ -428,7 +409,9 @@ private fun RssArticleItem(
             }
 
             RssArticleLayout.GridCard -> {
-                Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Column(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)) {
                     RssArticleImage(
                         article = article,
                         showPlaceholder = true,
@@ -457,7 +440,9 @@ private fun RssArticleItem(
             }
 
             RssArticleLayout.Waterfall -> {
-                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Column(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)) {
                     RssArticleImage(
                         article = article,
                         showPlaceholder = false,

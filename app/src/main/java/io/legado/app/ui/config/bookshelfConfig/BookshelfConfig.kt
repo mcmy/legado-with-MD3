@@ -92,6 +92,13 @@ object BookshelfConfig {
     val bookshelfShowTagState: State<Boolean> get() = _bookshelfShowTag.state
 
     /**
+     * 是否显示最新章节
+     */
+    private val _bookshelfShowLatestChapter = prefStateDelegate(PreferKey.bookshelfShowLatestChapter, true)
+    var bookshelfShowLatestChapter by _bookshelfShowLatestChapter
+    val bookshelfShowLatestChapterState: State<Boolean> get() = _bookshelfShowLatestChapter.state
+
+    /**
      * 列表模式下简介显示行数 (0为显示全部)
      */
     private val _bookshelfIntroMaxLines = prefStateDelegate(PreferKey.bookshelfIntroMaxLines, 0)
@@ -262,11 +269,16 @@ object BookshelfConfig {
     /**
      * 书架卡片背景颜色
      */
-    private val _bookshelfCardColor = prefStateDelegate(PreferKey.bookshelfCardColor, 0) {
-        postEvent(EventBus.NOTIFY_MAIN, false)
-    }
+    private val _bookshelfCardColor = prefStateDelegate(PreferKey.bookshelfCardColor, 0)
     var bookshelfCardColor by _bookshelfCardColor
     val bookshelfCardColorState: State<Int> get() = _bookshelfCardColor.state
+
+    /**
+     * 书架卡片背景颜色 (夜间)
+     */
+    private val _bookshelfCardColorDark = prefStateDelegate(PreferKey.bookshelfCardColorDark, 0)
+    var bookshelfCardColorDark by _bookshelfCardColorDark
+    val bookshelfCardColorDarkState: State<Int> get() = _bookshelfCardColorDark.state
 
     /**
      * 文件夹在列表模式下的样式: 0: 默认, 2: 横排封面
@@ -276,11 +288,25 @@ object BookshelfConfig {
     val bookshelfGroupListStyleState: State<Int> get() = _bookshelfGroupListStyle.state
 
     /**
-     * 文件夹在列表模式下横排封面的数量
+     * 书架文件夹在列表模式下横排封面的数量
      */
     private val _bookshelfGroupCoverCount = prefStateDelegate(PreferKey.bookshelfGroupCoverCount, 4)
     var bookshelfGroupCoverCount by _bookshelfGroupCoverCount
     val bookshelfGroupCoverCountState: State<Int> get() = _bookshelfGroupCoverCount.state
+
+    /**
+     * 书架列表模式下封面宽度
+     */
+    private val _bookshelfListCoverWidth = prefStateDelegate(PreferKey.bookshelfListCoverWidth, 84)
+    var bookshelfListCoverWidth by _bookshelfListCoverWidth
+    val bookshelfListCoverWidthState: State<Int> get() = _bookshelfListCoverWidth.state
+
+    /**
+     * 书架网格模式下封面宽度
+     */
+    private val _bookshelfGridCoverWidth = prefStateDelegate(PreferKey.bookshelfGridCoverWidth, 120)
+    var bookshelfGridCoverWidth by _bookshelfGridCoverWidth
+    val bookshelfGridCoverWidthState: State<Int> get() = _bookshelfGridCoverWidth.state
 
     /**
      * 书架搜索按钮是否直接跳转搜索页

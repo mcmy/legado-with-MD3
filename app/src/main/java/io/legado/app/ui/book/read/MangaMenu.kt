@@ -14,19 +14,17 @@ import androidx.core.view.isVisible
 import com.google.android.material.slider.Slider
 import io.legado.app.R
 import io.legado.app.databinding.ViewMangaMenuBinding
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.source.getSourceType
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.model.ReadBook
 import io.legado.app.model.ReadManga
 import io.legado.app.ui.browser.WebViewActivity
-import io.legado.app.utils.ConstraintModify
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.utils.activity
 import io.legado.app.utils.applyNavigationBarPadding
 import io.legado.app.utils.gone
 import io.legado.app.utils.invisible
 import io.legado.app.utils.loadAnimation
-import io.legado.app.utils.modifyBegin
 import io.legado.app.utils.openUrl
 import io.legado.app.utils.startActivity
 import io.legado.app.utils.visible
@@ -114,36 +112,21 @@ class MangaMenu @JvmOverloads constructor(
 //        val brightnessBackground = GradientDrawable()
 //        brightnessBackground.cornerRadius = 5F.dpToPx()
 //        //brightnessBackground.setColor(ColorUtils.adjustAlpha(bgColor, 0.5f))
-//        if (AppConfig.isEInkMode) {
+//        if (ReadConfig.isEInkMode) {
 //            titleBar.setBackgroundResource(R.drawable.bg_eink_border_bottom)
 //            bottomMenu.setBackgroundResource(R.drawable.bg_eink_border_top)
 //        } else {
 //            //bottomMenu.setBackgroundColor(bgColor)
 //        }
-        if (AppConfig.showReadTitleBarAddition) {
+        if (ReadConfig.showReadTitleAddition) {
             titleBarAddition.visible()
         } else {
             titleBarAddition.gone()
         }
-        upBrightnessVwPos()
         /**
          * 确保视图不被导航栏遮挡
          */
         bottomView.applyNavigationBarPadding()
-    }
-
-    private fun upBrightnessVwPos() {
-        if (AppConfig.brightnessVwPos) {
-            binding.root.modifyBegin()
-                .clear(R.id.ll_brightness, ConstraintModify.Anchor.LEFT)
-                .rightToRightOf(R.id.ll_brightness, R.id.vw_menu_root)
-                .commit()
-        } else {
-            binding.root.modifyBegin()
-                .clear(R.id.ll_brightness, ConstraintModify.Anchor.RIGHT)
-                .leftToLeftOf(R.id.ll_brightness, R.id.vw_menu_root)
-                .commit()
-        }
     }
 
     private fun initAnimation() {
@@ -151,7 +134,7 @@ class MangaMenu @JvmOverloads constructor(
         menuTopOut.setAnimationListener(menuOutListener)
     }
 
-    fun runMenuOut(anim: Boolean = !AppConfig.isEInkMode) {
+    fun runMenuOut(anim: Boolean = !ReadConfig.isEInkMode) {
         if (isMenuOutAnimating) {
             return
         }
@@ -166,7 +149,7 @@ class MangaMenu @JvmOverloads constructor(
         }
     }
 
-    fun runMenuIn(anim: Boolean = !AppConfig.isEInkMode) {
+    fun runMenuIn(anim: Boolean = !ReadConfig.isEInkMode) {
         this.visible()
         binding.titleBar.visible()
         binding.bottomMenu.visible()
@@ -198,7 +181,7 @@ class MangaMenu @JvmOverloads constructor(
             callBack.openBookInfoActivity()
         }
         val chapterViewClickListener = OnClickListener {
-            if (AppConfig.readUrlInBrowser) {
+            if (ReadConfig.readUrlInBrowser) {
                 context.openUrl(tvChapterUrl.text.toString().substringBefore(",{"))
             } else {
                 context.startActivity<WebViewActivity> {
@@ -216,10 +199,10 @@ class MangaMenu @JvmOverloads constructor(
             context.alert(R.string.open_fun) {
                 setMessage(R.string.use_browser_open)
                 okButton {
-                    AppConfig.readUrlInBrowser = true
+                    ReadConfig.readUrlInBrowser = true
                 }
                 noButton {
-                    AppConfig.readUrlInBrowser = false
+                    ReadConfig.readUrlInBrowser = false
                 }
             }
             true

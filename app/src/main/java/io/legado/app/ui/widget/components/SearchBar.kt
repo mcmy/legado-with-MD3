@@ -12,16 +12,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.icon.AppIcon
@@ -37,7 +43,7 @@ fun SearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: (String) -> Unit = {},
-    placeholder: String = "搜索...",
+    placeholder: String? = null,
     leadingIcon: @Composable (() -> Unit)? = {
         AppIcon(
             modifier = Modifier.padding(horizontal = 12.dp),
@@ -55,12 +61,14 @@ fun SearchBar(
     val textFieldState = rememberTextFieldState(initialText = query)
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    var hasFocused by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(autoFocus) {
-        if (autoFocus) {
+        if (autoFocus && !hasFocused) {
             focusRequester.requestFocus()
             // 某些情况下需要手动调用 show() 确保键盘弹出
             keyboardController?.show()
+            hasFocused = true
         }
     }
 
@@ -87,6 +95,7 @@ fun SearchBar(
     } else {
         if (isMiuix) MiuixTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow
     }
+    val resolvedPlaceholder = placeholder ?: stringResource(R.string.search_placeholder)
 
     if (isMiuix) {
         AppDenseTextField(
@@ -95,7 +104,7 @@ fun SearchBar(
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
                 .focusRequester(focusRequester),
-            placeholder = { AppText(placeholder) },
+            placeholder = { AppText(resolvedPlaceholder) },
             leadingIcon = leadingIcon,
             trailingIcon = trailingIcon,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -105,7 +114,7 @@ fun SearchBar(
             lineLimits = TextFieldLineLimits.SingleLine,
             backgroundColor = resolvedBackgroundColor,
             miuixUseSearchBarInputField = true,
-            miuixSearchBarLabel = placeholder,
+            miuixSearchBarLabel = resolvedPlaceholder,
             miuixOnSearch = onSearch,
         )
     } else {
@@ -121,7 +130,7 @@ fun SearchBar(
                 modifier = modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester),
-                placeholder = { AppText(placeholder) },
+                placeholder = { AppText(resolvedPlaceholder) },
                 leadingIcon = leadingIcon,
                 trailingIcon = trailingIcon,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),

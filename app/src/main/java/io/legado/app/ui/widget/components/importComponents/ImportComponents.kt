@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
@@ -43,10 +44,11 @@ import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.ConfirmDismissButtonsRow
-import io.legado.app.ui.widget.components.button.SmallIconButton
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
+import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.GSON
@@ -72,6 +74,7 @@ fun SourceInputDialog(
                 AppTextField(
                     value = text,
                     onValueChange = { text = it },
+                    backgroundColor = LegadoTheme.colorScheme.onSheetContent,
                     label = hint,
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 5
@@ -79,7 +82,7 @@ fun SourceInputDialog(
 
                 if (historyValues.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    AppText("历史记录:", style = LegadoTheme.typography.labelSmall)
+                    AppText(stringResource(R.string.history_label), style = LegadoTheme.typography.labelSmall)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(historyValues) { history ->
                             AssistChip(
@@ -118,6 +121,32 @@ fun <T> BatchImportDialog(
     itemTitle: (data: T) -> String,
     itemSubtitle: (data: T) -> String? = { null }
 ) {
+    AppAlertDialog(
+        data = importState as? BaseImportUiState.Loading,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.loading),
+        content = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                AppCircularProgressIndicator()
+            }
+        }
+    )
+
+    AppAlertDialog(
+        data = importState as? BaseImportUiState.Error,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.error),
+        onConfirm = { onDismissRequest() },
+        content = { error ->
+            AppText(error.msg)
+        }
+    )
+
     val show = importState is BaseImportUiState.Success<T>
 
     var cachedState by remember { mutableStateOf<BaseImportUiState.Success<T>?>(null) }
@@ -154,10 +183,10 @@ fun <T> BatchImportDialog(
         title = sheetTitle,
         startAction = if (isEditing) {
             {
-                SmallIconButton(
+                SmallPlainButton(
                     onClick = { editingIndex = null },
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "返回"
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back)
                 )
             }
         } else {
@@ -167,10 +196,10 @@ fun <T> BatchImportDialog(
             {
                 Row {
                     topBarActions()
-                    SmallIconButton(
+                    SmallPlainButton(
                         onClick = { onToggleAll(!allSelected) },
-                        imageVector = Icons.Default.SelectAll,
-                        contentDescription = if (allSelected) "全不选" else "全选"
+                        icon = Icons.Default.SelectAll,
+                        contentDescription = stringResource(if (allSelected) R.string.deselect_all else R.string.select_all)
                     )
                 }
             }
@@ -225,8 +254,8 @@ fun <T> BatchImportDialog(
                 val selectedData = currentState.items.filter { it.isSelected }.map { it.data }
                 onConfirm(selectedData)
             },
-            dismissText = "取消",
-            confirmText = "导入",
+            dismissText = stringResource(R.string.dialog_cancel),
+            confirmText = stringResource(R.string.import_action),
             confirmEnabled = selectedCount > 0
         )
     }
@@ -242,7 +271,7 @@ private fun <T> BatchImportJsonEditContent(
     val jsonObject = remember(version) { data.toImportJsonObject() }
 
     if (jsonObject == null) {
-        AppText("不支持编辑")
+        AppText(stringResource(R.string.edit_not_supported))
         return
     }
 
@@ -327,10 +356,10 @@ fun ImportItemRow(
         trailingAction = {
             AppText(
                 text = when (status) {
-                    ImportStatus.New -> "新增"
-                    ImportStatus.Update -> "更新"
-                    ImportStatus.Existing -> "已有"
-                    ImportStatus.Error -> "错误"
+                    ImportStatus.New -> stringResource(R.string.import_status_new)
+                    ImportStatus.Update -> stringResource(R.string.import_status_update)
+                    ImportStatus.Existing -> stringResource(R.string.import_status_existing)
+                    ImportStatus.Error -> stringResource(R.string.import_status_error)
                 },
                 style = LegadoTheme.typography.labelMedium,
                 color = when (status) {
@@ -342,10 +371,10 @@ fun ImportItemRow(
                 modifier = Modifier.padding(end = 4.dp)
             )
 
-            SmallIconButton(
+            SmallPlainButton(
                 onClick = onInfoClick,
-                imageVector = Icons.Default.Info,
-                contentDescription = "详情"
+                icon = Icons.Default.Info,
+                contentDescription = stringResource(R.string.details)
             )
         }
     )

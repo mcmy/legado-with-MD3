@@ -16,7 +16,11 @@ class SearchActivity : BaseComposeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        dispatchInit(intent)
+        // Only dispatch init on fresh launch, not on config change
+        // (ViewModel is retained by Koin and already has correct state).
+        if (savedInstanceState == null) {
+            dispatchInit(intent)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -25,34 +29,26 @@ class SearchActivity : BaseComposeActivity() {
         dispatchInit(intent)
     }
 
-    override fun onResume() {
-        super.onResume()
-        viewModel.onIntent(SearchIntent.ResumeEngine)
-    }
-
-    override fun onPause() {
-        viewModel.onIntent(SearchIntent.PauseEngine)
-        super.onPause()
-    }
-
     @Composable
     override fun Content() {
         SearchScreen(
             viewModel = viewModel,
             onBack = { finish() },
-            onOpenBookInfo = { name, author, bookUrl ->
+            onOpenBookInfo = { name, author, bookUrl, origin, coverPath, _ ->
                 startActivity(
                     MainActivity.createBookInfoIntent(
                         context = this,
                         name = name,
                         author = author,
-                        bookUrl = bookUrl
+                        bookUrl = bookUrl,
+                        origin = origin,
+                        coverPath = coverPath
                     )
                 )
             },
             onOpenSourceManage = {
                 startActivity<BookSourceActivity>()
-            }
+            },
         )
     }
 
@@ -69,7 +65,9 @@ class SearchActivity : BaseComposeActivity() {
         fun start(context: Context, key: String?, searchScope: String? = null) {
             context.startActivity<SearchActivity> {
                 putExtra("key", key)
-                putExtra("searchScope", searchScope)
+                searchScope?.takeIf { it.isNotBlank() }?.let {
+                    putExtra("searchScope", it)
+                }
             }
         }
     }

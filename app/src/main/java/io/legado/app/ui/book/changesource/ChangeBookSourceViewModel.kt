@@ -19,7 +19,6 @@ import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.book.primaryStr
 import io.legado.app.help.book.releaseHtmlData
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.SourceConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.source.SourceHelp
@@ -38,7 +37,6 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -138,7 +136,7 @@ open class ChangeBookSourceViewModel(application: Application) : BaseViewModel(a
         }
     }.map {
         kotlin.runCatching {
-            val comparator = if (AppConfig.changeSourceLoadWordCount) {
+            val comparator = if (ChangeSourceConfig.loadWordCount) {
                 wordCountComparator
             } else {
                 defaultComparator
@@ -270,13 +268,13 @@ open class ChangeBookSourceViewModel(application: Application) : BaseViewModel(a
     }
 
     private suspend fun search(source: BookSource) {
-        val checkAuthor = AppConfig.changeSourceCheckAuthor
-        val loadInfo = AppConfig.changeSourceLoadInfo
-        val loadToc = AppConfig.changeSourceLoadToc
-        val loadWordCount = AppConfig.changeSourceLoadWordCount
+        val checkAuthor = ChangeSourceConfig.checkAuthor
+        val loadInfo = ChangeSourceConfig.loadInfo
+        val loadToc = ChangeSourceConfig.loadToc
+        val loadWordCount = ChangeSourceConfig.loadWordCount
         val resultBooks = WebBook.searchBookAwait(
             source, name,
-            filter = { fName, fAuthor ->
+            filter = { fName, fAuthor, _ ->
                 fName == name && (!checkAuthor || fAuthor.contains(author))
             })
         resultBooks.forEach { searchBook ->
@@ -296,7 +294,7 @@ open class ChangeBookSourceViewModel(application: Application) : BaseViewModel(a
         if (book.tocUrl.isEmpty()) {
             WebBook.getBookInfoAwait(source, book)
         }
-        if (AppConfig.changeSourceLoadToc || AppConfig.changeSourceLoadWordCount) {
+        if (ChangeSourceConfig.loadToc || ChangeSourceConfig.loadWordCount) {
             loadBookToc(source, book)
         } else {
             //从详情页里获取最新章节
@@ -316,7 +314,7 @@ open class ChangeBookSourceViewModel(application: Application) : BaseViewModel(a
         }
         bookMap[book.primaryStr()] = book
         book.releaseHtmlData()
-        if (AppConfig.changeSourceLoadWordCount) {
+        if (ChangeSourceConfig.loadWordCount) {
             loadBookWordCount(source, book, chapters)
         } else {
             val searchBook = book.toSearchBook()
@@ -411,25 +409,24 @@ open class ChangeBookSourceViewModel(application: Application) : BaseViewModel(a
     }
 
     private fun getDbSearchBooks(): List<SearchBook> {
+        val searchScope = io.legado.app.ui.book.search.SearchScope(
+            ChangeSourceConfig.searchScope
+        )
+        val group = when {
+            searchScope.isAll() || searchScope.isSource() -> ""
+            else -> searchScope.displayNames.firstOrNull() ?: ""
+        }
         return if (screenKey.isEmpty()) {
-            if (AppConfig.changeSourceCheckAuthor) {
-                appDb.searchBookDao.changeSourceByGroup(
-                    name, author, AppConfig.searchGroup
-                )
+            if (ChangeSourceConfig.checkAuthor) {
+                appDb.searchBookDao.changeSourceByGroup(name, author, group)
             } else {
-                appDb.searchBookDao.changeSourceByGroup(
-                    name, "", AppConfig.searchGroup
-                )
+                appDb.searchBookDao.changeSourceByGroup(name, "", group)
             }
         } else {
-            if (AppConfig.changeSourceCheckAuthor) {
-                appDb.searchBookDao.changeSourceSearch(
-                    name, author, screenKey, AppConfig.searchGroup
-                )
+            if (ChangeSourceConfig.checkAuthor) {
+                appDb.searchBookDao.changeSourceSearch(name, author, screenKey, group)
             } else {
-                appDb.searchBookDao.changeSourceSearch(
-                    name, "", screenKey, AppConfig.searchGroup
-                )
+                appDb.searchBookDao.changeSourceSearch(name, "", screenKey, group)
             }
         }
     }

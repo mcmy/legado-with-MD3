@@ -1,7 +1,6 @@
 package io.legado.app.ui.main
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.appcompat.app.AppCompatActivity
@@ -11,6 +10,7 @@ import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -44,43 +43,49 @@ import androidx.compose.material3.WideNavigationRailItem
 import androidx.compose.material3.WideNavigationRailValue
 import androidx.compose.material3.rememberWideNavigationRailState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.testTagsAsResourceId
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.Color
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
 import io.legado.app.R
 import io.legado.app.ui.config.themeConfig.ThemeConfig
 import io.legado.app.ui.main.bookshelf.BookshelfScreen
 import io.legado.app.ui.main.bookshelf.BookshelfViewModel
 import io.legado.app.ui.main.explore.ExploreScreen
+import io.legado.app.ui.main.home.HomeRouteScreen
 import io.legado.app.ui.main.my.MyScreen
 import io.legado.app.ui.main.my.PrefClickEvent
 import io.legado.app.ui.main.rss.RssScreen
-import io.legado.app.ui.theme.regularHazeEffect
-import io.legado.app.ui.widget.components.AppNavigationBar
-import io.legado.app.ui.widget.components.AppNavigationBarItem
+import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.FloatingBottomBar
 import io.legado.app.ui.widget.components.FloatingBottomBarItem
@@ -89,12 +94,16 @@ import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
+import io.legado.app.ui.widget.components.navigation.AppNavigationBar
+import io.legado.app.ui.widget.components.navigation.AppNavigationBarItem
+import io.legado.app.ui.widget.components.pager.rememberPagerFlingPassThroughConnection
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.dialog.TextDialog
 import io.legado.app.utils.sendToClip
 import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.startActivityForBook
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.androidx.compose.koinViewModel
@@ -108,36 +117,44 @@ fun MainScreen(
     viewModel: MainViewModel = koinViewModel(),
     useRail: Boolean,
     onOpenSettings: () -> Unit,
+    onNavigateToChat: () -> Unit,
     onNavigateToSearch: (String?) -> Unit,
     onNavigateToRemoteImport: () -> Unit,
     onNavigateToLocalImport: () -> Unit,
     onNavigateToCache: (Long) -> Unit,
     onNavigateToBookCacheManage: () -> Unit,
-    onNavigateToBookInfo: (name: String, author: String, bookUrl: String) -> Unit,
+    onNavigateToBackupSettings: () -> Unit,
+    onNavigateToBookInfo: (name: String, author: String, bookUrl: String, origin: String?, coverPath: String?, sharedCoverKey: String?) -> Unit,
     onNavigateToExploreShow: (title: String?, sourceUrl: String, exploreUrl: String?) -> Unit,
     onNavigateToRssSort: (sourceUrl: String, sortUrl: String?, key: String?) -> Unit,
     onNavigateToRssRead: (title: String?, origin: String, link: String?, openUrl: String?) -> Unit,
+    onNavigateToRssFavorites: () -> Unit,
+    onNavigateToRuleSub: () -> Unit,
     onNavigateToReadRecord: () -> Unit,
+    onNavigateToReadRecordOverview: () -> Unit,
+    onNavigateToHighlightTagRule: () -> Unit,
+    onNavigateToAbout: () -> Unit,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val mainUiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val defaultHelpTitle = stringResource(R.string.help)
 
     LaunchedEffect(viewModel, context) {
-        viewModel.effects.collect { effect ->
+        viewModel.effects.collectLatest { effect ->
             when (effect) {
                 is MainEffect.OpenUrl -> {
                     context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(effect.url))
+                        Intent(Intent.ACTION_VIEW, effect.url.toUri())
                     )
                 }
 
                 is MainEffect.CopyUrl -> context.sendToClip(effect.url)
                 is MainEffect.ShowMarkdown -> {
-                    val activity = context as? AppCompatActivity ?: return@collect
-                    val title = effect.title.ifBlank { context.getString(R.string.help) }
+                    val activity = context as? AppCompatActivity ?: return@collectLatest
+                    val title = effect.title.ifBlank { defaultHelpTitle }
                     val mdText = withContext(Dispatchers.IO) {
                         context.assets
                             .open("web/help/md/${effect.path}.md")
@@ -155,13 +172,16 @@ fun MainScreen(
 
                 MainEffect.ExitApp -> (context as? ComponentActivity)?.finish()
                 MainEffect.NavigateToReadRecord -> onNavigateToReadRecord()
+                MainEffect.NavigateToHighlightTagRule -> onNavigateToHighlightTagRule()
+                MainEffect.NavigateToAbout -> onNavigateToAbout()
             }
         }
     }
 
     val hazeState = remember { HazeState() }
-    val floatingBarSurfaceColor = if (ThemeConfig.enableDeepPersonalization && ThemeConfig.secondaryThemeColor != 0) {
-        Color(ThemeConfig.secondaryThemeColor)
+    val customSecondaryColor = ThemeConfig.customThemeColors(LegadoTheme.isDark).secondary
+    val floatingBarSurfaceColor = if (ThemeConfig.isDeepPersonalizationActive && customSecondaryColor != 0) {
+        Color(customSecondaryColor)
     } else {
         MaterialTheme.colorScheme.surface
     }
@@ -172,10 +192,36 @@ fun MainScreen(
     val destinations = mainUiState.destinations
 
     val initialPage = remember(destinations, mainUiState.defaultHomePage) {
-        val index = destinations.indexOfFirst { it.route == mainUiState.defaultHomePage }
+        val index = destinations.indexOfFirst {
+            it.route == mainUiState.defaultHomePage
+        }
         if (index != -1) index else 0
     }
     val pagerState = rememberPagerState(initialPage = initialPage) { destinations.size }
+    val pagerNestedScrollConnection = rememberPagerFlingPassThroughConnection(
+        state = pagerState,
+        orientation = Orientation.Horizontal,
+    )
+    var bookshelfScrollToTopRequest by remember { mutableLongStateOf(0L) }
+    var isBookshelfAtTop by remember { mutableStateOf(true) }
+    fun requestBookshelfScrollToTop() {
+        bookshelfScrollToTopRequest++
+    }
+
+    fun handleMainDestinationClick(index: Int, destination: MainDestination) {
+        if (
+            destination == MainDestination.Bookshelf &&
+            pagerState.currentPage == index &&
+            pagerState.targetPage == index &&
+            !isBookshelfAtTop
+        ) {
+            requestBookshelfScrollToTop()
+            return
+        }
+        coroutineScope.launch {
+            pagerState.animateScrollToPage(index)
+        }
+    }
     LaunchedEffect(destinations) {
         if (destinations.isNotEmpty() && pagerState.currentPage !in destinations.indices) {
             pagerState.scrollToPage(destinations.lastIndex)
@@ -232,7 +278,7 @@ fun MainScreen(
                             modifier = Modifier.padding(start = 20.dp),
                             onClick = { onNavigateToSearch(null) },
                             expanded = expanded,
-                            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            icon = { AppIcon(Icons.Default.Search, contentDescription = null) },
                             text = { AppText(stringResource(R.string.search)) }
                         )
                     }
@@ -250,9 +296,7 @@ fun MainScreen(
                         railExpanded = navState.targetValue == WideNavigationRailValue.Expanded,
                         selected = selected,
                         onClick = {
-                            coroutineScope.launch {
-                                pagerState.animateScrollToPage(index)
-                            }
+                            handleMainDestinationClick(index, destination)
                         },
                         icon = {
                             Box {
@@ -261,10 +305,10 @@ fun MainScreen(
                                     selected = selected,
                                     modifier = if (destination == MainDestination.Bookshelf) {
                                         Modifier.combinedClickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
                                             onClick = {
-                                                coroutineScope.launch {
-                                                    pagerState.animateScrollToPage(index)
-                                                }
+                                                handleMainDestinationClick(index, destination)
                                             },
                                             onLongClick = {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -288,12 +332,7 @@ fun MainScreen(
                             }
                         },
                         label = if (labelVisibilityMode != "unlabeled") {
-                            val hasCustomIcon = when (destination) {
-                                MainDestination.Bookshelf -> ThemeConfig.navIconBookshelf.isNotEmpty()
-                                MainDestination.Explore -> ThemeConfig.navIconExplore.isNotEmpty()
-                                MainDestination.Rss -> ThemeConfig.navIconRss.isNotEmpty()
-                                MainDestination.My -> ThemeConfig.navIconMy.isNotEmpty()
-                            }
+                            val hasCustomIcon = destination.customIconPath.isNotEmpty()
                             if (hasCustomIcon) null else {{ AppText(stringResource(destination.labelId)) }}
                         } else null
                     )
@@ -305,22 +344,20 @@ fun MainScreen(
             modifier = Modifier.weight(1f),
             bottomBar = {
                 if (!useRail && mainUiState.showBottomView && !useFloatingBottomBar) {
-                    AppNavigationBar() {
+                    AppNavigationBar(
+                        showLabel = showLabel,
+                        alwaysShowLabel = alwaysShowLabel
+                    ) {
                         destinations.forEachIndexed { index, destination ->
                             val selected = pagerState.targetPage == index
-                            val customIconPath = when (destination) {
-                                MainDestination.Bookshelf -> ThemeConfig.navIconBookshelf
-                                MainDestination.Explore -> ThemeConfig.navIconExplore
-                                MainDestination.Rss -> ThemeConfig.navIconRss
-                                MainDestination.My -> ThemeConfig.navIconMy
-                            }
+                            val customIconPath = destination.customIconPath
                             AppNavigationBarItem(
                                 modifier = Modifier.semantics(mergeDescendants = true) {
                                     contentDescription = "nav_${destination.route}"
                                 },
                                 selected = selected,
                                 onClick = {
-                                    coroutineScope.launch { pagerState.animateScrollToPage(index) }
+                                    handleMainDestinationClick(index, destination)
                                 },
                                 labelString = stringResource(destination.labelId),
                                 iconVector = AppIcons.mainDestination(destination, selected),
@@ -335,7 +372,7 @@ fun MainScreen(
                                     blurAlpha = GlassDefaults.ThickBlurAlpha
                                 ),
                                 m3ShowLabel = showLabel && !customIconPath.isNotEmpty(),
-                                m3AlwaysShowLabel = alwaysShowLabel && !customIconPath.isNotEmpty(),
+                                m3AlwaysShowLabel = alwaysShowLabel,
                                 useCustomIcon = customIconPath.isNotEmpty()
                             )
                         }
@@ -360,6 +397,7 @@ fun MainScreen(
                 ) {
                     HorizontalPager(
                         state = pagerState,
+                        pageNestedScrollConnection = pagerNestedScrollConnection,
                         modifier = Modifier
                             .fillMaxSize()
                             .then(
@@ -368,16 +406,53 @@ fun MainScreen(
                                 }
                             ),
                         userScrollEnabled = true,
-                        beyondViewportPageCount = 1
+                        beyondViewportPageCount = 4
                     ) { page ->
                         val destination = destinations.getOrNull(page) ?: return@HorizontalPager
-                        when (destination) {
+                        val pageLifecycleOwner = rememberMainPageLifecycleOwner(
+                            isActive = page == pagerState.currentPage
+                        )
+                        CompositionLocalProvider(LocalLifecycleOwner provides pageLifecycleOwner) {
+                            when (destination) {
+                            MainDestination.Home -> HomeRouteScreen(
+                                onOpenBook = { book ->
+                                    context.startActivityForBook(book)
+                                },
+                                onNavigateToBookInfo = { name, author, bookUrl, origin, coverPath, sharedCoverKey ->
+                                    onNavigateToBookInfo(
+                                        name ?: "",
+                                        author ?: "",
+                                        bookUrl,
+                                        origin,
+                                        coverPath,
+                                        sharedCoverKey,
+                                    )
+                                },
+                                onOpenExploreShow = onNavigateToExploreShow,
+                                onOpenBackupSettings = onNavigateToBackupSettings,
+                                onNavigateToReadRecord = onNavigateToReadRecord,
+                                onNavigateToReadRecordOverview = onNavigateToReadRecordOverview,
+                                sharedTransitionScope = sharedTransitionScope,
+                                animatedVisibilityScope = animatedVisibilityScope,
+                            )
+
                             MainDestination.Bookshelf -> BookshelfScreen(
+                                scrollToTopRequest = bookshelfScrollToTopRequest,
+                                onScrollStateChanged = { isAtTop ->
+                                    isBookshelfAtTop = isAtTop
+                                },
                                 onBookClick = { book ->
                                     context.startActivityForBook(book)
                                 },
-                                onBookLongClick = { book ->
-                                    onNavigateToBookInfo(book.name, book.author, book.bookUrl)
+                                onBookLongClick = { book, sharedCoverKey ->
+                                    onNavigateToBookInfo(
+                                        book.name,
+                                        book.author,
+                                        book.bookUrl,
+                                        book.origin,
+                                        book.getDisplayCover(),
+                                        sharedCoverKey
+                                    )
                                 },
                                 onNavigateToSearch = { query -> onNavigateToSearch(query) },
                                 onNavigateToRemoteImport = onNavigateToRemoteImport,
@@ -388,7 +463,7 @@ fun MainScreen(
                             )
 
                             MainDestination.Explore -> ExploreScreen(
-                                onOpenExploreShow = onNavigateToExploreShow
+                                onOpenExploreShow = onNavigateToExploreShow,
                             )
                             MainDestination.Rss -> RssScreen(
                                 onOpenSort = { sourceUrl, sortUrl, key ->
@@ -396,10 +471,13 @@ fun MainScreen(
                                 },
                                 onOpenRead = { title, origin, link, openUrl ->
                                     onNavigateToRssRead(title, origin, link, openUrl)
-                                }
+                                },
+                                onOpenFavorites = onNavigateToRssFavorites,
+                                onOpenRuleSub = onNavigateToRuleSub
                             )
                             MainDestination.My -> MyScreen(
                                 onOpenSettings = onOpenSettings,
+                                onNavigateToChat = onNavigateToChat,
                                 onNavigate = { event ->
                                     when (event) {
                                         PrefClickEvent.OpenBookCacheManage -> onNavigateToBookCacheManage()
@@ -408,6 +486,7 @@ fun MainScreen(
                                     }
                                 }
                             )
+                        }
                         }
                     }
                 }
@@ -434,35 +513,28 @@ fun MainScreen(
                                 ),
                             selectedIndex = { pagerState.targetPage },
                             onSelected = { index ->
-                                coroutineScope.launch {
-                                    pagerState.animateScrollToPage(index)
+                                destinations.getOrNull(index)?.let { destination ->
+                                    handleMainDestinationClick(index, destination)
+                                }
+                            },
+                            onReselected = { index ->
+                                destinations.getOrNull(index)?.let { destination ->
+                                    handleMainDestinationClick(index, destination)
                                 }
                             },
                             backdrop = floatingBarBackdrop,
                             tabsCount = destinations.size,
                             isBlurEnabled = useLiquidGlass,
                             hasCustomIcons = destinations.any { dest ->
-                                when (dest) {
-                                    MainDestination.Bookshelf -> ThemeConfig.navIconBookshelf.isNotEmpty()
-                                    MainDestination.Explore -> ThemeConfig.navIconExplore.isNotEmpty()
-                                    MainDestination.Rss -> ThemeConfig.navIconRss.isNotEmpty()
-                                    MainDestination.My -> ThemeConfig.navIconMy.isNotEmpty()
-                                }
+                                dest.customIconPath.isNotEmpty()
                             }
                         ) {
                             destinations.forEachIndexed { index, destination ->
                                 val selected = pagerState.targetPage == index
-                                val hasCustomIcon = when (destination) {
-                                    MainDestination.Bookshelf -> ThemeConfig.navIconBookshelf.isNotEmpty()
-                                    MainDestination.Explore -> ThemeConfig.navIconExplore.isNotEmpty()
-                                    MainDestination.Rss -> ThemeConfig.navIconRss.isNotEmpty()
-                                    MainDestination.My -> ThemeConfig.navIconMy.isNotEmpty()
-                                }
+                                val hasCustomIcon = destination.customIconPath.isNotEmpty()
                                 FloatingBottomBarItem(
                                     onClick = {
-                                        coroutineScope.launch {
-                                            pagerState.animateScrollToPage(index)
-                                        }
+                                        handleMainDestinationClick(index, destination)
                                     },
                                     modifier = Modifier
                                         .defaultMinSize(minWidth = 76.dp)
@@ -489,6 +561,52 @@ fun MainScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun rememberMainPageLifecycleOwner(isActive: Boolean): LifecycleOwner {
+    val parentLifecycle = LocalLifecycleOwner.current.lifecycle
+    val currentActive by rememberUpdatedState(isActive)
+    val owner = remember(parentLifecycle) { MainPageLifecycleOwner() }
+
+    DisposableEffect(parentLifecycle) {
+        val observer = LifecycleEventObserver { _, _ ->
+            owner.update(parentLifecycle.currentState, currentActive)
+        }
+        parentLifecycle.addObserver(observer)
+        owner.update(parentLifecycle.currentState, currentActive)
+        onDispose {
+            parentLifecycle.removeObserver(observer)
+            owner.destroy()
+        }
+    }
+
+    LaunchedEffect(isActive, parentLifecycle) {
+        owner.update(parentLifecycle.currentState, isActive)
+    }
+
+    return owner
+}
+
+private class MainPageLifecycleOwner : LifecycleOwner {
+
+    private val registry = LifecycleRegistry(this)
+
+    override val lifecycle: Lifecycle = registry
+
+    fun update(parentState: Lifecycle.State, isActive: Boolean) {
+        registry.currentState = when {
+            parentState == Lifecycle.State.DESTROYED -> Lifecycle.State.DESTROYED
+            parentState == Lifecycle.State.INITIALIZED -> Lifecycle.State.INITIALIZED
+            parentState == Lifecycle.State.CREATED -> Lifecycle.State.CREATED
+            isActive -> parentState
+            else -> Lifecycle.State.STARTED
+        }
+    }
+
+    fun destroy() {
+        registry.currentState = Lifecycle.State.DESTROYED
     }
 }
 
@@ -536,31 +654,13 @@ private fun NavigationIcon(
     selected: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val customIconPath = when (destination) {
-        MainDestination.Bookshelf -> ThemeConfig.navIconBookshelf
-        MainDestination.Explore -> ThemeConfig.navIconExplore
-        MainDestination.Rss -> ThemeConfig.navIconRss
-        MainDestination.My -> ThemeConfig.navIconMy
-    }
+    val customIconPath = destination.customIconPath
     if (customIconPath.isNotEmpty()) {
-        val context = LocalContext.current
-        val bitmap = remember(customIconPath) {
-            kotlin.runCatching {
-                android.graphics.BitmapFactory.decodeFile(customIconPath)
-            }.getOrNull()
-        }
-        if (bitmap != null) {
-            Image(
-                painter = remember(bitmap) {
-                    BitmapPainter(bitmap.asImageBitmap())
-                },
-                contentDescription = null,
-                modifier = modifier.size(40.dp)
-            )
-        } else {
-            val icon = AppIcons.mainDestination(destination, selected)
-            AppIcon(icon, contentDescription = null, modifier = modifier)
-        }
+        AsyncImage(
+            model = customIconPath,
+            contentDescription = null,
+            modifier = modifier.size(40.dp)
+        )
     } else {
         val icon = AppIcons.mainDestination(destination, selected)
         AppIcon(icon, contentDescription = null, modifier = modifier)

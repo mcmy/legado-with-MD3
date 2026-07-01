@@ -34,7 +34,7 @@ import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.book.BookHelp
-import io.legado.app.help.config.AppConfig
+import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.InputStreamDataSource
 import io.legado.app.help.http.okHttpClient
@@ -42,12 +42,15 @@ import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.ui.book.read.page.entities.TextChapter
+import io.legado.app.ui.book.read.page.provider.ChapterProvider
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.MD5Utils
 import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.servicePendingIntent
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.Main
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -97,7 +100,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     private val loadErrorHandlingPolicy by lazy {
         CustomLoadErrorHandlingPolicy()
     }
-    private var speechRate: Int = AppConfig.speechRatePlay + 5
+    private var speechRate: Int = ReadConfig.speechRatePlay + 5
     private var downloadTask: Coroutine<*>? = null
     private var playIndexJob: Job? = null
     private var downloadErrorNo: Int = 0
@@ -128,7 +131,7 @@ class HttpReadAloudService : BaseReadAloudService(),
             ReadBook.readAloud()
         } else {
             super.play()
-            if (AppConfig.streamReadAloudAudio) {
+            if (ReadConfig.streamReadAloudAudio) {
                 downloadAndPlayAudiosStream()
             } else {
                 downloadAndPlayAudios()
@@ -201,15 +204,44 @@ class HttpReadAloudService : BaseReadAloudService(),
         }
     }
 
-    // 辅助方法：确保能读到文件
-    private fun getChapterContent(book: Book, chapter: BookChapter): String? {
-        return BookHelp.getContent(book, chapter)
+    private suspend fun getPreDownloadChapter(
+        book: Book,
+        chapter: BookChapter,
+    ): Pair<TextChapter, List<String>>? {
+        val content = BookHelp.getContent(book, chapter) ?: return null
+        val contentProcessor = ContentProcessor.get(book.name, book.origin)
+        val displayTitle = chapter.getDisplayTitle(
+            contentProcessor.getTitleReplaceRules(),
+            book.getUseReplaceRule(),
+        )
+        val processedContent = contentProcessor.getContent(
+            book,
+            chapter,
+            content,
+            includeTitle = false,
+        )
+        val textChapter = ChapterProvider.getTextChapterAsync(
+            CoroutineScope(currentCoroutineContext()),
+            book,
+            chapter,
+            displayTitle,
+            processedContent,
+            ReadBook.simulatedChapterSize,
+        )
+        for (ignored in textChapter.layoutChannel) {
+            currentCoroutineContext().ensureActive()
+        }
+        val contentList = textChapter
+            .getNeedReadAloud(0, ReadConfig.readAloudByPage, 0)
+            .split("\n")
+            .filter { it.isNotEmpty() }
+        return textChapter to contentList
     }
 
     private suspend fun preDownloadAudios(httpTts: HttpTTS) {
         val book = ReadBook.book ?: return
         val currentIdx = ReadBook.durChapterIndex
-        val limit = AppConfig.audioPreDownloadNum
+        val limit = ReadConfig.audioPreDownloadNum
         
         try {
             for (i in 1..limit) {
@@ -218,25 +250,18 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val targetIndex = currentIdx + i
                 val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, targetIndex) ?: break
                 
-                // 1. 获取内容
-                val contentString = getChapterContent(book, chapter)
-                if (contentString.isNullOrEmpty()) continue // 内容没下载，跳过
-
-                val contentList = contentString.split("\n").filter { it.isNotEmpty() }
+                val (textChapter, contentList) =
+                    getPreDownloadChapter(book, chapter) ?: continue
 
                 contentList.forEach { content ->
                     currentCoroutineContext().ensureActive()
                     
-                    // 2. 生成文件名：必须用 chapter.title (数据库原始标题)
-                    val titleMd5 = MD5Utils.md5Encode16(chapter.title)
-                    val contentMd5 = MD5Utils.md5Encode16("${ReadAloud.httpTTS?.url}-|-$speechRate-|-$content")
-                    val fileName = "${titleMd5}_${contentMd5}"
+                    val fileName = md5SpeakFileName(content, textChapter)
                     
                     val speakText = content.replace(AppPattern.notReadAloudRegex, "")
                     if (speakText.isEmpty()) {
                         createSilentSound(fileName)
                     } else if (!hasSpeakFile(fileName)) {
-                        // 3. 文件不存在才下载
                         runCatching {
                             val inputStream = getSpeakStream(httpTts, speakText)
                             if (inputStream != null) {
@@ -299,7 +324,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     ) {
         val book = ReadBook.book ?: return
         val currentIdx = ReadBook.durChapterIndex
-        val limit = AppConfig.audioPreDownloadNum
+        val limit = ReadConfig.audioPreDownloadNum
         
         try {
             for (i in 1..limit) {
@@ -307,17 +332,12 @@ class HttpReadAloudService : BaseReadAloudService(),
                 val targetIndex = currentIdx + i
                 val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, targetIndex) ?: break
                 
-                val contentString = getChapterContent(book, chapter)
-                if (contentString.isNullOrEmpty()) continue
-
-                val contentList = contentString.split("\n").filter { it.isNotEmpty() }
+                val (textChapter, contentList) =
+                    getPreDownloadChapter(book, chapter) ?: continue
                 
                 contentList.forEach { content ->
                     currentCoroutineContext().ensureActive()
-                    // 同样使用数据库标题，保持一致
-                    val titleMd5 = MD5Utils.md5Encode16(chapter.title)
-                    val contentMd5 = MD5Utils.md5Encode16("${ReadAloud.httpTTS?.url}-|-$speechRate-|-$content")
-                    val fileName = "${titleMd5}_${contentMd5}"
+                    val fileName = md5SpeakFileName(content, textChapter)
                     
                     val speakText = content.replace(AppPattern.notReadAloudRegex, "")
                     val dataSourceFactory = createDataSourceFactory(httpTts, speakText)
@@ -490,7 +510,7 @@ class HttpReadAloudService : BaseReadAloudService(),
      * 如果时间设置为0，则不再保护当前章节，退出即全删。
      */
     private fun removeCacheFile() {
-        val keepTime = AppConfig.audioCacheCleanTime
+        val keepTime = ReadConfig.audioCacheCleanTime
         // 只有当时间大于0时，才需要保护当前章节。如果为0，说明用户想彻底不留缓存。
         val protectCurrentChapter = keepTime > 0
         val titleMd5 = if (protectCurrentChapter) MD5Utils.md5Encode16(this.textChapter?.chapter?.title ?: "") else ""
@@ -571,8 +591,8 @@ class HttpReadAloudService : BaseReadAloudService(),
     override fun upSpeechRate(reset: Boolean) {
         downloadTask?.cancel()
         exoPlayer.stop()
-        speechRate = AppConfig.speechRatePlay + 5
-        if (AppConfig.streamReadAloudAudio) {
+        speechRate = ReadConfig.speechRatePlay + 5
+        if (ReadConfig.streamReadAloudAudio) {
             downloadAndPlayAudiosStream()
         } else {
             downloadAndPlayAudios()
@@ -650,7 +670,7 @@ class HttpReadAloudService : BaseReadAloudService(),
     }
 
     private fun deleteCurrentSpeakFile() {
-        if (AppConfig.streamReadAloudAudio) {
+        if (ReadConfig.streamReadAloudAudio) {
             return
         }
         val mediaItem = exoPlayer.currentMediaItem ?: return

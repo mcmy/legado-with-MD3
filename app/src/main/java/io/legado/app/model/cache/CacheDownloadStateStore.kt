@@ -40,6 +40,7 @@ class CacheDownloadStateStore {
                 failedIndices = current.failedIndices - chapterIndex,
                 successCount = current.successCount + 1,
                 failureMessage = null,
+                chapterProgress = current.chapterProgress - chapterIndex,
             )
         }
     }
@@ -50,7 +51,24 @@ class CacheDownloadStateStore {
                 runningIndices = current.runningIndices - chapterIndex,
                 pausedIndices = current.pausedIndices - chapterIndex,
                 failedIndices = current.failedIndices + chapterIndex,
+                chapterProgress = current.chapterProgress - chapterIndex,
             )
+        }
+    }
+
+    fun updateChapterProgress(
+        bookUrl: String,
+        chapterIndex: Int,
+        progress: CacheChapterProgress,
+    ) {
+        updateBook(bookUrl) { current ->
+            current.copy(chapterProgress = current.chapterProgress + (chapterIndex to progress))
+        }
+    }
+
+    fun clearChapterProgress(bookUrl: String, chapterIndex: Int) {
+        updateBook(bookUrl) { current ->
+            current.copy(chapterProgress = current.chapterProgress - chapterIndex)
         }
     }
 
@@ -90,6 +108,7 @@ class CacheDownloadStateStore {
                         waitingCount = 0,
                         runningIndices = emptySet(),
                         successCount = 0,
+                        chapterProgress = emptyMap(),
                     )
                 }
                 .filterValues { bookState ->
@@ -116,12 +135,21 @@ class CacheDownloadStateStore {
     }
 
     private fun CacheDownloadState.recalculate(): CacheDownloadState {
-        val totalWaiting = books.values.sumOf { it.waitingCount }
-        val totalRunning = books.values.sumOf { it.runningIndices.size }
-        val totalPaused = books.values.sumOf { it.pausedIndices.size }
-        val totalFailure = books.values.sumOf { it.failedIndices.size } +
-                books.values.count { it.failureMessage != null }
-        val totalSuccess = books.values.sumOf { it.successCount }
+        var totalWaiting = 0
+        var totalRunning = 0
+        var totalPaused = 0
+        var totalFailure = 0
+        var totalSuccess = 0
+
+        books.values.forEach { bookState ->
+            totalWaiting += bookState.waitingCount
+            totalRunning += bookState.runningIndices.size
+            totalPaused += bookState.pausedIndices.size
+            totalFailure += bookState.failedIndices.size
+            if (bookState.failureMessage != null) totalFailure++
+            totalSuccess += bookState.successCount
+        }
+
         return copy(
             isRunning = totalWaiting > totalPaused || totalRunning > 0,
             totalWaiting = totalWaiting,

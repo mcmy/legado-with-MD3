@@ -74,7 +74,8 @@ fun ColorScheme.toLegadoColorScheme(
         onTertiaryFixedVariant = onTertiaryFixedVariant,
         cardContainer = primaryContainer.copy(alpha = 0.5f),
         onCardContainer = primary,
-        onSheetContent = surface
+        onSheetContent = surface,
+        cardPrimaryContainer = primaryContainer
     )
 }
 
@@ -91,24 +92,17 @@ fun ColorScheme.toLegadoColorScheme(): LegadoColorScheme {
 fun ProvideColorSchemeOverride(
     colorScheme: ColorScheme,
     seedColor: Color = colorScheme.primary,
+    overrideIsDark: Boolean? = null,
     content: @Composable () -> Unit,
 ) {
-    val themeAnimationSpec = tween<Color>(
-        durationMillis = 700,
-        easing = FastOutSlowInEasing
-    )
     val baseThemeMode = LocalLegadoThemeColors.current
-    val animatedColorScheme = colorScheme.animateColorSchemeAsState(themeAnimationSpec)
-    val animatedSeedColor = animateColorAsState(
-        targetValue = seedColor,
-        animationSpec = themeAnimationSpec,
-        label = "theme_seed_animation"
-    ).value
-    val legadoColorScheme = remember(animatedColorScheme) { animatedColorScheme.toLegadoColorScheme() }
-    val overrideThemeMode = remember(baseThemeMode, animatedColorScheme, animatedSeedColor) {
+    val legadoColorScheme = remember(colorScheme) { colorScheme.toLegadoColorScheme() }
+    val resolvedIsDark = overrideIsDark ?: baseThemeMode.isDark
+    val overrideThemeMode = remember(baseThemeMode, colorScheme, seedColor, resolvedIsDark) {
         baseThemeMode.copy(
-            colorScheme = animatedColorScheme,
-            seedColor = animatedSeedColor,
+            colorScheme = colorScheme,
+            seedColor = seedColor,
+            isDark = resolvedIsDark,
         )
     }
     val materialTypography = MaterialTheme.typography
@@ -127,7 +121,7 @@ fun ProvideColorSchemeOverride(
         isMiuixEngine,
         miuixColorSchemeMode,
         overrideThemeMode.isDark,
-        animatedSeedColor,
+        seedColor,
         miuixPaletteStyle,
         miuixColorSpec
     ) {
@@ -136,7 +130,7 @@ fun ProvideColorSchemeOverride(
         } else {
             ThemeController(
                 colorSchemeMode = miuixColorSchemeMode,
-                keyColor = animatedSeedColor,
+                keyColor = seedColor,
                 paletteStyle = miuixPaletteStyle,
                 colorSpec = miuixColorSpec,
                 isDark = overrideThemeMode.isDark
@@ -151,7 +145,7 @@ fun ProvideColorSchemeOverride(
         if (miuixController != null) {
             MiuixTheme(controller = miuixController) {
                 MaterialTheme(
-                    colorScheme = animatedColorScheme,
+                    colorScheme = colorScheme,
                     typography = materialTypography,
                     shapes = materialShapes
                 ) {
@@ -160,7 +154,7 @@ fun ProvideColorSchemeOverride(
             }
         } else {
             MaterialTheme(
-                colorScheme = animatedColorScheme,
+                colorScheme = colorScheme,
                 typography = materialTypography,
                 shapes = materialShapes
             ) {

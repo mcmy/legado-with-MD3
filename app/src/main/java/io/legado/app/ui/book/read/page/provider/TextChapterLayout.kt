@@ -22,10 +22,11 @@ import io.legado.app.constant.PageAnim
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.data.entities.HighlightRule
+import io.legado.app.data.repository.HighlightRuleRepository
 import io.legado.app.help.book.BookContent
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.getBookSource
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.model.ImageProvider
@@ -43,6 +44,7 @@ import io.legado.app.ui.book.read.page.provider.ChapterProvider.reviewChar
 import io.legado.app.ui.book.read.page.provider.ChapterProvider.srcReplaceChar
 import io.legado.app.ui.book.read.page.provider.ChapterProvider.srcReplaceCharC
 import io.legado.app.ui.book.read.page.provider.ChapterProvider.srcReplaceCharD
+import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.utils.GSON
 import io.legado.app.utils.StringUtils
 import io.legado.app.utils.dpToPx
@@ -58,6 +60,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import org.koin.core.context.GlobalContext
 import java.util.LinkedList
 import kotlin.math.roundToInt
 
@@ -70,12 +73,39 @@ class TextChapterLayout(
 ) {
 
     companion object {
-        private val regexCache = mutableMapOf<String, Regex>()
+        @Volatile
+        private var cachedHighlightRules: List<CompiledHighlightRule>? = null
+
+        @Volatile
+        private var cachedHighlightRulesConfigName: String? = null
 
         fun invalidateRegexCache() {
-            regexCache.clear()
+            cachedHighlightRules = null
+            cachedHighlightRulesConfigName = null
         }
     }
+
+    private val compiledHighlightRules: List<CompiledHighlightRule>
+        get() {
+            val configName = ReadBookConfig.durConfig.name
+            cachedHighlightRules?.takeIf {
+                cachedHighlightRulesConfigName == configName
+            }?.let { return it }
+            return highlightRuleRepository.loadEnabled(configName).mapNotNull { rule ->
+                runCatching {
+                    CompiledHighlightRule(
+                        rule = rule,
+                        regex = Regex(rule.pattern)
+                    )
+                }.getOrNull()
+            }.also {
+                cachedHighlightRulesConfigName = configName
+                cachedHighlightRules = it
+            }
+        }
+
+    private val highlightRuleRepository: HighlightRuleRepository
+        get() = GlobalContext.get().get()
 
     @Volatile
     private var listener: LayoutProgressListener? = textChapter
@@ -98,8 +128,8 @@ class TextChapterLayout(
     private val lineSpacingExtra = ChapterProvider.lineSpacingExtra
     private val paragraphSpacing = ChapterProvider.paragraphSpacing
 
-    private val visibleHeight = ChapterProvider.visibleHeight
-    private val visibleWidth = ChapterProvider.visibleWidth
+    internal val visibleHeight = ChapterProvider.visibleHeight
+    internal val visibleWidth = ChapterProvider.visibleWidth
 
     private val viewWidth = ChapterProvider.viewWidth
     private val doublePage = ChapterProvider.doublePage
@@ -111,7 +141,7 @@ class TextChapterLayout(
     private val useZhLayout = ReadBookConfig.useZhLayout
     private val isMiddleTitle = ReadBookConfig.isMiddleTitle
     private val textFullJustify = ReadBookConfig.textFullJustify
-    private val adaptSpecialStyle = AppConfig.adaptSpecialStyle
+    private val adaptSpecialStyle = ReadConfig.adaptSpecialStyle
     private val pageAnim = book.getPageAnim()
     private val titleSegType = ReadBookConfig.titleSegType
     private val titleSegDistance = ReadBookConfig.titleSegDistance
@@ -241,8 +271,8 @@ class TextChapterLayout(
         val isSingleImageStyle = imageStyle.equals(Book.imgStyleSingle, true)
         val isTextImageStyle = imageStyle.equals(Book.imgStyleText, true)
 
-        if (titleMode != 2 || bookChapter.isVolume || contents.isEmpty()) {
-            val allTitleSegments = displayTitle.splitNotBlank("\n").flatMap { rawTitle ->
+        val allTitleSegments = if (titleMode != 2 || bookChapter.isVolume || contents.isEmpty()) {
+            displayTitle.splitNotBlank("\n").flatMap { rawTitle ->
                 TitleStyleParser.getSegments(
                     rawTitle,
                     titleSegType,
@@ -251,7 +281,11 @@ class TextChapterLayout(
                     titleSegScaling
                 )
             }
+        } else null
 
+        var currentOffset = 0
+
+        if (allTitleSegments != null) {
             allTitleSegments.forEachIndexed { index, segment ->
                 val currentPaint: TextPaint
                 val currentHeight: Float
@@ -277,9 +311,10 @@ class TextChapterLayout(
                     reviewTxt = if (reviewImg.contains("TEXT")) reviewChar else srcReplaceChar
                 }
 
+                val text = segment.text + reviewTxt
                 setTypeText(
                     book = book,
-                    text = segment.text + reviewTxt,
+                    text = text,
                     textPaint = currentPaint,
                     textHeight = currentHeight,
                     fontMetrics = currentMetrics,
@@ -287,8 +322,10 @@ class TextChapterLayout(
                     srcList = srcList.ifEmpty { null },
                     isTitle = true,
                     emptyContent = contents.isEmpty(),
-                    isVolumeTitle = bookChapter.isVolume
+                    isVolumeTitle = bookChapter.isVolume,
+                    offset = currentOffset
                 )
+                currentOffset += text.length + 1
 
                 if (segment.scale != 1.0f) {
                     val currentLines = pendingTextPage.lines
@@ -319,9 +356,11 @@ class TextChapterLayout(
                 val text = content.trim()
                 if (text == "[newpage]") {
                     prepareNextPageIfNeed()
+                    currentOffset += content.length + 1
                     return@forEach
                 } else if (text.startsWith("<usehtml>")) {
                     setTypeHtml(imageStyle, book, text.substring(9, text.lastIndexOf("<")))
+                    currentOffset += content.length + 1
                     return@forEach
                 }
             }
@@ -347,8 +386,10 @@ class TextChapterLayout(
                     contentPaintTextHeight,
                     contentPaintFontMetrics,
                     imageStyle,
-                    srcList = srcList
+                    srcList = srcList,
+                    offset = currentOffset
                 )
+                currentOffset += text.length
             } else {
                 if (isSingleImageStyle && isSetTypedImage) {
                     isSetTypedImage = false
@@ -402,10 +443,12 @@ class TextChapterLayout(
                         }
 
                         if (start < matcher.start()) {
-                            sb.append(text.substring(start, matcher.start()))
+                            val textPart = text.substring(start, matcher.start())
+                            sb.append(textPart)
                         }
                         if (iStyle == "text" || iStyle == "TEXT") {
-                            sb.append(if (iStyle == "TEXT") reviewChar else srcReplaceChar)
+                            val charPart = if (iStyle == "TEXT") reviewChar else srcReplaceChar
+                            sb.append(charPart)
                             srcList.add(imgSrc)
                             clickList.add(click)
                         } else {
@@ -413,10 +456,12 @@ class TextChapterLayout(
                             if (textBefore.isNotBlank()) {
                                 wordCount += textBefore.replace(noWordCountRegex,"").length
                                 setTypeText(
-                                    book, sb.toString(), contentPaint, contentPaintTextHeight,
+                                    book, textBefore, contentPaint, contentPaintTextHeight,
                                     contentPaintFontMetrics, "TEXT", isFirstLine = isFirstLine,
-                                    srcList = srcList, clickList = clickList
+                                    srcList = srcList, clickList = clickList,
+                                    offset = currentOffset
                                 )
+                                currentOffset += textBefore.length
                                 sb.setLength(0)
                                 isFirstLine = false
                             }
@@ -428,6 +473,7 @@ class TextChapterLayout(
                                 imgSize,
                                 click
                             ) // 传递点击信息
+                            currentOffset += 1
                             isSetTypedImage = true
                         }
                         start = matcher.end()
@@ -444,21 +490,25 @@ class TextChapterLayout(
                 text = sb.toString()
                 if (text.isNotBlank()) {
                     wordCount += text.replace(noWordCountRegex,"").length
+                    val textToType = if (ReadConfig.enableReview) text + reviewChar else text
                     setTypeText(
                         book,
-                        if (AppConfig.enableReview) text + reviewChar else text,
+                        textToType,
                         contentPaint,
                         contentPaintTextHeight,
                         contentPaintFontMetrics,
                         "TEXT",
                         isFirstLine = isFirstLine,
                         srcList = srcList.ifEmpty { null },
-                        clickList = clickList.ifEmpty { null }
+                        clickList = clickList.ifEmpty { null },
+                        offset = currentOffset
                     )
+                    currentOffset += textToType.length
                 }
             }
             pendingTextPage.lines.last().isParagraphEnd = true
             stringBuilder.append("\n")
+            currentOffset += 1
         }
         val chapterWordCount = StringUtils.wordCountFormat(wordCount.toString())
         bookChapter.wordCount = chapterWordCount
@@ -839,7 +889,7 @@ class TextChapterLayout(
 
     private fun extractTextColor(spanned: Spanned, index: Int): Int? {
         val foregroundSpans = spanned.getSpans(index, index + 1, ForegroundColorSpan::class.java)
-        return foregroundSpans.firstOrNull()?.foregroundColor
+        return foregroundSpans.lastOrNull()?.foregroundColor
     }
 
     private fun extractLinkUrl(spanned: Spanned, index: Int): String? {
@@ -868,11 +918,16 @@ class TextChapterLayout(
         emptyContent: Boolean = false,
         isVolumeTitle: Boolean = false,
         srcList: LinkedList<String>? = null,
-        clickList: LinkedList<String?>? = null
+        clickList: LinkedList<String?>? = null,
+        offset: Int = -1
     ) {
+        val charStyles = applyHighlightRules(text, isTitle)
         val widthsArray = allocateFloatArray(text.length)
         textPaint.getTextWidthsCompat(text, widthsArray)
-        val colorMap = applyRegexColorRules(text)
+        // 用高亮规则字体重新测量字符宽度，确保排版和绘制使用同一套字体
+        if (charStyles != null) {
+            remeasureWithHighlightFonts(text, charStyles, textPaint, widthsArray)
+        }
         val layout = if (useZhLayout) {
             val (words, widths) = measureTextSplit(text, widthsArray)
             val indentSize = if (isFirstLine) paragraphIndent.length else 0
@@ -924,21 +979,15 @@ class TextChapterLayout(
             val (words, widths) = measureTextSplit(lineText, widthsArray, lineStart)
             val desiredWidth = widths.fastSum()
             textLine.text = lineText
-            val lineWordStyles = if (colorMap != null) {
-                buildWordStyles(words, lineText, colorMap.colorArray, colorMap.fontPathArray, lineStart)
-            } else null
             when (lineIndex) {
                 0 if layout.lineCount > 1 && !isTitle && isFirstLine -> {
-                    //多行的第一行 非标题
                     addCharsToLineFirst(
                         book, absStartX, textLine, words, textPaint,
-                        desiredWidth, widths, srcList, clickList, lineWordStyles
+                        desiredWidth, widths, srcList, clickList, charStyles, lineStart
                     )
                 }
 
                 layout.lineCount - 1 -> {
-                    //最后一行、单行
-                    //标题x轴居中
                     val startX = if (
                         isTitle &&
                         (isMiddleTitle || emptyContent || isVolumeTitle
@@ -950,7 +999,7 @@ class TextChapterLayout(
                     }
                     addCharsToLineNatural(
                         book, absStartX, textLine, words,
-                        startX, !isTitle && lineIndex == 0, widths, srcList, clickList, lineWordStyles
+                        startX, !isTitle && lineIndex == 0, widths, srcList, clickList, charStyles, lineStart
                     )
                 }
                 else -> {
@@ -959,17 +1008,15 @@ class TextChapterLayout(
                         (isMiddleTitle || emptyContent || isVolumeTitle
                                 || imageStyle?.uppercase() == Book.imgStyleSingle)
                     ) {
-                        //标题居中
                         val startX = (visibleWidth - desiredWidth) / 2
                         addCharsToLineNatural(
                             book, absStartX, textLine, words,
-                            startX, false, widths, srcList, clickList, lineWordStyles
+                            startX, false, widths, srcList, clickList, charStyles, lineStart
                         )
                     } else {
-                        //中间行
                         addCharsToLineMiddle(
                             book, absStartX, textLine, words, textPaint,
-                            desiredWidth, 0f, widths, srcList, clickList, lineWordStyles
+                            desiredWidth, 0f, widths, srcList, clickList, charStyles, lineStart
                         )
                     }
                 }
@@ -1023,13 +1070,14 @@ class TextChapterLayout(
         textWidths: List<Float>,
         srcList: LinkedList<String>?,
         clickList: LinkedList<String?>?,
-        wordStyles: List<WordStyle>? = null
+        charStyles: Array<CharStyle?>?,
+        lineStart: Int
     ) {
         var x = 0f
         if (!textFullJustify) {
             addCharsToLineNatural(
                 book, absStartX, textLine, words,
-                x, true, textWidths, srcList, clickList, wordStyles
+                x, true, textWidths, srcList, clickList, charStyles, lineStart
             )
             return
         }
@@ -1050,10 +1098,10 @@ class TextChapterLayout(
         if (words.size > bodyIndent.length) {
             val text1 = words.subList(bodyIndent.length, words.size)
             val textWidths1 = textWidths.subList(bodyIndent.length, textWidths.size)
-            val wordStyles1 = wordStyles?.subList(bodyIndent.length, wordStyles.size)
+            val lineStart1 = lineStart + bodyIndent.length
             addCharsToLineMiddle(
                 book, absStartX, textLine, text1, textPaint,
-                desiredWidth, x, textWidths1, srcList, clickList, wordStyles1
+                desiredWidth, x, textWidths1, srcList, clickList, charStyles, lineStart1
             )
         }
     }
@@ -1072,12 +1120,13 @@ class TextChapterLayout(
         textWidths: List<Float>,
         srcList: LinkedList<String>?,
         clickList: LinkedList<String?>?,
-        wordStyles: List<WordStyle>? = null
+        charStyles: Array<CharStyle?>?,
+        lineStart: Int
     ) {
         if (!textFullJustify) {
             addCharsToLineNatural(
                 book, absStartX, textLine, words,
-                startX, false, textWidths, srcList, clickList, wordStyles
+                startX, false, textWidths, srcList, clickList, charStyles, lineStart
             )
             return
         }
@@ -1099,8 +1148,7 @@ class TextChapterLayout(
                 addCharToLine(
                     book, absStartX, textLine, char,
                     x, x1, index + 1 == words.size, srcList, clickList,
-                    wordStyles?.getOrNull(index)?.color,
-                    wordStyles?.getOrNull(index)?.fontPath
+                    charStyles, lineStart + index
                 )
                 x = x1
             }
@@ -1117,8 +1165,7 @@ class TextChapterLayout(
                 addCharToLine(
                     book, absStartX, textLine, char,
                     x, x1, index + 1 == words.size, srcList, clickList,
-                    wordStyles?.getOrNull(index)?.color,
-                    wordStyles?.getOrNull(index)?.fontPath
+                    charStyles, lineStart + index
                 )
                 x = x1
             }
@@ -1139,7 +1186,8 @@ class TextChapterLayout(
         textWidths: List<Float>,
         srcList: LinkedList<String>?,
         clickList: LinkedList<String?>?,
-        wordStyles: List<WordStyle>? = null
+        charStyles: Array<CharStyle?>?,
+        lineStart: Int
     ) {
         val indentLength = paragraphIndent.length
         var x = startX
@@ -1158,8 +1206,8 @@ class TextChapterLayout(
                 index + 1 == words.size,
                 srcList,
                 clickList,
-                wordStyles?.getOrNull(index)?.color,
-                wordStyles?.getOrNull(index)?.fontPath
+                charStyles,
+                lineStart + index
             )
             x = x1
             if (hasIndent && index == indentLength - 1) {
@@ -1182,9 +1230,10 @@ class TextChapterLayout(
         isLineEnd: Boolean,
         srcList: LinkedList<String>?,
         clickList: LinkedList<String?>?,
-        color: Int? = null,
-        fontPath: String? = null
+        charStyles: Array<CharStyle?>?,
+        textIndex: Int
     ) {
+        val style = charStyles?.getOrNull(textIndex)
         val column = when {
             !srcList.isNullOrEmpty() && (char == srcReplaceChar || char == reviewChar) -> {
                 val src = srcList.removeFirst()
@@ -1203,8 +1252,17 @@ class TextChapterLayout(
                     start = absStartX + xStart,
                     end = absStartX + xEnd,
                     charData = char,
-                    color = color,
-                    fontPath = fontPath
+                    textColor = style?.textColor,
+                    bgColor = style?.bgColor,
+                    underlineMode = style?.underlineMode ?: 0,
+                    underlineColor = style?.underlineColor,
+                    underlineWidth = style?.underlineWidth ?: 1f,
+                    underlineOffset = style?.underlineOffset ?: 2f,
+                    underlineSvgPath = style?.underlineSvgPath ?: "",
+                    bgImage = style?.bgImage ?: "",
+                    bgImageFit = style?.bgImageFit ?: 0,
+                    bgImageScale = style?.bgImageScale ?: 1f,
+                    fontPath = style?.fontPath ?: ""
                 )
             }
         }
@@ -1305,78 +1363,92 @@ class TextChapterLayout(
         return code == 8203 || code == 8204 || code == 8205 || code == 8288
     }
 
-    private data class RegexMatchResult(
-        val colorArray: IntArray,
-        val fontPathArray: Array<String?>
-    )
+    /**
+     * 对有自定义字体的高亮字符重新测量宽度，确保排版和绘制使用同一套字体度量。
+     * 使用 textPaint 副本测量，避免修改共享 paint 的 typeface 影响绘制线程。
+     */
+    private fun remeasureWithHighlightFonts(
+        text: String,
+        charStyles: Array<CharStyle?>,
+        textPaint: TextPaint,
+        widthsArray: FloatArray
+    ) {
+        val measurePaint = TextPaint(textPaint)
+        var i = 0
+        while (i < text.length) {
+            val fontPath = charStyles[i]?.fontPath.orEmpty()
+            if (fontPath.isEmpty()) { i++; continue }
+            // 找连续使用同一字体的区间
+            val segStart = i
+            i++
+            while (i < text.length && charStyles[i]?.fontPath.orEmpty() == fontPath) i++
+            val segEnd = i
+            val typeface = TextColumn.getTypeface(fontPath) ?: continue
+            measurePaint.typeface = typeface
+            val segLen = segEnd - segStart
+            val segWidths = FloatArray(segLen)
+            measurePaint.getTextWidths(text, segStart, segEnd, segWidths)
+            segWidths.copyInto(widthsArray, segStart)
+        }
+    }
 
-    private fun applyRegexColorRules(text: String): RegexMatchResult? {
-        val rules = ReadBookConfig.regexColorRules
-        if (rules.isEmpty()) return null
+    /**
+     * 对文本应用高亮规则，返回每字符的样式数组。无匹配时返回 null。
+     */
+    private fun applyHighlightRules(
+        text: String,
+        isTitle: Boolean = false
+    ): Array<CharStyle?>? {
+        if (compiledHighlightRules.isEmpty()) return null
         var hasMatch = false
-        for (rule in rules) {
-            try {
-                val regex = regexCache.getOrPut(rule.pattern) { Regex(rule.pattern) }
-                if (regex.containsMatchIn(text)) {
-                    hasMatch = true
-                    break
-                }
-            } catch (_: Exception) {
+        // 先检查是否有任何规则匹配
+        for (compiled in compiledHighlightRules) {
+            if (!compiled.rule.appliesTo(isTitle)) continue
+            if (compiled.regex.containsMatchIn(text)) {
+                hasMatch = true
+                break
             }
         }
         if (!hasMatch) return null
-        val colorArray = IntArray(text.length) { -1 }
-        val fontPathArray = arrayOfNulls<String>(text.length)
-        for (rule in rules) {
-            try {
-                val regex = regexCache.getOrPut(rule.pattern) { Regex(rule.pattern) }
-                val matches = regex.findAll(text)
-                for (match in matches) {
-                    for (i in match.range) {
-                        colorArray[i] = rule.color
-                        if (rule.fontPath.isNotEmpty()) {
-                            fontPathArray[i] = rule.fontPath
-                        }
-                    }
+        // 填充样式数组
+        val styles = arrayOfNulls<CharStyle>(text.length)
+        for (compiled in compiledHighlightRules) {
+            if (!compiled.rule.appliesTo(isTitle)) continue
+            val rule = compiled.rule
+            val charStyle = CharStyle(
+                textColor = rule.textColor,
+                bgColor = rule.bgColor,
+                underlineMode = rule.underlineMode,
+                underlineColor = rule.underlineColor ?: rule.textColor ?: 0xFF63C37D.toInt(),
+                underlineWidth = rule.underlineWidth,
+                underlineOffset = rule.underlineOffset,
+                underlineSvgPath = rule.underlineSvgPath.orEmpty(),
+                bgImage = rule.bgImage.orEmpty(),
+                bgImageFit = rule.bgImageFit,
+                bgImageScale = rule.bgImageScale,
+                fontPath = rule.fontPath.orEmpty()
+            )
+            compiled.regex.findAll(text).forEach { match ->
+                for (i in match.range) {
+                    // 后来的规则覆盖先前的（与 Legado_Max 行为一致）
+                    styles[i] = charStyle
                 }
-            } catch (_: Exception) {
             }
         }
-        return RegexMatchResult(colorArray, fontPathArray)
+        return styles
     }
 
-    private data class WordStyle(
-        val color: Int?,
-        val fontPath: String?
+    private data class CompiledHighlightRule(
+        val rule: HighlightRule,
+        val regex: Regex,
     )
 
-    private fun buildWordStyles(
-        words: List<String>,
-        lineText: String,
-        colorArray: IntArray,
-        fontPathArray: Array<String?>,
-        lineStart: Int
-    ): List<WordStyle> {
-        val wordStyles = mutableListOf<WordStyle>()
-        var charOffset = 0
-        for (word in words) {
-            val wordLen = word.length
-            var color: Int? = null
-            var fontPath: String? = null
-            for (j in 0 until wordLen) {
-                val idx = lineStart + charOffset + j
-                if (color == null && colorArray[idx] != -1) {
-                    color = colorArray[idx]
-                }
-                if (fontPath == null && fontPathArray[idx] != null) {
-                    fontPath = fontPathArray[idx]
-                }
-                if (color != null && fontPath != null) break
-            }
-            wordStyles.add(WordStyle(color, fontPath))
-            charOffset += wordLen
+    private fun HighlightRule.appliesTo(isTitle: Boolean): Boolean {
+        return when (targetScope) {
+            HighlightRule.TARGET_TITLE -> isTitle
+            HighlightRule.TARGET_BODY -> !isTitle
+            else -> true
         }
-        return wordStyles
     }
 
 }

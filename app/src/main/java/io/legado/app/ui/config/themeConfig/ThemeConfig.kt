@@ -1,20 +1,39 @@
 package io.legado.app.ui.config.themeConfig
 
+import android.os.Handler
+import android.os.Looper
+import androidx.appcompat.app.AppCompatDelegate
 import io.legado.app.constant.EventBus
 import io.legado.app.constant.PreferKey
 import io.legado.app.ui.config.prefDelegate
 import io.legado.app.utils.GSON
-import io.legado.app.utils.getPrefString
 import io.legado.app.utils.postEvent
-import io.legado.app.utils.putPrefString
-import splitties.init.appCtx
 
 data class TagColorPair(
     val textColor: Int = 0,
     val bgColor: Int = 0
 )
 
+data class CustomThemeColors(
+    val primary: Int,
+    val secondary: Int,
+    val primaryText: Int,
+    val secondaryText: Int,
+    val background: Int,
+    val labelContainer: Int,
+) {
+    val hasCustomColor: Boolean
+        get() = primary != 0 ||
+                secondary != 0 ||
+                primaryText != 0 ||
+                secondaryText != 0 ||
+                background != 0 ||
+                labelContainer != 0
+}
+
 object ThemeConfig {
+
+    private const val CUSTOM_APP_THEME = "12"
 
     var containerOpacity by prefDelegate(PreferKey.containerOpacity, 100)
 
@@ -51,7 +70,17 @@ object ThemeConfig {
 
     var appTheme by prefDelegate(PreferKey.appTheme, "0")
 
-    var themeMode by prefDelegate(PreferKey.themeMode, "0")
+    var themeMode by prefDelegate(PreferKey.themeMode, "0") {
+        Handler(Looper.getMainLooper()).post { initNightMode() }
+    }
+
+    fun initNightMode() {
+        when (themeMode) {
+            "1" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+            "2" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+            else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        }
+    }
 
     var isPureBlack by prefDelegate(PreferKey.pureBlack, false)
 
@@ -75,12 +104,9 @@ object ThemeConfig {
         postEvent(EventBus.RECREATE, "")
     }
 
-    var appFontPath: String?
-        get() = appCtx.getPrefString(PreferKey.appFontPath)
-        set(value) {
-            appCtx.putPrefString(PreferKey.appFontPath, value)
-            postEvent(EventBus.RECREATE, "")
-        }
+    var appFontPath by prefDelegate<String?>(PreferKey.appFontPath, null) {
+        postEvent(EventBus.RECREATE, "")
+    }
 
     var cPrimary by prefDelegate(PreferKey.cPrimary, 0)
 
@@ -97,6 +123,42 @@ object ThemeConfig {
     var themeBackgroundColor by prefDelegate(PreferKey.themeBackgroundColor, 0)
 
     var labelContainerColor by prefDelegate(PreferKey.labelContainerColor, 0)
+
+    var themeColorNight by prefDelegate(PreferKey.themeColorNight, 0)
+
+    var secondaryThemeColorNight by prefDelegate(PreferKey.secondaryThemeColorNight, 0)
+
+    var primaryTextColorNight by prefDelegate(PreferKey.primaryTextColorNight, 0)
+
+    var secondaryTextColorNight by prefDelegate(PreferKey.secondaryTextColorNight, 0)
+
+    var themeBackgroundColorNight by prefDelegate(PreferKey.themeBackgroundColorNight, 0)
+
+    var labelContainerColorNight by prefDelegate(PreferKey.labelContainerColorNight, 0)
+
+    val isDeepPersonalizationActive: Boolean
+        get() = appTheme == CUSTOM_APP_THEME && enableDeepPersonalization
+
+    fun customThemeColors(isDark: Boolean): CustomThemeColors {
+        if (!isDark) {
+            return CustomThemeColors(
+                primary = themeColor,
+                secondary = secondaryThemeColor,
+                primaryText = primaryTextColor,
+                secondaryText = secondaryTextColor,
+                background = themeBackgroundColor,
+                labelContainer = labelContainerColor,
+            )
+        }
+        return CustomThemeColors(
+            primary = themeColorNight.takeIf { it != 0 } ?: themeColor,
+            secondary = secondaryThemeColorNight.takeIf { it != 0 } ?: secondaryThemeColor,
+            primaryText = primaryTextColorNight.takeIf { it != 0 } ?: primaryTextColor,
+            secondaryText = secondaryTextColorNight.takeIf { it != 0 } ?: secondaryTextColor,
+            background = themeBackgroundColorNight.takeIf { it != 0 } ?: themeBackgroundColor,
+            labelContainer = labelContainerColorNight.takeIf { it != 0 } ?: labelContainerColor,
+        )
+    }
 
     var enableItemDivider by prefDelegate(PreferKey.enableItemDivider, false)
 
@@ -119,11 +181,7 @@ object ThemeConfig {
 
     var enableCustomTagColors by prefDelegate(PreferKey.enableCustomTagColors, false)
 
-    var customTagColorsJson: String?
-        get() = appCtx.getPrefString(PreferKey.customTagColors)
-        set(value) {
-            appCtx.putPrefString(PreferKey.customTagColors, value)
-        }
+    var customTagColorsJson by prefDelegate<String?>(PreferKey.customTagColors, null)
 
     fun getCustomTagColors(): List<TagColorPair> {
         return try {
@@ -138,6 +196,8 @@ object ThemeConfig {
     fun saveCustomTagColors(colors: List<TagColorPair>) {
         customTagColorsJson = GSON.toJson(colors)
     }
+
+    var showHome by prefDelegate(PreferKey.showHome, true)
 
     var showDiscovery by prefDelegate(PreferKey.showDiscovery, true)
 
@@ -162,6 +222,11 @@ object ThemeConfig {
 
     var defaultHomePage by prefDelegate(PreferKey.defaultHomePage, "bookshelf")
 
+    var mainNavigationOrder by prefDelegate(
+        PreferKey.mainNavigationOrder,
+        "home,bookshelf,explore,rss,my",
+    )
+
     var navExtended by prefDelegate("navExtended", false)
 
     var webServiceAutoStart by prefDelegate(PreferKey.webServiceAutoStart, false)
@@ -170,6 +235,8 @@ object ThemeConfig {
 
     var autoCheckNewBackup by prefDelegate(PreferKey.autoCheckNewBackup, true)
 
+    var navIconHome by prefDelegate(PreferKey.navIconHome, "")
+
     var navIconBookshelf by prefDelegate(PreferKey.navIconBookshelf, "")
 
     var navIconExplore by prefDelegate(PreferKey.navIconExplore, "")
@@ -177,6 +244,23 @@ object ThemeConfig {
     var navIconRss by prefDelegate(PreferKey.navIconRss, "")
 
     var navIconMy by prefDelegate(PreferKey.navIconMy, "")
+
+    // Eye Protection
+    var eyeProtectionEnabled by prefDelegate(PreferKey.eyeProtectionEnabled, false) {
+        postEvent(PreferKey.eyeProtectionEnabled, it)
+    }
+    var colorTemperature by prefDelegate(PreferKey.colorTemperature, 50) {
+        postEvent(PreferKey.colorTemperature, it)
+    }
+    var eyeProtectionSchedule by prefDelegate(PreferKey.eyeProtectionSchedule, false) {
+        postEvent(PreferKey.eyeProtectionSchedule, it)
+    }
+    var eyeProtectionStartTime by prefDelegate(PreferKey.eyeProtectionStartTime, "22:00") {
+        postEvent(PreferKey.eyeProtectionStartTime, it)
+    }
+    var eyeProtectionEndTime by prefDelegate(PreferKey.eyeProtectionEndTime, "07:00") {
+        postEvent(PreferKey.eyeProtectionEndTime, it)
+    }
 
     fun hasImageBg(isDark: Boolean): Boolean =
         !(if (isDark) bgImageDark else bgImageLight).isNullOrBlank()

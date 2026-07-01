@@ -451,7 +451,6 @@ object DatabaseMigrations {
         }
     }
 
-
     @Suppress("ClassName")
     class Migration_54_55 : AutoMigrationSpec {
 
@@ -497,5 +496,4 @@ object DatabaseMigrations {
         columnName = "enabledReview"
     )
     class Migration_64_65 : AutoMigrationSpec
-
 }

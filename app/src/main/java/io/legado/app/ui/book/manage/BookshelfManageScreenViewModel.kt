@@ -3,19 +3,18 @@ package io.legado.app.ui.book.manage
 import android.app.Application
 import androidx.lifecycle.viewModelScope
 import io.legado.app.base.BaseViewModel
-import io.legado.app.data.dao.BookChapterDao
-import io.legado.app.data.dao.BookDao
-import io.legado.app.data.dao.BookGroupDao
-import io.legado.app.data.appDb
+import io.legado.app.constant.BookType
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookGroup
 import io.legado.app.data.entities.BookSource
-import io.legado.app.constant.BookType
+import io.legado.app.data.repository.BookGroupRepository
+import io.legado.app.data.repository.BookRepository
+import io.legado.app.data.repository.SearchRepository
+import io.legado.app.domain.usecase.BatchCacheDownloadUseCase
 import io.legado.app.domain.usecase.BatchChangeSourceCandidate
 import io.legado.app.domain.usecase.BatchChangeSourcePreviewItem
 import io.legado.app.domain.usecase.BatchChangeSourcePreviewStatus
-import io.legado.app.domain.usecase.BatchCacheDownloadUseCase
 import io.legado.app.domain.usecase.CacheBookChaptersUseCase
 import io.legado.app.domain.usecase.ChangeBookSourceUseCase
 import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
@@ -23,11 +22,10 @@ import io.legado.app.domain.usecase.ClearBookCacheUseCase
 import io.legado.app.domain.usecase.DeleteBooksUseCase
 import io.legado.app.domain.usecase.UpdateBooksGroupUseCase
 import io.legado.app.help.book.BookHelp
-import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.removeType
-import io.legado.app.model.CacheBook
 import io.legado.app.help.config.LocalConfig
+import io.legado.app.model.CacheBook
 import io.legado.app.service.ExportBookService
 import io.legado.app.ui.config.bookshelfConfig.BookshelfConfig
 import io.legado.app.ui.config.bookshelfConfig.BookshelfManageScreenConfig
@@ -39,17 +37,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.min
-import java.util.concurrent.ConcurrentHashMap
 
 data class BookshelfManageScreenExportConfig(
     val exportUseReplace: Boolean = true,
@@ -123,6 +121,7 @@ sealed interface BookshelfManageScreenIntent {
     data class AddPreviewItemToShelf(val oldBookUrl: String) : BookshelfManageScreenIntent
     data class OpenBookInfoPreview(val book: Book, val inBookshelf: Boolean) : BookshelfManageScreenIntent
     data object MigrateAllPreviewItems : BookshelfManageScreenIntent
+    data object AddAllPreviewItemsToShelf : BookshelfManageScreenIntent
     data object DismissChangeSourceStatus : BookshelfManageScreenIntent
     data object DismissBatchChangePreview : BookshelfManageScreenIntent
     data class SetExportUseReplace(val enabled: Boolean) : BookshelfManageScreenIntent
@@ -145,9 +144,9 @@ sealed interface BookshelfManageScreenEffect {
 
 class BookshelfManageScreenViewModel(
     application: Application,
-    private val bookDao: BookDao,
-    private val bookGroupDao: BookGroupDao,
-    private val bookChapterDao: BookChapterDao,
+    private val bookRepository: BookRepository,
+    private val bookGroupRepository: BookGroupRepository,
+    private val searchRepository: SearchRepository,
     val bookshelfManageScreenConfig: BookshelfManageScreenConfig,
     private val batchCacheDownloadUseCase: BatchCacheDownloadUseCase,
     private val cacheBookChaptersUseCase: CacheBookChaptersUseCase,
@@ -232,6 +231,8 @@ class BookshelfManageScreenViewModel(
             )
 
             BookshelfManageScreenIntent.MigrateAllPreviewItems -> migrateAllPreviewItems()
+
+            BookshelfManageScreenIntent.AddAllPreviewItemsToShelf -> addAllPreviewItemsToShelf()
 
             BookshelfManageScreenIntent.DismissChangeSourceStatus -> {
                 _uiState.update {
@@ -335,7 +336,7 @@ class BookshelfManageScreenViewModel(
     private fun observeGroups() {
         groupsJob?.cancel()
         groupsJob = viewModelScope.launch {
-            bookGroupDao.flowAll().collect { groups ->
+            bookGroupRepository.flowAll().collect { groups ->
                 _uiState.update { it.copy(groupList = groups) }
             }
         }
@@ -344,8 +345,8 @@ class BookshelfManageScreenViewModel(
     private fun observeBooks(groupId: Long) {
         booksJob?.cancel()
         booksJob = viewModelScope.launch {
-            bookDao.flowBookShelfByGroup(groupId).map { books ->
-                val booksDownload = books.filter { !it.isAudio }.map { it.toLightBook() }
+            bookRepository.flowBookShelfByGroup(groupId).map { books ->
+                val booksDownload = books.map { it.toLightBook() }
                 val bookSort = bookshelfManageScreenConfig.getBookSortByGroupId(groupId)
                 val isDescending = bookshelfManageScreenConfig.bookshelfSortOrder == 1
                 bookSort to when (bookSort) {
@@ -473,7 +474,7 @@ class BookshelfManageScreenViewModel(
 
     private fun refreshGroupName(groupId: Long) {
         execute {
-            val title = bookGroupDao.getByID(groupId)?.groupName
+            val title = bookGroupRepository.getByID(groupId)?.groupName
             title ?: context.getString(io.legado.app.R.string.no_group)
         }.onSuccess { groupName ->
             _uiState.update { it.copy(groupName = groupName) }
@@ -530,7 +531,7 @@ class BookshelfManageScreenViewModel(
         val visibleBookUrls = uiState.value.books.mapTo(hashSetOf()) { it.bookUrl }
         cacheRefreshBookUrls.forEach { bookUrl ->
             if (visibleBookUrls.contains(bookUrl)) {
-                bookDao.getBook(bookUrl)?.let { book ->
+                bookRepository.getBook(bookUrl)?.let { book ->
                     cacheCounts[bookUrl] = calculateCacheCount(book)
                     changedBookUrls.add(bookUrl)
                 }
@@ -547,12 +548,12 @@ class BookshelfManageScreenViewModel(
         emitBooksChanged(changedBookUrls)
     }
 
-    private fun calculateCacheCount(book: Book): Int {
+    private suspend fun calculateCacheCount(book: Book): Int {
         val cacheNames = BookHelp.getChapterFiles(book)
         if (cacheNames.isEmpty()) return 0
-        val totalCount = bookChapterDao.getChapterCount(book.bookUrl)
+        val totalCount = bookRepository.getChapterCount(book.bookUrl)
         val cachedFileCount = cacheNames.count { it.endsWith(".nb") }
-        return min(cachedFileCount + bookChapterDao.getVolumeCount(book.bookUrl), totalCount)
+        return min(cachedFileCount + bookRepository.getVolumeCount(book.bookUrl), totalCount)
     }
 
     private fun Int?.orZero(): Int = this ?: 0
@@ -659,7 +660,7 @@ class BookshelfManageScreenViewModel(
             )
         }
         execute {
-            bookDao.update(*reorderedBooks.toTypedArray())
+            bookRepository.update(*reorderedBooks.toTypedArray())
         }.onError {
             _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("排序保存失败\n${it.localizedMessage}"))
         }
@@ -694,7 +695,7 @@ class BookshelfManageScreenViewModel(
         options: ChangeSourceMigrationOptions,
     ) {
         execute {
-            val oldBook = bookDao.getBook(oldBookUrl) ?: return@execute null
+            val oldBook = bookRepository.getBook(oldBookUrl) ?: return@execute null
             changeBookSourceUseCase.changeTo(oldBook, book, chapters, options)
         }.onSuccess { result ->
             result ?: return@onSuccess
@@ -732,7 +733,7 @@ class BookshelfManageScreenViewModel(
                     batchChangePreviewItems = emptyList()
                 )
             }
-            val books = bookUrls.mapNotNull { bookDao.getBook(it) }
+            val books = bookUrls.mapNotNull { bookRepository.getBook(it) }
             changeBookSourceUseCase.prepareBatchChange(
                 books = books,
                 sources = sources,
@@ -784,7 +785,7 @@ class BookshelfManageScreenViewModel(
         } ?: return
         val candidate = item.selectedCandidate ?: return
         execute {
-            val oldBook = bookDao.getBook(oldBookUrl) ?: item.oldBook
+            val oldBook = bookRepository.getBook(oldBookUrl) ?: item.oldBook
             val chapters = changeBookSourceUseCase.loadCandidateChapters(
                 candidate.source,
                 candidate.book
@@ -883,10 +884,10 @@ class BookshelfManageScreenViewModel(
             ) ?: error("获取目录失败")
             candidate.book.removeType(BookType.notShelf)
             if (candidate.book.order == 0) {
-                candidate.book.order = bookDao.minOrder - 1
+                candidate.book.order = bookRepository.getMinOrder() - 1
             }
-            bookDao.insert(candidate.book)
-            bookChapterDao.insert(*chapters.toTypedArray())
+            bookRepository.insert(candidate.book)
+            bookRepository.insertChapters(*chapters.toTypedArray())
             candidate.book
         }.onSuccess {
             _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("已添加到书架"))
@@ -898,7 +899,7 @@ class BookshelfManageScreenViewModel(
     private fun openBookInfoPreview(book: Book, inBookshelf: Boolean) {
         execute {
             if (!inBookshelf) {
-                appDb.searchBookDao.insert(book.toSearchBook())
+                searchRepository.saveSearchBooks(listOf(book.toSearchBook()))
             }
             book
         }.onSuccess {
@@ -929,7 +930,7 @@ class BookshelfManageScreenViewModel(
                     it.copy(changeSourceProgress = "${index + 1} / ${items.size}  ${item.oldBook.name}")
                 }
                 val candidate = item.selectedCandidate ?: return@forEachIndexed
-                val oldBook = bookDao.getBook(item.oldBook.bookUrl) ?: item.oldBook
+                val oldBook = bookRepository.getBook(item.oldBook.bookUrl) ?: item.oldBook
                 val chapters = changeBookSourceUseCase.loadCandidateChapters(
                     candidate.source,
                     candidate.book
@@ -947,6 +948,45 @@ class BookshelfManageScreenViewModel(
             _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("批量迁移完成"))
         }.onError {
             _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("批量迁移失败\n${it.localizedMessage}"))
+        }.onFinally {
+            _uiState.update {
+                it.copy(
+                    isChangingSource = false,
+                    changeSourceProgress = null,
+                    cacheVersion = it.cacheVersion + 1
+                )
+            }
+        }
+    }
+
+    private fun addAllPreviewItemsToShelf() {
+        val items = uiState.value.batchChangePreviewItems.filter { it.canMigrate }
+        if (items.isEmpty()) return
+        execute {
+            _uiState.update {
+                it.copy(isChangingSource = true, changeSourceProgress = "0 / ${items.size}")
+            }
+            items.forEachIndexed { index, item ->
+                _uiState.update {
+                    it.copy(changeSourceProgress = "${index + 1} / ${items.size}  ${item.oldBook.name}")
+                }
+                val candidate = item.selectedCandidate ?: return@forEachIndexed
+                val chapters = changeBookSourceUseCase.loadCandidateChapters(
+                    candidate.source,
+                    candidate.book
+                ) ?: return@forEachIndexed
+                candidate.book.removeType(BookType.notShelf)
+                if (candidate.book.order == 0) {
+                    candidate.book.order = bookRepository.getMinOrder() - 1
+                }
+                bookRepository.insert(candidate.book)
+                bookRepository.insertChapters(*chapters.toTypedArray())
+            }
+        }.onSuccess {
+            _uiState.update { it.copy(batchChangePreviewItems = emptyList()) }
+            _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("批量添加完成"))
+        }.onError {
+            _effects.tryEmit(BookshelfManageScreenEffect.ShowMessage("批量添加失败\n${it.localizedMessage}"))
         }.onFinally {
             _uiState.update {
                 it.copy(

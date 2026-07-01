@@ -28,25 +28,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import io.legado.app.R
 import io.legado.app.data.entities.RssStar
+import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.ActionItem
 import io.legado.app.ui.widget.components.EmptyMessage
-import io.legado.app.ui.widget.components.SourceIcon
-import io.legado.app.ui.widget.components.button.SmallIconButton
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.dialog.TextListInputDialog
 import io.legado.app.ui.widget.components.divider.PillDivider
+import io.legado.app.ui.widget.components.image.sourceIcon.SourceIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.rules.RuleListScaffold
+import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RssFavoritesScreen(
     onBackClick: () -> Unit,
     onOpenRead: (title: String?, origin: String, link: String?, openUrl: String?) -> Unit,
-    viewModel: RssFavoritesViewModel = viewModel()
+    viewModel: RssFavoritesViewModel = koinViewModel()
 ) {
     val state by viewModel.state.collectAsState()
     val groups by viewModel.groups.collectAsState()
@@ -184,14 +185,17 @@ fun RssFavoritesScreen(
                 contentAlignment = Alignment.Center
             ) {
                 EmptyMessage(
-                    message = "还没有收藏订阅！",
+                    message = stringResource(R.string.no_favorites_rss),
                     isLoading = state.isLoading
                 )
             }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = paddingValues,
+                contentPadding = adaptiveContentPadding(
+                    top = paddingValues.calculateTopPadding(),
+                    bottom = paddingValues.calculateBottomPadding() + 120.dp
+                ),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(state.items, key = { "${it.origin}|${it.link}" }) { rssStar ->
@@ -215,7 +219,9 @@ fun RssFavoritesScreen(
                                     path = rssStar.image,
                                     sourceOrigin = rssStar.origin,
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(54.dp)
+                                    modifier = Modifier
+                                        .padding(vertical = 12.dp)
+                                        .size(54.dp)
                                 )
                             }
                         } else null,
@@ -223,9 +229,9 @@ fun RssFavoritesScreen(
                             val openAction = {
                                 onOpenRead(rssStar.title, rssStar.origin, rssStar.link, null)
                             }
-                            SmallIconButton(
+                            SmallPlainButton(
                                 onClick = openAction,
-                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                icon = Icons.AutoMirrored.Filled.OpenInNew,
                                 contentDescription = "Open"
                             )
                         },

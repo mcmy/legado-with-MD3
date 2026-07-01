@@ -19,6 +19,12 @@ fun AppTheme(
     
     // 1. 获取基础配置
     val appThemeMode = ThemeResolver.resolveThemeMode(ThemeConfig.appTheme)
+    val themeModeValue = ThemeConfig.themeMode
+    val effectiveDarkTheme = when (themeModeValue) {
+        "1" -> false
+        "2" -> true
+        else -> darkTheme
+    }
     val isPureBlack = ThemeConfig.isPureBlack
     val paletteStyleValue = ThemeConfig.paletteStyle
     val materialVersion = ThemeConfig.materialVersion
@@ -29,41 +35,36 @@ fun AppTheme(
 
     // 2. 深度个性化配置
     val enableDeepPersonalization = ThemeConfig.enableDeepPersonalization
-    val themeColor = ThemeConfig.themeColor
-    val secondaryThemeColor = ThemeConfig.secondaryThemeColor
-    val primaryTextColor = ThemeConfig.primaryTextColor
-    val secondaryTextColor = ThemeConfig.secondaryTextColor
-    val themeBackgroundColor = ThemeConfig.themeBackgroundColor
-    val customLabelContainerColor = ThemeConfig.labelContainerColor
+    val customColors = ThemeConfig.customThemeColors(effectiveDarkTheme)
 
     // 3. 加载自定义字体
     val customFontFamily = rememberCustomFont(appFontPath)
 
     // 4. 解析配色方案 (Material 3 ColorScheme)
     val colorScheme = remember(
-        context, appThemeMode, darkTheme, isPureBlack, customPrimary, customNightPrimary,
-        enableDeepPersonalization, themeColor, secondaryThemeColor, primaryTextColor,
-        secondaryTextColor, themeBackgroundColor, customLabelContainerColor,
+        context, appThemeMode, effectiveDarkTheme, isPureBlack, customPrimary, customNightPrimary,
+        enableDeepPersonalization, customColors,
         paletteStyleValue, materialVersion
     ) {
-        if (enableDeepPersonalization &&
-            (themeColor != 0 || secondaryThemeColor != 0 || primaryTextColor != 0 ||
-             secondaryTextColor != 0 || themeBackgroundColor != 0 || customLabelContainerColor != 0)) {
+        if (appThemeMode == AppThemeMode.Custom &&
+            enableDeepPersonalization &&
+            customColors.hasCustomColor
+        ) {
             val userPalette = UserColorPalette(
-                primaryColor = if (themeColor != 0) Color(themeColor) else Color(0xFF6750A4),
-                secondaryColor = if (secondaryThemeColor != 0) Color(secondaryThemeColor) else Color(0xFF625B71),
-                backgroundColor = if (themeBackgroundColor != 0) Color(themeBackgroundColor) else Color(0xFFFEF7FF),
-                primaryFontColor = if (primaryTextColor != 0) Color(primaryTextColor) else Color(0xFF1C1B1F),
-                secondaryFontColor = if (secondaryTextColor != 0) Color(secondaryTextColor) else Color(0xFF49454F),
-                labelContainerColor = if (customLabelContainerColor != 0) Color(customLabelContainerColor) else Color(0xFFF7F2FA)
+                primaryColor = if (customColors.primary != 0) Color(customColors.primary) else Color(0xFF6750A4),
+                secondaryColor = if (customColors.secondary != 0) Color(customColors.secondary) else Color(0xFF625B71),
+                backgroundColor = if (customColors.background != 0) Color(customColors.background) else Color(0xFFFEF7FF),
+                primaryFontColor = if (customColors.primaryText != 0) Color(customColors.primaryText) else Color(0xFF1C1B1F),
+                secondaryFontColor = if (customColors.secondaryText != 0) Color(customColors.secondaryText) else Color(0xFF49454F),
+                labelContainerColor = if (customColors.labelContainer != 0) Color(customColors.labelContainer) else Color(0xFFF7F2FA)
             )
-            generateColorScheme(userPalette, darkTheme)
+            generateColorScheme(userPalette, effectiveDarkTheme)
         } else {
-            val customSeedColor = if (darkTheme) customNightPrimary else customPrimary
+            val customSeedColor = if (effectiveDarkTheme) customNightPrimary else customPrimary
             ThemeEngine.getColorScheme(
                 context = context,
                 mode = appThemeMode,
-                darkTheme = darkTheme,
+                darkTheme = effectiveDarkTheme,
                 isAmoled = isPureBlack,
                 paletteStyle = paletteStyleValue,
                 materialVersion = materialVersion,
@@ -73,9 +74,11 @@ fun AppTheme(
     }
 
     // 5. 确定种子颜色
-    val themeSeedColor = remember(appThemeMode, colorScheme.primary) {
+    val themeSeedColor = remember(
+        appThemeMode, colorScheme.primary, effectiveDarkTheme, customPrimary, customNightPrimary
+    ) {
         if (appThemeMode == AppThemeMode.Custom) {
-            val seed = if (darkTheme) customNightPrimary else customPrimary
+            val seed = if (effectiveDarkTheme) customNightPrimary else customPrimary
             if (seed != 0) Color(seed) else colorScheme.primary
         } else {
             colorScheme.primary
@@ -84,13 +87,14 @@ fun AppTheme(
 
     // 6. 构造 Legado 主题模式数据
     val themeColors = remember(
-        colorScheme, darkTheme, themeSeedColor, paletteStyleValue, composeEngine, appThemeMode
+        colorScheme, effectiveDarkTheme, themeSeedColor, paletteStyleValue, composeEngine,
+        appThemeMode, themeModeValue
     ) {
         val paletteStyle = ThemeResolver.resolvePaletteStyle(paletteStyleValue)
-        val colorSchemeMode = ThemeResolver.resolveColorSchemeMode(ThemeConfig.themeMode)
+        val colorSchemeMode = ThemeResolver.resolveColorSchemeMode(themeModeValue)
         LegadoThemeMode(
             colorScheme = colorScheme,
-            isDark = darkTheme,
+            isDark = effectiveDarkTheme,
             seedColor = themeSeedColor,
             paletteStyle = paletteStyle,
             themeMode = colorSchemeMode,

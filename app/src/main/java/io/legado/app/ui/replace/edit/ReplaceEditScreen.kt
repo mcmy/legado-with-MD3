@@ -5,8 +5,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,69 +17,58 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.BottomAppBar
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import io.legado.app.ui.widget.components.AppFloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import io.legado.app.R
+import io.legado.app.ui.widget.components.AppFloatingActionButton
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
-import io.legado.app.ui.widget.components.button.MediumIconButton
 import io.legado.app.ui.widget.components.button.ToggleChip
-import io.legado.app.ui.widget.components.topbar.TopBarActionButton
-import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import io.legado.app.ui.widget.components.button.series.MediumPlainButton
 import io.legado.app.ui.widget.components.checkBox.CheckboxItem
-import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
+import io.legado.app.ui.widget.components.topbar.TopBarActionButton
+import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -92,22 +79,50 @@ fun keyboardAsState(): State<Boolean> {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun ReplaceEditScreen(
+fun ReplaceEditRouteScreen(
+    viewModel: ReplaceEditViewModel = koinViewModel(),
     onBack: () -> Unit,
     onSaveSuccess: () -> Unit,
-    viewModel: ReplaceEditViewModel = koinViewModel()
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.effects.collectLatest { effect ->
+            when (effect) {
+                ReplaceEditEffect.NavigateBack -> onSaveSuccess()
+            }
+        }
+    }
+
+    ReplaceEditScreen(
+        state = state,
+        onIntent = viewModel::onIntent,
+        onBack = onBack,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun ReplaceEditScreen(
+    state: ReplaceEditUiState,
+    onIntent: (ReplaceEditIntent) -> Unit,
+    onBack: () -> Unit,
+) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     var showMenu by remember { mutableStateOf(false) }
     val isKeyboardVisible by keyboardAsState()
+    val focusManager = LocalFocusManager.current
+    val onSave = {
+        focusManager.clearFocus(force = true)
+        onIntent(ReplaceEditIntent.Save)
+    }
 
     AppScaffold(
         modifier = Modifier
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             GlassMediumFlexibleTopAppBar(
-                title = if (state.id > 0) "编辑替换规则" else "新增替换规则",
+                title = stringResource(if (state.id > 0) R.string.edit_replace_rule else R.string.add_replace_rule),
                 navigationIcon = {
                     TopBarNavigationButton(onClick = onBack)
                 },
@@ -118,34 +133,32 @@ fun ReplaceEditScreen(
                         exit = fadeOut()
                     ) {
                         TopBarActionButton(
-                            onClick = {
-                                viewModel.save(onSaveSuccess)
-                            },
+                            onClick = onSave,
                             imageVector = Icons.Default.Save,
-                            contentDescription = "保存"
+                            contentDescription = stringResource(R.string.action_save)
                         )
                     }
                     TopBarActionButton(
                         onClick = { showMenu = true },
                         imageVector = Icons.Default.MoreVert,
-                        contentDescription = "更多操作"
+                        contentDescription = stringResource(R.string.more_actions)
                     )
                     RoundDropdownMenu(
                         expanded = showMenu,
                         onDismissRequest = { showMenu = false }
                     ) {
                         RoundDropdownMenuItem(
-                            text = "复制规则",
+                            text = stringResource(R.string.copy_rule),
                             onClick = {
                                 showMenu = false
-                                viewModel.copyRule()
+                                onIntent(ReplaceEditIntent.CopyRule)
                             }
                         )
                         RoundDropdownMenuItem(
-                            text = "粘贴规则",
+                            text = stringResource(R.string.paste_rule),
                             onClick = {
                                 showMenu = false
-                                viewModel.pasteRule(onSuccess = {})
+                                onIntent(ReplaceEditIntent.PasteRule)
                             }
                         )
                     }
@@ -161,11 +174,10 @@ fun ReplaceEditScreen(
                         visible = !isKeyboardVisible,
                         alignment = Alignment.BottomEnd,
                     ),
-                onClick = { viewModel.save(onSaveSuccess) },
-                tooltipText = "添加"
-            ) {
-                AppIcon(Icons.Default.Save, contentDescription = "保存")
-            }
+                onClick = onSave,
+                tooltipText = stringResource(R.string.action_save),
+                icon = Icons.Default.Save
+            )
         }, contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { innerPadding ->
         Box(
@@ -186,7 +198,7 @@ fun ReplaceEditScreen(
                     .zIndex(1f)
             ) {
                 QuickInputBar(
-                    onInsert = { text -> viewModel.insertTextAtCursor(text) }
+                    onInsert = { text -> onIntent(ReplaceEditIntent.InsertTextAtCursor(text)) }
                 )
             }
             Column(
@@ -199,13 +211,12 @@ fun ReplaceEditScreen(
 
                 AppTextField(
                     value = state.name,
-                    onValueChange = viewModel::onNameChange,
-                    label = "规则名称",
+                    onValueChange = { onIntent(ReplaceEditIntent.OnNameChange(it)) },
+                    label = stringResource(R.string.rule_name),
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
-                            if (it.isFocused) viewModel.activeField =
-                                ReplaceEditViewModel.ActiveField.Name
+                            if (it.isFocused) onIntent(ReplaceEditIntent.SetActiveField(ActiveField.Name))
                         },
                     singleLine = true
                 )
@@ -213,33 +224,31 @@ fun ReplaceEditScreen(
                 GroupSelector(
                     currentGroup = state.group,
                     allGroups = state.allGroups,
-                    onGroupChange = viewModel::onGroupChange,
-                    onManageClick = { viewModel.toggleGroupDialog(true) }
+                    onGroupChange = { onIntent(ReplaceEditIntent.OnGroupChange(it)) },
+                    onManageClick = { onIntent(ReplaceEditIntent.ToggleGroupDialog(true)) }
                 )
 
                 AppTextField(
                     value = state.pattern,
-                    onValueChange = viewModel::onPatternChange,
-                    label = "匹配规则",
-                    placeholder = { AppText("输入正则表达式或关键字") },
+                    onValueChange = { onIntent(ReplaceEditIntent.OnPatternChange(it)) },
+                    label = stringResource(R.string.match_pattern),
+                    placeholder = { AppText(stringResource(R.string.input_regex_or_keyword)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
-                            if (it.isFocused) viewModel.activeField =
-                                ReplaceEditViewModel.ActiveField.Pattern
+                            if (it.isFocused) onIntent(ReplaceEditIntent.SetActiveField(ActiveField.Pattern))
                         }
                 )
 
                 AppTextField(
                     value = state.replacement,
-                    onValueChange = viewModel::onReplacementChange,
-                    label = "替换为",
-                    placeholder = { AppText("输入替换内容或捕获组") },
+                    onValueChange = { onIntent(ReplaceEditIntent.OnReplacementChange(it)) },
+                    label = stringResource(R.string.replace_with),
+                    placeholder = { AppText(stringResource(R.string.input_replacement_or_group)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
-                            if (it.isFocused) viewModel.activeField =
-                                ReplaceEditViewModel.ActiveField.Replacement
+                            if (it.isFocused) onIntent(ReplaceEditIntent.SetActiveField(ActiveField.Replacement))
                         }
                 )
 
@@ -249,62 +258,60 @@ fun ReplaceEditScreen(
                     horizontalArrangement = Arrangement.Start
                 ) {
                     ToggleChip(
-                        label = "标题",
+                        label = stringResource(R.string.title),
                         selected = state.scopeTitle,
-                        checkedContentDescription = "已选择",
-                        onToggle = { viewModel.onScopeTitleChange(!state.scopeTitle) }
+                        checkedContentDescription = stringResource(R.string.title),
+                        onToggle = { onIntent(ReplaceEditIntent.OnScopeTitleChange(!state.scopeTitle)) }
                     )
 
                     Spacer(Modifier.width(8.dp))
 
                     ToggleChip(
-                        label = "内容",
+                        label = stringResource(R.string.content),
                         selected = state.scopeContent,
-                        checkedContentDescription = "已选择",
-                        onToggle = { viewModel.onScopeContentChange(!state.scopeContent) }
+                        checkedContentDescription = stringResource(R.string.content),
+                        onToggle = { onIntent(ReplaceEditIntent.OnScopeContentChange(!state.scopeContent)) }
                     )
 
                     Spacer(Modifier.weight(1f))
 
                     ToggleChip(
-                        label = "使用正则",
+                        label = stringResource(R.string.use_regex),
                         selected = state.isRegex,
-                        checkedContentDescription = "正则已启用",
-                        onToggle = { viewModel.onRegexChange(!state.isRegex) }
+                        checkedContentDescription = stringResource(R.string.regex_enabled),
+                        onToggle = { onIntent(ReplaceEditIntent.OnRegexChange(!state.isRegex)) }
                     )
 
                 }
 
                 AppTextField(
                     value = state.scope,
-                    onValueChange = viewModel::onScopeChange,
-                    label = "特定范围",
-                    placeholder = { AppText("指定规则适用的范围") },
+                    onValueChange = { onIntent(ReplaceEditIntent.OnScopeChange(it)) },
+                    label = stringResource(R.string.specific_scope),
+                    placeholder = { AppText(stringResource(R.string.scope_hint)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
-                            if (it.isFocused) viewModel.activeField =
-                                ReplaceEditViewModel.ActiveField.Scope
+                            if (it.isFocused) onIntent(ReplaceEditIntent.SetActiveField(ActiveField.Scope))
                         }
                 )
 
                 AppTextField(
                     value = state.excludeScope,
-                    onValueChange = viewModel::onExcludeScopeChange,
-                    label = "排除范围",
-                    placeholder = { AppText("指定规则不适用的范围") },
+                    onValueChange = { onIntent(ReplaceEditIntent.OnExcludeScopeChange(it)) },
+                    label = stringResource(R.string.exclude_scope),
+                    placeholder = { AppText(stringResource(R.string.exclude_scope_hint)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
-                            if (it.isFocused) viewModel.activeField =
-                                ReplaceEditViewModel.ActiveField.Exclude
+                            if (it.isFocused) onIntent(ReplaceEditIntent.SetActiveField(ActiveField.Exclude))
                         }
                 )
 
                 AppTextField(
                     value = state.timeout,
-                    onValueChange = viewModel::onTimeoutChange,
-                    label = "超时 (ms)",
+                    onValueChange = { onIntent(ReplaceEditIntent.OnTimeoutChange(it)) },
+                    label = stringResource(R.string.timeout_ms),
                     placeholder = { AppText("3000") },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -316,8 +323,8 @@ fun ReplaceEditScreen(
             ManageGroupDialog(
                 show = state.showGroupDialog,
                 groups = state.allGroups.filter { it != "默认" },
-                onDismiss = { viewModel.toggleGroupDialog(false) },
-                onDelete = { viewModel.deleteGroups(it) }
+                onDismiss = { onIntent(ReplaceEditIntent.ToggleGroupDialog(false)) },
+                onDelete = { onIntent(ReplaceEditIntent.DeleteGroups(it)) }
             )
         }
     }
@@ -343,7 +350,7 @@ fun GroupSelector(
             AppTextField(
                 value = currentGroup,
                 onValueChange = onGroupChange,
-                label = "分组",
+                label = stringResource(R.string.group),
                 placeholder = { AppText("默认") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 modifier = Modifier
@@ -368,9 +375,9 @@ fun GroupSelector(
                 }
             }
         }
-        MediumIconButton(
+        MediumPlainButton(
             onClick = onManageClick,
-            imageVector = Icons.Default.Settings
+            icon = Icons.Default.Settings
         )
     }
 }
@@ -387,10 +394,10 @@ fun ManageGroupDialog(
     AppAlertDialog(
         show = show,
         onDismissRequest = onDismiss,
-        title = "分组管理",
+        title = stringResource(R.string.group_management),
         content = {
             if (groups.isEmpty()) {
-                AppText("暂无其他分组")
+                AppText(stringResource(R.string.no_other_groups))
             } else {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -413,11 +420,11 @@ fun ManageGroupDialog(
                 }
             }
         },
-        confirmText = "删除选中",
+        confirmText = stringResource(R.string.delete_selected),
         onConfirm = {
             onDelete(selectedGroups.toList())
         },
-        dismissText = "关闭",
+        dismissText = stringResource(R.string.close),
         onDismiss = onDismiss
     )
 }

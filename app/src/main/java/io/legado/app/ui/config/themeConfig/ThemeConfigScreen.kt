@@ -3,8 +3,6 @@ package io.legado.app.ui.config.themeConfig
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.graphics.Typeface
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -20,7 +18,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,8 +28,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,7 +42,6 @@ import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -72,32 +66,30 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.constraintlayout.compose.ConstraintLayout
-import com.google.android.material.color.DynamicColors
-import com.google.android.material.color.DynamicColorsOptions
+import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.base.AppContextWrapper
-import io.legado.app.constant.PreferKey
 import io.legado.app.constant.EventBus
 import io.legado.app.help.LauncherIconHelp
-import io.legado.app.help.loadFontFiles
-import io.legado.app.help.config.AppConfig
-import io.legado.app.help.config.OldThemeConfig
-import io.legado.app.lib.theme.ThemeStore
-import io.legado.app.lib.theme.primaryColor
+import io.legado.app.help.config.ThemeConfigStore
+import io.legado.app.ui.config.labConfig.LabConfig
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.ThemeEngine
 import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.widget.components.AppScaffold
-import io.legado.app.ui.widget.components.AppTextField
+import io.legado.app.ui.widget.components.FontFolderState
+import io.legado.app.ui.widget.components.FontSelectSheet
 import io.legado.app.ui.widget.components.SplicedColumnGroup
-import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
-import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
-import io.legado.app.ui.widget.components.button.SmallIconButton
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.dialog.ColorPickerSheet
+import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.DropdownListSettingItem
 import io.legado.app.ui.widget.components.settingItem.SliderSettingItem
@@ -105,18 +97,12 @@ import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
-import io.legado.app.utils.FileDoc
-import io.legado.app.utils.getPrefString
+import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
 import io.legado.app.utils.postEvent
-import io.legado.app.utils.putPrefString
 import io.legado.app.utils.restart
 import io.legado.app.utils.takePersistablePermissionSafely
 import io.legado.app.utils.toastOnUi
 import org.koin.androidx.compose.koinViewModel
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.basic.Card as MiuixCard
-import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
-import top.yukonga.miuix.kmp.basic.Text as MiuixText
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -137,27 +123,26 @@ fun ThemeConfigScreen(
     var showLauncherIconPicker by remember { mutableStateOf(false) }
     var showBorderColorPicker by remember { mutableStateOf(false) }
     var showNavIconSheet by remember { mutableStateOf(false) }
+    var showMainNavigationSheet by remember { mutableStateOf(false) }
     var showFontSheet by remember { mutableStateOf(false) }
-    var fontItems by remember { mutableStateOf<List<FileDoc>>(emptyList()) }
-    var fontFolderUri by remember { mutableStateOf<Uri?>(null) }
+    val showThemeRefactorTip by viewModel.showThemeRefactorTip.collectAsStateWithLifecycle()
 
-    fun loadFonts() {
-        fontItems = loadFontFiles(context, fontFolderUri)
-    }
-    remember {
-        val saved = context.getPrefString(PreferKey.fontFolder)
-        if (!saved.isNullOrEmpty()) fontFolderUri = Uri.parse(saved)
-        loadFonts()
+    val fontFolder by viewModel.fontFolder.collectAsStateWithLifecycle()
+    val fontFolderState = remember(fontFolder) {
+        val folder = fontFolder
+        if (folder == null) {
+            FontFolderState.Loading
+        } else {
+            FontFolderState.Loaded(folder.takeIf { it.isNotEmpty() }?.toUri())
+        }
     }
 
     val fontFolderLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         if (uri != null) {
-            fontFolderUri = uri
             uri.takePersistablePermissionSafely(context, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            context.putPrefString(PreferKey.fontFolder, uri.toString())
-            loadFonts()
+            viewModel.setFontFolder(uri.toString())
         }
     }
 
@@ -218,16 +203,28 @@ fun ThemeConfigScreen(
                     themeItems.zip(themeValues).toList()
                 }
 
-                if (isMiuixEngine) {
-                    MiuixCard(
+                AnimatedVisibility(visible = showThemeRefactorTip) {
+                    GlassCard(
                         cornerRadius = 16.dp,
-                        insideMargin = PaddingValues(16.dp),
-                        colors = MiuixCardDefaults.defaultColors(
-                            color = MiuixTheme.colorScheme.primaryVariant,
-                            contentColor = MiuixTheme.colorScheme.onPrimary
-                        )
+                        modifier = Modifier.padding(bottom = 16.dp)
                     ) {
-                        MiuixText("Miuix 目前为测试主题，且不对基于View的界面生效！")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            AppText(
+                                text = "仍有部分界面未用Compose重构，这些界面会与大部分界面有较大差异。",
+                                style = LegadoTheme.typography.labelLargeEmphasized,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SmallPlainButton(
+                                icon = AppIcons.Close,
+                                contentDescription = "关闭",
+                                onClick = {
+                                    viewModel.setShowThemeRefactorTip(false)
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -242,7 +239,7 @@ fun ThemeConfigScreen(
                             onValueChange = { mode ->
                                 selectedThemeMode = mode
                                 ThemeConfig.themeMode = mode
-                                OldThemeConfig.applyDayNight(context)
+                                ThemeConfigStore.applyDayNight(context)
                             }
                         )
 
@@ -282,7 +279,7 @@ fun ThemeConfigScreen(
                             onModeSelected = { mode ->
                                 selectedThemeMode = mode
                                 ThemeConfig.themeMode = mode
-                                OldThemeConfig.applyDayNight(context)
+                                ThemeConfigStore.applyDayNight(context)
                             }
                         )
                     }
@@ -290,9 +287,12 @@ fun ThemeConfigScreen(
                     if (!isMiuixEngine) {
                         Spacer(modifier = Modifier.height(16.dp))
 
+                        val visibleThemes = themes.filter { (_, value) ->
+                            value != "4" || (LabConfig.labEnabled && LabConfig.eInkDisplay)
+                        }
                         ThemeColorSelector(
                             context = context,
-                            themes = themes,
+                            themes = visibleThemes,
                             selectedTheme = selectedTheme,
                             isDark = isDarkTheme,
                             isAmoled = ThemeConfig.isPureBlack,
@@ -307,7 +307,7 @@ fun ThemeConfigScreen(
                                         context.toastOnUi(R.string.transparent_theme_alarm)
                                         return@ThemeColorSelector
                                     } else {
-                                        AppConfig.containerOpacity = 0
+                                        ThemeConfig.containerOpacity = 0
                                     }
                                 }
                                 val oldTheme = selectedTheme
@@ -376,20 +376,18 @@ fun ThemeConfigScreen(
                 }
 
                 SplicedColumnGroup(title = stringResource(R.string.main_activity)) {
-                    SwitchSettingItem(
-                        title = stringResource(R.string.show_discovery),
-                        checked = ThemeConfig.showDiscovery,
-                        onCheckedChange = { ThemeConfig.showDiscovery = it }
-                    )
-                    SwitchSettingItem(
-                        title = stringResource(R.string.show_rss),
-                        checked = ThemeConfig.showRss,
-                        onCheckedChange = { ThemeConfig.showRss = it }
+                    ClickableSettingItem(
+                        title = stringResource(R.string.main_navigation_settings),
+                        description = stringResource(R.string.main_navigation_settings_summary),
+                        onClick = { showMainNavigationSheet = true },
                     )
                     SwitchSettingItem(
                         title = stringResource(R.string.show_status),
                         checked = ThemeConfig.showStatusBar,
-                        onCheckedChange = { ThemeConfig.showStatusBar = it }
+                        onCheckedChange = {
+                            ThemeConfig.showStatusBar = it
+                            postEvent(EventBus.NOTIFY_MAIN, true)
+                        }
                     )
                     //TODO:这个可以不要了，在删掉原来的设置页以后删
                     SwitchSettingItem(
@@ -420,8 +418,8 @@ fun ThemeConfigScreen(
                                 onCheckedChange = { ThemeConfig.useFloatingBottomBarLiquidGlass = it }
                             )
                             SliderSettingItem(
-                                title = "底栏模糊强度",
-                                description = "控制液态玻璃的扭曲程度",
+                                title = stringResource(R.string.theme_config_bottom_bar_lens_radius),
+                                description = stringResource(R.string.theme_config_bottom_bar_lens_radius_summary),
                                 value = ThemeConfig.bottomBarLensRadius,
                                 defaultValue = 24f,
                                 valueRange = 0f..50f,
@@ -444,13 +442,119 @@ fun ThemeConfigScreen(
                         entryValues = stringArrayResource(R.array.label_vis_mode_value),
                         onValueChange = { ThemeConfig.labelVisibilityMode = it }
                     )
-                    DropdownListSettingItem(
-                        title = stringResource(R.string.default_home_page),
-                        selectedValue = ThemeConfig.defaultHomePage,
-                        displayEntries = stringArrayResource(R.array.default_home_page),
-                        entryValues = stringArrayResource(R.array.default_home_page_value),
-                        onValueChange = { ThemeConfig.defaultHomePage = it }
+                }
+
+                SplicedColumnGroup(title = stringResource(R.string.eye_protection)) {
+                    var eyeProtectionEnabled by remember {
+                        mutableStateOf(ThemeConfig.eyeProtectionEnabled)
+                    }
+                    var colorTemperature by remember {
+                        mutableIntStateOf(ThemeConfig.colorTemperature)
+                    }
+                    var eyeProtectionSchedule by remember {
+                        mutableStateOf(ThemeConfig.eyeProtectionSchedule)
+                    }
+                    var eyeProtectionStartTime by remember {
+                        mutableStateOf(ThemeConfig.eyeProtectionStartTime)
+                    }
+                    var eyeProtectionEndTime by remember {
+                        mutableStateOf(ThemeConfig.eyeProtectionEndTime)
+                    }
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.eye_protection_enabled),
+                        description = stringResource(R.string.eye_protection_enabled_summary),
+                        checked = eyeProtectionEnabled,
+                        onCheckedChange = {
+                            eyeProtectionEnabled = it
+                            ThemeConfig.eyeProtectionEnabled = it
+                        }
                     )
+
+                    AnimatedVisibility(visible = eyeProtectionEnabled) {
+                        Column {
+                            SliderSettingItem(
+                                title = stringResource(R.string.color_temperature),
+                                description = stringResource(
+                                    R.string.color_temperature_summary,
+                                    colorTemperature
+                                ),
+                                value = colorTemperature.toFloat(),
+                                defaultValue = 50f,
+                                valueRange = 0f..100f,
+                                steps = 99,
+                                onValueChange = {
+                                    colorTemperature = it.toInt()
+                                    ThemeConfig.colorTemperature = it.toInt()
+                                }
+                            )
+
+                            SwitchSettingItem(
+                                title = stringResource(R.string.eye_protection_schedule),
+                                description = stringResource(R.string.eye_protection_schedule_summary),
+                                checked = eyeProtectionSchedule,
+                                onCheckedChange = {
+                                    eyeProtectionSchedule = it
+                                    ThemeConfig.eyeProtectionSchedule = it
+                                }
+                            )
+
+                            AnimatedVisibility(visible = eyeProtectionSchedule) {
+                                Column {
+                                    ClickableSettingItem(
+                                        title = stringResource(R.string.eye_protection_start_time),
+                                        option = eyeProtectionStartTime,
+                                        onClick = {
+                                            val parts = eyeProtectionStartTime.split(":")
+                                            val hour = parts.getOrNull(0)?.toIntOrNull() ?: 22
+                                            val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                                            android.app.TimePickerDialog(
+                                                context,
+                                                { _, h, m ->
+                                                    val timeStr = String.format(
+                                                        java.util.Locale.US,
+                                                        "%02d:%02d",
+                                                        h.coerceIn(0, 23),
+                                                        m.coerceIn(0, 59)
+                                                    )
+                                                    eyeProtectionStartTime = timeStr
+                                                    ThemeConfig.eyeProtectionStartTime = timeStr
+                                                },
+                                                hour.coerceIn(0, 23),
+                                                minute.coerceIn(0, 59),
+                                                true
+                                            ).show()
+                                        }
+                                    )
+                                    ClickableSettingItem(
+                                        title = stringResource(R.string.eye_protection_end_time),
+                                        option = eyeProtectionEndTime,
+                                        onClick = {
+                                            val parts = eyeProtectionEndTime.split(":")
+                                            val hour = parts.getOrNull(0)?.toIntOrNull() ?: 7
+                                            val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
+                                            android.app.TimePickerDialog(
+                                                context,
+                                                { _, h, m ->
+                                                    val timeStr = String.format(
+                                                        java.util.Locale.US,
+                                                        "%02d:%02d",
+                                                        h.coerceIn(0, 23),
+                                                        m.coerceIn(0, 59)
+                                                    )
+                                                    eyeProtectionEndTime = timeStr
+                                                    ThemeConfig.eyeProtectionEndTime = timeStr
+                                                },
+                                                hour.coerceIn(0, 23),
+                                                minute.coerceIn(0, 59),
+                                                true
+                                            ).show()
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 SplicedColumnGroup(title = stringResource(R.string.compose_related)) {
@@ -483,30 +587,30 @@ fun ThemeConfigScreen(
                     }
                     if (ThemeConfig.enableBlur) {
                         SliderSettingItem(
-                            title = "顶栏模糊半径",
-                            description = "模糊半径越大，系统运行越卡顿",
+                            title = stringResource(R.string.theme_manage_top_bar_blur_radius),
+                            description = stringResource(R.string.theme_config_blur_radius_performance_summary),
                             value = ThemeConfig.topBarBlurRadius.toFloat(),
                             defaultValue = 24f,
                             valueRange = 0f..30f,
                             onValueChange = { ThemeConfig.topBarBlurRadius = it.toInt() }
                         )
                         SliderSettingItem(
-                            title = "底栏模糊半径",
-                            description = "模糊半径越大，系统运行越卡顿",
+                            title = stringResource(R.string.theme_manage_bottom_bar_blur_radius),
+                            description = stringResource(R.string.theme_config_blur_radius_performance_summary),
                             value = ThemeConfig.bottomBarBlurRadius.toFloat(),
                             defaultValue = 8f,
                             valueRange = 0f..10f,
                             onValueChange = { ThemeConfig.bottomBarBlurRadius = it.toInt() }
                         )
                         SliderSettingItem(
-                            title = "顶栏模糊透明度",
+                            title = stringResource(R.string.theme_manage_top_bar_blur_opacity),
                             value = ThemeConfig.topBarBlurAlpha.toFloat(),
                             defaultValue = 73f,
                             valueRange = 0f..100f,
                             onValueChange = { ThemeConfig.topBarBlurAlpha = it.toInt() }
                         )
                         SliderSettingItem(
-                            title = "底栏模糊透明度",
+                            title = stringResource(R.string.theme_manage_bottom_bar_blur_opacity),
                             value = ThemeConfig.bottomBarBlurAlpha.toFloat(),
                             defaultValue = 40f,
                             valueRange = 0f..100f,
@@ -610,15 +714,15 @@ fun ThemeConfigScreen(
 
             // Container settings
             item {
-                SplicedColumnGroup(title = "容器设置") {
+                SplicedColumnGroup(title = stringResource(R.string.theme_manage_section_container)) {
                     SwitchSettingItem(
-                        title = "显示分割线",
+                        title = stringResource(R.string.show_divider_line),
                         checked = ThemeConfig.enableItemDivider,
                         onCheckedChange = { ThemeConfig.enableItemDivider = it }
                     )
                     if (ThemeConfig.enableItemDivider) {
                         SliderSettingItem(
-                            title = "分割线粗细",
+                            title = stringResource(R.string.theme_config_divider_width),
                             description = "${ThemeConfig.itemDividerWidth}dp",
                             value = ThemeConfig.itemDividerWidth,
                             defaultValue = 1f,
@@ -627,7 +731,7 @@ fun ThemeConfigScreen(
                             onValueChange = { ThemeConfig.itemDividerWidth = it }
                         )
                         SliderSettingItem(
-                            title = "分割线长度",
+                            title = stringResource(R.string.theme_config_divider_length),
                             description = "${ThemeConfig.itemDividerLength.toInt()}%",
                             value = ThemeConfig.itemDividerLength,
                             defaultValue = 80f,
@@ -636,7 +740,7 @@ fun ThemeConfigScreen(
                             onValueChange = { ThemeConfig.itemDividerLength = it }
                         )
                         ClickableSettingItem(
-                            title = "分割线颜色",
+                            title = stringResource(R.string.tip_divider_color),
                             option = if (ThemeConfig.itemDividerColor != 0) "#${Integer.toHexString(ThemeConfig.itemDividerColor).uppercase()}" else stringResource(R.string.click_to_select),
                             onClick = {
                                 showBorderColorPicker = true
@@ -648,7 +752,11 @@ fun ThemeConfigScreen(
                                             .size(28.dp)
                                             .clip(CircleShape)
                                             .background(Color(ThemeConfig.itemDividerColor))
-                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                            .border(
+                                                1.dp,
+                                                MaterialTheme.colorScheme.outlineVariant,
+                                                CircleShape
+                                            )
                                     )
                                 }
                             }
@@ -659,16 +767,21 @@ fun ThemeConfigScreen(
 
             // Nav icon settings
             item {
-                SplicedColumnGroup(title = "导航栏图标设置") {
+                SplicedColumnGroup(title = stringResource(R.string.theme_config_nav_icon_settings)) {
                     val customCount = listOf(
+                        ThemeConfig.navIconHome,
                         ThemeConfig.navIconBookshelf,
                         ThemeConfig.navIconExplore,
                         ThemeConfig.navIconRss,
                         ThemeConfig.navIconMy
                     ).count { it.isNotEmpty() }
                     ClickableSettingItem(
-                        title = "导航栏图标",
-                        description = if (customCount > 0) "已设置 $customCount 个自定义图标" else "使用默认图标",
+                        title = stringResource(R.string.theme_config_nav_icons),
+                        description = if (customCount > 0) {
+                            stringResource(R.string.theme_config_nav_icons_custom_count, customCount)
+                        } else {
+                            stringResource(R.string.theme_config_nav_icons_default)
+                        },
                         onClick = { showNavIconSheet = true }
                     )
                 }
@@ -676,10 +789,10 @@ fun ThemeConfigScreen(
 
             // Theme management
             item {
-                SplicedColumnGroup(title = "主题管理") {
+                SplicedColumnGroup(title = stringResource(R.string.theme_pack)) {
                     ClickableSettingItem(
-                        title = "主题管理",
-                        description = "保存、导入、导出主题配置",
+                        title = stringResource(R.string.theme_pack),
+                        description = stringResource(R.string.theme_pack_s),
                         onClick = onNavigateToThemeManage
                     )
                 }
@@ -707,20 +820,20 @@ fun ThemeConfigScreen(
     )
 
 
-    manageKey?.let { isDark ->
-        BackgroundImageManageSheet(
-            show = true,
-            isDarkTheme = isDark,
-            onDismissRequest = { manageKey = null }
-        )
-    }
+    BackgroundImageManageSheet(
+        isDarkTheme = manageKey,
+        onDismissRequest = { manageKey = null }
+    )
 
-    if (showNavIconSheet) {
-        NavIconManageSheet(
-            show = true,
-            onDismissRequest = { showNavIconSheet = false }
-        )
-    }
+    NavIconManageSheet(
+        show = showNavIconSheet,
+        onDismissRequest = { showNavIconSheet = false }
+    )
+
+    MainNavigationSettingsSheet(
+        show = showMainNavigationSheet,
+        onDismissRequest = { showMainNavigationSheet = false },
+    )
 
 
     LauncherIconPickerSheet(
@@ -743,85 +856,29 @@ fun ThemeConfigScreen(
         }
     )
 
-    AppModalBottomSheet(
+    FontSelectSheet(
         show = showFontSheet,
-        onDismissRequest = { showFontSheet = false },
         title = stringResource(R.string.font_setting),
+        folderState = fontFolderState,
+        selectedFontPath = ThemeConfig.appFontPath,
+        onDismissRequest = { showFontSheet = false },
+        onSelectFont = { doc ->
+            ThemeConfig.appFontPath = doc.uri.toString()
+        },
+        onOpenFolderPicker = { fontFolderLauncher.launch(null) },
         startAction = {
-            SmallIconButton(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "清除",
+            SmallPlainButton(
+                icon = Icons.Default.Delete,
+                contentDescription = stringResource(R.string.clear),
                 onClick = {
                     ThemeConfig.appFontPath = null
                     showFontSheet = false
                 }
             )
         },
-        endAction = {
-            SmallIconButton(
-                imageVector = Icons.Default.Add,
-                contentDescription = "选择文件夹",
-                onClick = { fontFolderLauncher.launch(null) }
-            )
-        },
-        content = {
-            if (fontItems.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(120.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "没有字体文件",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    fontItems.forEach { fontDoc ->
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth().height(100.dp),
-                                onClick = {
-                                    ThemeConfig.appFontPath = fontDoc.uri.toString()
-                                    showFontSheet = false
-                                },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                AndroidView(
-                                    factory = { ctx ->
-                                        android.widget.TextView(ctx).apply {
-                                            text = fontDoc.name
-                                            textSize = 14f
-                                            gravity = android.view.Gravity.CENTER
-                                            maxLines = 2
-                                            ellipsize = android.text.TextUtils.TruncateAt.END
-                                            runCatching {
-                                                val typeface: Typeface? = if (fontDoc.uri.scheme == "content") {
-                                                    ctx.contentResolver.openFileDescriptor(fontDoc.uri, "r")?.use {
-                                                        Typeface.Builder(it.fileDescriptor).build()
-                                                    }
-                                                } else {
-                                                    Typeface.createFromFile(fontDoc.uri.path!!)
-                                                }
-                                                this.typeface = typeface
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        folderIcon = Icons.Default.Add,
+        folderContentDescription = stringResource(R.string.select_folder),
+        emptyText = stringResource(R.string.theme_config_no_font_files),
     )
 
 }
@@ -871,7 +928,11 @@ fun ThemeModeSelector(
 
                 Spacer(Modifier.size(ToggleButtonDefaults.IconSpacing))
 
-                Text(text = label)
+                Text(
+                    text = label,
+                    overflow = TextOverflow.Ellipsis,
+                    maxLines = 1
+                )
             }
         }
     }

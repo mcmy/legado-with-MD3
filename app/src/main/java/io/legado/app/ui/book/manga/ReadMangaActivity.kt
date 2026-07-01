@@ -38,11 +38,9 @@ import io.legado.app.data.entities.BookSource
 import io.legado.app.databinding.ActivityMangaBinding
 import io.legado.app.databinding.ViewLoadMoreBinding
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.AppFreezeMonitor.handler
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.isLocal
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.source.getSourceType
 import io.legado.app.help.storage.Backup
@@ -56,6 +54,7 @@ import io.legado.app.model.analyzeRule.AnalyzeRule.Companion.setCoroutineContext
 import io.legado.app.receiver.NetworkChangedListener
 import io.legado.app.ui.book.changesource.ChangeBookSourceDialog
 import io.legado.app.ui.book.info.BookInfoActivity
+import io.legado.app.ui.book.info.READER_RESULT_DELETED
 import io.legado.app.ui.book.manga.config.MangaAutoReadDialog
 import io.legado.app.ui.book.manga.config.MangaClickActionConfigDialog
 import io.legado.app.ui.book.manga.config.MangaColorFilterConfig
@@ -70,17 +69,21 @@ import io.legado.app.ui.book.manga.recyclerview.MangaAdapter
 import io.legado.app.ui.book.manga.recyclerview.MangaLayoutManager
 import io.legado.app.ui.book.manga.recyclerview.ScrollTimer
 import io.legado.app.ui.book.manga.recyclerview.WebtoonFrame
+import io.legado.app.ui.book.read.EyeProtectionRefreshScheduler
 import io.legado.app.ui.book.read.MangaMenu
-import io.legado.app.ui.book.read.ReadBookActivity.Companion.RESULT_DELETED
+import io.legado.app.ui.book.read.observeEyeProtectionEvents
 import io.legado.app.ui.book.source.edit.BookSourceEditActivity
 import io.legado.app.ui.book.toc.TocActivityResult
 import io.legado.app.ui.browser.WebViewActivity
+import io.legado.app.ui.config.readConfig.ReadConfig
+import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
 import io.legado.app.ui.login.SourceLoginActivity
 import io.legado.app.ui.widget.number.NumberPickerDialog
 import io.legado.app.ui.widget.recycler.LoadMoreView
 import io.legado.app.utils.GSON
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.StartActivityContract
+import io.legado.app.utils.buildMainHandler
 import io.legado.app.utils.canScroll
 import io.legado.app.utils.fastBinarySearch
 import io.legado.app.utils.findCenterViewPosition
@@ -138,9 +141,13 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
 
     private var justInitData: Boolean = false
     private var syncDialog: AlertDialog? = null
+    private val handler by lazy { buildMainHandler() }
+    private val eyeProtectionScheduler by lazy {
+        EyeProtectionRefreshScheduler(handler) { binding.eyeProtectionOverlay.refresh() }
+    }
     private val mScrollTimer by lazy {
         ScrollTimer(this, binding.recyclerView, lifecycleScope).apply {
-            setSpeed(AppConfig.mangaAutoPageSpeed)
+            setSpeed(ReadMangaConfig.mangaAutoPageSpeed)
         }
     }
     private var enableAutoScrollPage = false
@@ -178,7 +185,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     private val bookInfoActivity =
         registerForActivityResult(StartActivityContract(BookInfoActivity::class.java)) {
             if (it.resultCode == RESULT_OK) {
-                setResult(RESULT_DELETED)
+                setResult(READER_RESULT_DELETED)
                 super.finish()
             } else {
                 ReadManga.loadOrUpContent()
@@ -212,7 +219,8 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             binding.llRetry.isGone = true
             ReadManga.loadOrUpContent()
         }
-        binding.flLoading.isVisible = !AppConfig.isEInkMode
+        binding.flLoading.isVisible = !ReadConfig.isEInkMode
+        binding.eyeProtectionOverlay.refresh()
         mAdapter.addFooterView {
             ViewLoadMoreBinding.bind(loadMoreView)
         }
@@ -224,7 +232,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         }
         loadMoreView.gone()
         mMangaFooterConfig =
-            GSON.fromJsonObject<MangaFooterConfig>(AppConfig.mangaFooterConfig).getOrNull()
+            GSON.fromJsonObject<MangaFooterConfig>(ReadMangaConfig.mangaFooterConfig).getOrNull()
                 ?: MangaFooterConfig()
 
         onBackPressedDispatcher.addCallback(this){
@@ -242,16 +250,20 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             val item = mAdapter.getItem(binding.recyclerView.findCenterViewPosition())
             upInfoBar(item)
         }
+        observeEyeProtectionEvents(
+            onRefresh = { binding.eyeProtectionOverlay.refresh() },
+            scheduler = eyeProtectionScheduler
+        )
     }
 
     private fun initRecyclerView() {
         val mangaColorFilter =
-            GSON.fromJsonObject<MangaColorFilterConfig>(AppConfig.mangaColorFilter).getOrNull()
+            GSON.fromJsonObject<MangaColorFilterConfig>(ReadMangaConfig.mangaColorFilter).getOrNull()
                 ?: MangaColorFilterConfig()
         mAdapter.run {
             setMangaImageColorFilter(mangaColorFilter)
-            enableMangaEInk(AppConfig.enableMangaEInk, AppConfig.mangaEInkThreshold)
-            enableGray(AppConfig.enableMangaGray)
+            enableMangaEInk(ReadMangaConfig.enableMangaEInk, ReadMangaConfig.mangaEInkThreshold)
+            enableGray(ReadMangaConfig.enableMangaGray)
         }
 
         viewModel.initData(intent) {
@@ -264,8 +276,8 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             itemAnimator = null
             layoutManager = mLayoutManager
             setHasFixedSize(true)
-            setDisableMangaScale(AppConfig.disableMangaScale)
-            setRecyclerViewPreloader(AppConfig.mangaPreDownloadNum)
+            setDisableMangaScale(ReadMangaConfig.disableMangaScale)
+            setRecyclerViewPreloader(ReadMangaConfig.mangaPreDownloadNum)
             setPreScrollListener { _, _, _, position ->
                 if (mAdapter.isNotEmpty()) {
                     val item = mAdapter.getItem(position)
@@ -445,7 +457,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {
             // 当网络是可用状态且无需初始化时同步进度（初始化中已有同步进度逻辑）
-            if (AppConfig.syncBookProgressPlus && NetworkUtils.isAvailable() && !justInitData) {
+            if (ReadConfig.syncBookProgressPlus && NetworkUtils.isAvailable() && !justInitData) {
                 ReadManga.syncProgress({ progress -> sureNewProgress(progress) })
             }
         }
@@ -457,14 +469,17 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         }
         ReadManga.initReadTime()
         ReadManga.startAutoSaveSession()
+        binding.eyeProtectionOverlay.refresh()
+        eyeProtectionScheduler.schedule()
     }
 
     override fun onPause() {
         super.onPause()
+        eyeProtectionScheduler.cancel()
         if (ReadManga.inBookshelf) {
             ReadManga.saveRead()
             if (!BuildConfig.DEBUG) {
-                if (AppConfig.syncBookProgressPlus) {
+                if (ReadConfig.syncBookProgressPlus) {
                     ReadManga.syncProgress()
                 } else {
                     ReadManga.uploadProgress()
@@ -483,7 +498,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     override fun onColorSelected(dialogId: Int, color: Int){
         if (dialogId == MANGA_B)
         {
-            AppConfig.mangaBackground = color
+            ReadMangaConfig.mangaBackground = color
             setBackground()
         }
     }
@@ -686,9 +701,9 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
                 showNumberPickerDialog(
                     0,
                     getString(R.string.pre_download),
-                    AppConfig.mangaPreDownloadNum
+                    ReadMangaConfig.mangaPreDownloadNum
                 ) {
-                    AppConfig.mangaPreDownloadNum = it
+                    ReadMangaConfig.mangaPreDownloadNum = it
                     item.title = getString(R.string.pre_download_m, it)
                     setRecyclerViewPreloader(it)
                 }
@@ -736,26 +751,26 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             mangaScrollMode = mode
         }
         setScrollMode(mode)
-        updateWebtoonSidePadding(AppConfig.webtoonSidePaddingDp)
+        updateWebtoonSidePadding(ReadMangaConfig.webtoonSidePaddingDp)
         setAutoReadEnabled(false)
     }
 
     //点击滑动
     override fun onClickScrollDisabledChanged(disabled: Boolean) {
-        AppConfig.disableClickScroll = disabled
+        ReadMangaConfig.disableClickScroll = disabled
     }
 
     override fun onScrollAniDisabledChanged(disabled: Boolean) {
-        AppConfig.disableMangaScrollAnimation = disabled
+        ReadMangaConfig.disableMangaScrollAnimation = disabled
     }
 
     override fun onCrossFadeDisabledChanged(disabled: Boolean) {
-        AppConfig.disableMangaCrossFade = disabled
+        ReadMangaConfig.disableMangaCrossFade = disabled
     }
 
     //双击缩放
     override fun onMangaScaleDisabledChanged(disabled: Boolean) {
-        AppConfig.disableMangaScale = disabled
+        ReadMangaConfig.disableMangaScale = disabled
         setDisableMangaScale(disabled)
     }
 
@@ -769,16 +784,16 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
 
     //墨水屏
     override fun updateEpaperMode(enabled: Boolean, threshold: Int) {
-        AppConfig.enableMangaEInk = enabled
-        AppConfig.enableMangaGray = false
-        AppConfig.mangaEInkThreshold = threshold
+        ReadMangaConfig.enableMangaEInk = enabled
+        ReadMangaConfig.enableMangaGray = false
+        ReadMangaConfig.mangaEInkThreshold = threshold
         mAdapter.enableMangaEInk(enabled, threshold)
     }
 
     //灰度
     override fun updateGrayMode(enabled: Boolean) {
-        AppConfig.enableMangaGray = enabled
-        AppConfig.enableMangaEInk = false
+        ReadMangaConfig.enableMangaGray = enabled
+        ReadMangaConfig.enableMangaEInk = false
         mAdapter.enableGray(enabled)
     }
 
@@ -796,28 +811,25 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     //自动翻页速度
     override fun onAutoPageSpeedChanged(speed: Int) {
         setAutoReadEnabled(false)
-        AppConfig.mangaAutoPageSpeed = speed
+        ReadMangaConfig.mangaAutoPageSpeed = speed
         mScrollTimer.setSpeed(speed)
         setAutoReadEnabled(enableScroll)
-//        if (enableAutoScrollPage) {
-//            mScrollTimer.isEnabledPage = true
-//        }
     }
 
     override fun onMangaLongClickChanged(checked: Boolean) {
-        AppConfig.mangaLongClick = checked
+        ReadMangaConfig.mangaLongClick = checked
     }
 
     override fun onVolumeKeyPageChanged(enable: Boolean) {
-        AppConfig.MangaVolumeKeyPage = enable
+        ReadMangaConfig.mangaVolumeKeyPage = enable
     }
 
     override fun onReverseVolumeKeyPageChanged(enable: Boolean) {
-        AppConfig.reverseVolumeKeyPage = enable
+        ReadMangaConfig.reverseVolumeKeyPage = enable
     }
 
     override fun onHideMangaTitleChanged(hide: Boolean) {
-        AppConfig.hideMangaTitle = hide
+        ReadMangaConfig.hideMangaTitle = hide
         ReadManga.loadContent()
     }
 
@@ -934,8 +946,8 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     }
 
     private fun setBackground() {
-        binding.webtoonFrame.setBackgroundColor(AppConfig.mangaBackground)
-        binding.recyclerView.setBackgroundColor(AppConfig.mangaBackground)
+        binding.webtoonFrame.setBackgroundColor(ReadMangaConfig.mangaBackground)
+        binding.recyclerView.setBackgroundColor(ReadMangaConfig.mangaBackground)
         mAdapter.notifyItemRangeChanged(0, mAdapter.itemCount)
     }
 
@@ -954,7 +966,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     private fun upMenu(menu: Menu) {
         this.mMenu = menu
         menu.findItem(R.id.menu_pre_manga_number).title =
-            getString(R.string.pre_download_m, AppConfig.mangaPreDownloadNum)
+            getString(R.string.pre_download_m, ReadMangaConfig.mangaPreDownloadNum)
     }
 
     private fun setDisableMangaScale(disable: Boolean) {
@@ -975,12 +987,12 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     }
 
     private fun scrollToNext() {
-        if (!AppConfig.disableClickScroll)
+        if (!ReadMangaConfig.disableClickScroll)
             scrollPageTo(1)
     }
 
     private fun scrollToPrev() {
-        if (!AppConfig.disableClickScroll)
+        if (!ReadMangaConfig.disableClickScroll)
             scrollPageTo(-1)
     }
 
@@ -1006,7 +1018,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         }
         dx *= direction
         dy *= direction
-        if (!AppConfig.disableMangaScrollAnimation)
+        if (!ReadMangaConfig.disableMangaScrollAnimation)
             binding.recyclerView.smoothScrollBy(dx, dy)
         else
             binding.recyclerView.scrollBy(dx, dy)
@@ -1070,11 +1082,11 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (!AppConfig.MangaVolumeKeyPage) {
+        if (!ReadMangaConfig.mangaVolumeKeyPage) {
             return super.onKeyDown(keyCode, event)
         }
 
-        val isReverse = AppConfig.reverseVolumeKeyPage
+        val isReverse = ReadMangaConfig.reverseVolumeKeyPage
 
         when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> {

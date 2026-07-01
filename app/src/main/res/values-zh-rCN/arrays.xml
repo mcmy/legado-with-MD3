@@ -7,6 +7,20 @@
         <item>文件</item>
     </string-array>
 
+    <string-array name="layout_type">
+        <item>列表</item>
+        <item>单列</item>
+        <item>双列</item>
+        <item>瀑布</item>
+        <item>三列</item>
+    </string-array>
+
+    <string-array name="rss_type">
+        <item>网页</item>
+        <item>图片</item>
+        <item>视频</item>
+    </string-array>
+
     <string-array name="group_style">
         <item>标签</item>
         <item>隐藏标签</item>
@@ -93,7 +107,7 @@
     </string-array>
 
     <string-array name="text_font_weight">
-        <item>正常</item>
+        <item>常规</item>
         <item>粗体</item>
         <item>细体</item>
     </string-array>
@@ -196,9 +210,6 @@
     <string-array name="read_slider_mode">
         <item>常驻</item>
         <item>不显示</item>
-        <item>按钮置左</item>
-        <item>按钮置右</item>
-        <item>仅显示滑动条</item>
     </string-array>
 
     <string-array name="title_bar_mode">

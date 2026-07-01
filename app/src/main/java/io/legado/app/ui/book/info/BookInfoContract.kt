@@ -1,24 +1,38 @@
 package io.legado.app.ui.book.info
 
 import android.net.Uri
+import androidx.compose.runtime.Stable
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
+import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.readRecord.ReadRecordTimelineDay
 import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
+
+const val READER_RESULT_DELETED = 100
+
+@Stable
+data class HighlightedTag(
+    val matchedLabels: List<String>,
+    val title: String?,
+)
 
 data class BookInfoUiState(
-    val book: Book? = null,
-    val chapterList: List<BookChapter> = emptyList(),
+    val book: BookInfoBookUi? = null,
+    val hasChapters: Boolean = false,
     val webFiles: List<BookInfoWebFile> = emptyList(),
+    val highlightedTags: List<HighlightedTag> = emptyList(),
     val kindLabels: List<String> = emptyList(),
     val groupNames: String? = null,
     val hasCustomGroup: Boolean = false,
     val readRecordTotalTime: Long = 0L,
     val readRecordTimelineDays: List<ReadRecordTimelineDay> = emptyList(),
     val inBookshelf: Boolean = false,
-    val bookSource: BookSource? = null,
-    val isTocLoading: Boolean = true,
+    val bookSource: BookInfoSourceUi? = null,
+    val relatedBooks: ImmutableList<RelatedBooksUi> = persistentListOf(),
+    val isTocLoading: Boolean = false,
     val isBusy: Boolean = false,
     val deleteAlertEnabled: Boolean = true,
     val deleteOriginal: Boolean = false,
@@ -27,11 +41,39 @@ data class BookInfoUiState(
     val dialog: BookInfoDialog? = null,
 )
 
+@Stable
+data class BookInfoBookUi(
+    val bookUrl: String,
+    val name: String,
+    val author: String,
+    val realAuthor: String,
+    val origin: String,
+    val originName: String,
+    val coverPath: String?,
+    val group: Long,
+    val isLocal: Boolean,
+    val type: Int,
+    val canUpdate: Boolean,
+    val splitLongChapter: Boolean,
+    val durChapterTitle: String?,
+    val latestChapterTitle: String?,
+    val totalChapterNum: Int,
+    val durChapterIndex: Int,
+    val remark: String?,
+    val displayIntro: String?,
+)
+
+@Stable
+data class BookInfoSourceUi(
+    val sourceUrl: String,
+    val hasLogin: Boolean,
+)
+
 sealed interface BookInfoSheet {
     data object None : BookInfoSheet
     data object CoverPicker : BookInfoSheet
     data object GroupPicker : BookInfoSheet
-    data object SourcePicker : BookInfoSheet
+    data class SourcePicker(val oldBook: Book) : BookInfoSheet
     data object ReadRecord : BookInfoSheet
     data class WebFiles(val openAfterImport: Boolean) : BookInfoSheet
     data class ArchiveEntries(
@@ -58,6 +100,14 @@ data class BookInfoWebFile(
     override fun toString(): String = name
 }
 
+data class RelatedBooksUi(
+    val key: String,
+    val title: String,
+    val url: String,
+    val resolvedUrl: String,
+    val books: ImmutableList<SearchBook>,
+)
+
 sealed interface BookInfoIntent {
     data object DismissSheet : BookInfoIntent
     data object DismissDialog : BookInfoIntent
@@ -75,6 +125,7 @@ sealed interface BookInfoIntent {
     data object ChangeSourceClick : BookInfoIntent
     data object ReadRecordClick : BookInfoIntent
     data object RemarkClick : BookInfoIntent
+    data class SaveCover(val path: String) : BookInfoIntent
     data class ConfirmDelete(val deleteOriginal: Boolean) : BookInfoIntent
     data class UpdateRemark(val remark: String) : BookInfoIntent
     data class SelectGroup(val groupId: Long) : BookInfoIntent
@@ -101,6 +152,9 @@ sealed interface BookInfoIntent {
         val entryName: String,
         val openAfterImport: Boolean,
     ) : BookInfoIntent
+
+    data class RelatedBookClick(val book: SearchBook) : BookInfoIntent
+    data class RelatedBooksMore(val title: String, val url: String) : BookInfoIntent
 }
 
 sealed interface BookInfoEffect {
@@ -131,6 +185,19 @@ sealed interface BookInfoEffect {
         val key: String,
         val variable: String?,
         val comment: String,
+    ) : BookInfoEffect
+
+    data class NavigateToBookInfo(
+        val name: String?,
+        val author: String?,
+        val bookUrl: String,
+        val origin: String?,
+        val coverPath: String?,
+    ) : BookInfoEffect
+    data class NavigateToExploreShow(
+        val title: String?,
+        val sourceUrl: String,
+        val exploreUrl: String?,
     ) : BookInfoEffect
 }
 
