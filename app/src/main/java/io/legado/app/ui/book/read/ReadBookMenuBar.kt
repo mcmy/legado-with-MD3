@@ -2262,7 +2262,9 @@ private fun MenuBottomBar(
             state.menuConfig.bottomBarButtons,
             state.menuConfig.readMenuCustomIcons,
             state.isReadAloudRunning,
-            state.isAutoPage
+            state.isAutoPage,
+            state.styleConfig.styleSelect,
+            state.styleConfig.quickStyleSelects,
         ) {
             loadToolButtons(context, state, onIntent)
         }
@@ -2308,6 +2310,60 @@ private fun MenuBottomBar(
                     }
                 }
             }
+        }
+
+        val hasQuickStyleToolButton = toolButtons.any { it.id == "quick_read_style" }
+        if (!hasQuickStyleToolButton) {
+            Spacer(Modifier.height(8.dp))
+            QuickReadStyleCornerButton(
+                state = state,
+                colors = colors,
+                onIntent = onIntent,
+                context = context,
+                backdrop = backdrop,
+                glassEnabled = buttonGlassEnabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = toolButtonsBottomPadding),
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickReadStyleCornerButton(
+    state: ReadBookUiState,
+    colors: ReadMenuColors,
+    onIntent: (ReadBookIntent) -> Unit,
+    context: Context,
+    backdrop: Backdrop?,
+    glassEnabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val buttonInfo = remember(context) {
+        readMenuButtonInfos(context).firstOrNull { it.id == "quick_read_style" }
+    } ?: return
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ReadMenuGlassButtonSurface(
+            onClick = { switchToNextQuickStyle(onIntent) },
+            colors = colors,
+            backdrop = backdrop,
+            menuConfig = state.menuConfig,
+            glassEnabled = glassEnabled,
+            selected = state.styleConfig.styleSelect in state.styleConfig.quickStyleSelects,
+        ) { tint ->
+            Icon(
+                imageVector = buttonInfo.icon,
+                contentDescription = buttonInfo.label,
+                tint = tint,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
@@ -3142,12 +3198,16 @@ private fun loadFloatingIcons(
 }
 
 private fun switchToNextQuickStyle(onIntent: (ReadBookIntent) -> Unit) {
-    val nextStyle = ReadBookConfig.nextQuickStyleSelect()
-    if (nextStyle != null) {
+    val nextStyle = ReadBookConfig.nextQuickStyleSelect() ?: fallbackQuickStyleSelect()
+    if (nextStyle != null && nextStyle != ReadBookConfig.styleSelect) {
         onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.StyleSelect(nextStyle)))
-    } else {
-        onIntent(ReadBookIntent.OpenReadMenuRoute(ReadBookMenuRoute.ReadStyle))
     }
+}
+
+private fun fallbackQuickStyleSelect(): Int? {
+    val configCount = ReadBookConfig.configList.size
+    if (configCount <= 0) return null
+    return if (configCount > 1 && ReadBookConfig.styleSelect == 0) 1 else 0
 }
 
 @Composable

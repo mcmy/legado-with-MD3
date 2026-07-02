@@ -450,16 +450,43 @@ const toPreChapter = () => {
 }
 
 let canJump = true
+
+const pageJumpDistance = () => document.documentElement.clientHeight - 100
+
+const isPageTop = () => document.documentElement.scrollTop === 0
+
+const isPageBottom = () =>
+  document.documentElement.clientHeight + document.documentElement.scrollTop >=
+  document.documentElement.scrollHeight
+
+const jumpPage = (direction: 1 | -1) => {
+  if (!canJump) return
+  if (direction === -1 && isPageTop()) {
+    ElMessage.warning('已到达页面顶部')
+    return
+  }
+  if (direction === 1 && isPageBottom()) {
+    ElMessage.warning('已到达页面底部')
+    return
+  }
+  canJump = false
+  jump(direction * pageJumpDistance(), {
+    duration: store.config.jumpDuration,
+    callback: () => (canJump = true),
+  })
+}
+
 // 监听方向键
 const handleKeyPress = (event: KeyboardEvent) => {
-  if (!canJump) return
   switch (event.key) {
     case 'ArrowLeft':
+      if (!canJump) return
       event.stopPropagation()
       event.preventDefault()
       toPreChapter()
       break
     case 'ArrowRight':
+      if (!canJump) return
       event.stopPropagation()
       event.preventDefault()
       toNextChapter()
@@ -467,34 +494,22 @@ const handleKeyPress = (event: KeyboardEvent) => {
     case 'ArrowUp':
       event.stopPropagation()
       event.preventDefault()
-      if (document.documentElement.scrollTop === 0) {
-        ElMessage.warning('已到达页面顶部')
-      } else {
-        canJump = false
-        jump(0 - document.documentElement.clientHeight + 100, {
-          duration: store.config.jumpDuration,
-          callback: () => (canJump = true),
-        })
-      }
+      jumpPage(-1)
       break
     case 'ArrowDown':
       event.stopPropagation()
       event.preventDefault()
-      if (
-        document.documentElement.clientHeight +
-          document.documentElement.scrollTop ===
-        document.documentElement.scrollHeight
-      ) {
-        ElMessage.warning('已到达页面底部')
-      } else {
-        canJump = false
-        jump(document.documentElement.clientHeight - 100, {
-          duration: store.config.jumpDuration,
-          callback: () => (canJump = true),
-        })
-      }
+      jumpPage(1)
       break
   }
+}
+
+const handleWheel = (event: WheelEvent) => {
+  if (readSettingsVisible.value || popCataVisible.value || event.ctrlKey) return
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+  event.stopPropagation()
+  event.preventDefault()
+  jumpPage(event.deltaY > 0 ? 1 : -1)
 }
 
 // 阻止默认滚动事件
@@ -536,6 +551,7 @@ onMounted(async () => {
       getContent(chapterIndex, true, chapterPos)
       window.addEventListener('keyup', handleKeyPress)
       window.addEventListener('keydown', ignoreKeyPress)
+      window.addEventListener('wheel', handleWheel, { passive: false })
       // 兼容Safari < 14
       document.addEventListener('visibilitychange', onVisibilityChange)
       //监听底部加载
@@ -554,6 +570,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keyup', handleKeyPress)
   window.removeEventListener('keydown', ignoreKeyPress)
+  window.removeEventListener('wheel', handleWheel)
   window.removeEventListener('resize', onResize)
   // 兼容Safari < 14
   document.removeEventListener('visibilitychange', onVisibilityChange)
