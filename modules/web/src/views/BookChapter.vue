@@ -450,6 +450,10 @@ const toPreChapter = () => {
 }
 
 let canJump = true
+let wheelJumping = false
+let wheelEndTimer: number | undefined
+
+const wheelIdleDelay = 180
 
 const pageJumpDistance = () => document.documentElement.clientHeight - 100
 
@@ -509,6 +513,13 @@ const handleWheel = (event: WheelEvent) => {
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
   event.stopPropagation()
   event.preventDefault()
+  if (wheelEndTimer !== undefined) window.clearTimeout(wheelEndTimer)
+  wheelEndTimer = window.setTimeout(() => {
+    wheelJumping = false
+    wheelEndTimer = undefined
+  }, wheelIdleDelay)
+  if (wheelJumping) return
+  wheelJumping = true
   jumpPage(event.deltaY > 0 ? 1 : -1)
 }
 
@@ -572,6 +583,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', ignoreKeyPress)
   window.removeEventListener('wheel', handleWheel)
   window.removeEventListener('resize', onResize)
+  if (wheelEndTimer !== undefined) window.clearTimeout(wheelEndTimer)
   // 兼容Safari < 14
   document.removeEventListener('visibilitychange', onVisibilityChange)
   readSettingsVisible.value = false
