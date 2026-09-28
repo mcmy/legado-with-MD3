@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,6 +33,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
@@ -41,7 +43,6 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Leaderboard
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TrackChanges
@@ -72,6 +73,12 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,20 +108,21 @@ import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallTonalButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.conflict.BookshelfConflictSheet
+import io.legado.app.ui.widget.components.divider.PillDivider
 import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.image.cover.BookshelfCover
-import io.legado.app.ui.widget.components.list.TopFloatingStickyItem
-import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.progressIndicator.AppContainedLoadingIndicator
-import io.legado.app.ui.widget.components.settingItem.CompactSwitchSettingItem
+import io.legado.app.ui.widget.components.settingItem.TinySwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.utils.isContentScheme
+import io.legado.app.utils.sendToClip
 import io.legado.app.utils.takePersistablePermissionSafely
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.flow.collectLatest
@@ -196,6 +204,15 @@ fun HomeRouteScreen(
             },
             onAddButtonGroupFromKinds = { sourceUrl, targetSetId, title, kinds ->
                 homepageViewModel.addButtonGroupFromKinds(sourceUrl, targetSetId, title, kinds)
+            },
+            onAddRankingFromKinds = { sourceUrl, targetSetId, title, type, kinds ->
+                homepageViewModel.addRankingFromKinds(
+                    sourceUrl,
+                    targetSetId,
+                    title,
+                    type,
+                    kinds
+                )
             },
             onGetExploreKinds = { homepageViewModel.getSourceExploreKinds(it) },
             onUpdateModule = { globalId, def ->
@@ -353,6 +370,15 @@ fun HomeRouteScreen(
             homepageViewModel.onAddToShelf(book)
         },
     )
+
+    BookshelfConflictSheet(
+        conflict = homepageState.bookshelfConflict,
+        isResolving = homepageState.isResolvingBookshelfConflict,
+        onDismissRequest = homepageViewModel::dismissBookshelfConflict,
+        onOpenExistingBook = homepageViewModel::openBookshelfConflictBook,
+        onCoexist = homepageViewModel::coexistWithBookshelfConflict,
+        onMigrate = homepageViewModel::migrateBookshelfConflict,
+    )
 }
 
 @OptIn(
@@ -377,6 +403,7 @@ fun HomeScreen(
 ) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     val selectedSets = remember(homepageState.manageState.sets) {
         homepageState.manageState.sets.filter { it.isSelected }
@@ -386,7 +413,7 @@ fun HomeScreen(
     })
 
     var showPageMenu by remember { mutableStateOf(false) }
-    var showSourceMenu by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val currentPageSourceName by remember(selectedSets, pagerState) {
         derivedStateOf { selectedSets.getOrNull(pagerState.currentPage)?.sourceName }
@@ -415,6 +442,7 @@ fun HomeScreen(
         topBar = {
             GlassMediumFlexibleTopAppBar(
                 title = stringResource(R.string.home),
+                subtitle = currentPageSourceName,
                 scrollBehavior = scrollBehavior,
                 actions = {
                     TopBarActionButton(
@@ -425,23 +453,33 @@ fun HomeScreen(
                     Box {
                         TopBarActionButton(
                             onClick = { showPageMenu = true },
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = null,
+                            imageVector = AppIcons.MoreVert,
+                            contentDescription = stringResource(R.string.more_menu),
                         )
                         RoundDropdownMenu(
                             expanded = showPageMenu,
                             onDismissRequest = { showPageMenu = false },
                         ) {
                             RoundDropdownMenuItem(
-                                leadingIcon = {
-                                    MenuItemIcon(Icons.Default.Settings)
-                                },
                                 text = stringResource(R.string.home_dashboard_settings),
                                 onClick = {
                                     showPageMenu = false
                                     onIntent(HomeIntent.DashboardSettingsClick)
                                 },
                             )
+                            PillDivider()
+                            selectedSets.forEachIndexed { index, source ->
+                                RoundDropdownMenuItem(
+                                    text = source.sourceName,
+                                    isSelected = index == pagerState.currentPage,
+                                    onClick = {
+                                        showPageMenu = false
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(index)
+                                        }
+                                    },
+                                )
+                            }
                         }
                     }
                 },
@@ -452,6 +490,7 @@ fun HomeScreen(
             isRefreshing = homepageState.isRefreshing,
             onRefresh = onRefreshHomepage,
             modifier = Modifier.fillMaxSize(),
+            scrollBehavior = scrollBehavior,
         ) {
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                 val dashboardScrollState = rememberScrollState()
@@ -485,12 +524,6 @@ fun HomeScreen(
                 }
                 val viewportHeight = maxHeight
                 val hasDashboard = state.visibleSections.isNotEmpty()
-                val isSourceSwitcherVisible by remember(hasDashboard, selectedSets) {
-                    derivedStateOf {
-                        selectedSets.size > 1 &&
-                                (!hasDashboard || dashboardScrollState.value > 0 || showSourceMenu)
-                    }
-                }
 
                 Column(
                     modifier = Modifier
@@ -512,7 +545,6 @@ fun HomeScreen(
                             animatedVisibilityScope = animatedVisibilityScope,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
                     }
 
                     Column(
@@ -557,59 +589,13 @@ fun HomeScreen(
                                     sharedTransitionScope = sharedTransitionScope,
                                     animatedVisibilityScope = animatedVisibilityScope,
                                     onBookLongClick = onHomepageBookLongClick,
-                                    onErrorClick = {},
+                                    onErrorClick = { errorMessage = it },
                                 )
                             }
                         }
                     }
                 }
 
-                TopFloatingStickyItem(
-                    item = if (isSourceSwitcherVisible) currentPageSourceName else null,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = paddingValues.calculateTopPadding() + 8.dp),
-                ) { name ->
-                    Box {
-                        GlassCard(
-                            modifier = Modifier
-                                .padding(horizontal = 12.dp)
-                                .clickable { showSourceMenu = true },
-                            cornerRadius = 32.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(
-                                    horizontal = 16.dp,
-                                    vertical = 12.dp,
-                                ),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                AppText(
-                                    text = name,
-                                    style = LegadoTheme.typography.labelMedium,
-                                )
-                            }
-                        }
-                        RoundDropdownMenu(
-                            expanded = showSourceMenu,
-                            onDismissRequest = { showSourceMenu = false },
-                        ) { dismiss ->
-                            selectedSets.forEachIndexed { index, source ->
-                                RoundDropdownMenuItem(
-                                    text = source.sourceName,
-                                    isSelected = index == pagerState.currentPage,
-                                    onClick = {
-                                        dismiss()
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(index)
-                                        }
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -628,6 +614,29 @@ fun HomeScreen(
             sheet = state.activeSheet,
             visibleSections = state.visibleSections,
             onIntent = onIntent,
+        )
+        AppAlertDialog(
+            data = errorMessage,
+            onDismissRequest = { errorMessage = null },
+            title = stringResource(R.string.error_details),
+            confirmText = stringResource(R.string.copy_text),
+            onConfirm = { message ->
+                context.sendToClip(message)
+                errorMessage = null
+            },
+            dismissText = stringResource(R.string.close),
+            onDismiss = { errorMessage = null },
+            content = { message ->
+                SelectionContainer {
+                    AppText(
+                        text = message,
+                        style = LegadoTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(rememberScrollState()),
+                    )
+                }
+            },
         )
     }
 }
@@ -1014,7 +1023,14 @@ private fun RecentHistoryBookCard(
             .width(60.dp)
             .aspectRatio(5f / 7f)
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
+            .clickable(
+                role = Role.Button,
+                onClick = onClick,
+            )
+            .semantics {
+                contentDescription = bookAccessibilityLabel(book.name, book.author)
+                role = Role.Button
+            },
     ) {
         BookshelfCover(
             name = book.name,
@@ -1114,7 +1130,12 @@ private fun SemiCircleProgress(
     val progressColor = LegadoTheme.colorScheme.primary
 
     Box(
-        modifier = modifier,
+        modifier = modifier.semantics {
+            progressBarRangeInfo = ProgressBarRangeInfo(
+                current = animatedProgress.coerceIn(0f, 1f),
+                range = 0f..1f,
+            )
+        },
         contentAlignment = Alignment.BottomCenter,
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -1263,11 +1284,11 @@ private fun HomeDashboardSettingsSheet(
         onDismissRequest = onDismissRequest,
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             for (section in HomeDashboardSection.entries) {
-                CompactSwitchSettingItem(
+                TinySwitchSettingItem(
                     title = stringResource(section.labelRes()),
                     checked = section in visibleSections,
                     onCheckedChange = { visible ->
@@ -1382,11 +1403,13 @@ private fun HomeSheets(
 private fun AppModalBottomSheet(
     show: Boolean,
     onDismissRequest: () -> Unit,
+    title: String? = null,
     content: @Composable () -> Unit,
 ) {
     io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismissRequest,
+        title = title,
     ) {
         content()
     }
@@ -1400,4 +1423,11 @@ private fun HomeDashboardSection.labelRes(): Int = when (this) {
     HomeDashboardSection.RecentBooks -> R.string.home_recent_books
     HomeDashboardSection.DailyGoal -> R.string.home_today_reading_goal
     HomeDashboardSection.WebDavBackup -> R.string.home_webdav_backup
+}
+
+private fun bookAccessibilityLabel(
+    name: String,
+    author: String,
+): String {
+    return if (author.isBlank()) name else "$name, $author"
 }

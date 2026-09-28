@@ -1,66 +1,72 @@
 [versions]
 
 accompanistWebview = "0.36.0"
-adaptive = "1.3.0-beta02"
-adaptiveLayout = "1.3.0-beta02"
-adaptiveNavigation = "1.3.0-beta02"
-animation = "1.11.2"
+adaptive = "1.3.0"
+adaptiveLayout = "1.3.0"
+adaptiveNavigation = "1.3.0"
+animation = "1.12.1"
 biometric = "1.4.0-alpha07"
-coilCompose = "2.7.0"
-composeBom = "2026.05.01"
-constraintlayoutCompose = "1.1.1"
+coilCompose = "3.6.3"
+composeBom = "2026.09.00"
+constraintlayoutCompose = "1.1.2"
 coreSplashscreen = "1.2.0"
 datastorePreferences = "1.2.1"
-foundation = "1.11.2"
-kotlin = "2.3.21"
+foundation = "1.12.1"
+kotlin = "2.4.20"
 kotlinxSerialization = "1.11.0"
 kotlinxCoroutinesAndroid = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
-kotlinxCollectionsImmutable = "0.4.0"
-ksp = "2.3.6"
+kotlinxCollectionsImmutable = "0.5.2"
+ksp = "2.3.12"
 agp = "9.2.1"
-appcompat = "1.7.1"
+appcompat = "1.8.0"
 colorpicker = "1.1.0"
-colorpicker-compose = "1.1.4"
+colorpicker-compose = "1.3.0"
 commonsText = "1.15.0"
-constraintlayout = "2.2.1"
-core = "1.18.0"
+constraintlayout = "2.2.2"
+core = "1.19.0"
 firebaseBom = "34.6.0"
 flexbox = "3.0.0"
-fragment = "1.8.9"
-
-#不要更新版本
-hutool = "5.8.22"
+fragment = "1.9.0"
 
 libarchive = "1.1.6"
-lifecycle = "2.10.0"
-glide = "5.0.7"
+lifecycle = "2.11.0"
+glide = "5.0.9"
 gson = "2.14.0"
 jsonPath = "3.0.0"
-ktor = "3.5.0"
+ktor = "3.6.0"
 # issue #3811，不要更新版本，新版引入了一个破坏性变更（详见https://github.com/jhy/jsoup/pull/2017）
 # 若要升级请确保相关代码不会受此变更影响（如AnalyzeByJSoup.kt、JsoupXpath库等）
-intellijMarkdown = "0.7.3"
+intellijMarkdown = "0.7.12"
 jsoup = "1.16.2"
-jsoupxpath = "2.5.3"
-coroutines = "1.10.2"
-lifecycleViewmodelCompose = "2.10.0"
+jsoupxpath = "2.5.5"
+coroutines = "1.11.0"
+kotlinxDatetime = "0.8.0"
+lifecycleViewmodelCompose = "2.11.0"
 liveeventbus = "1.8.14"
-navigation3 = "1.1.2"
+navigation3 = "1.2.0-rc01"
+# 1.2.0-alpha02 修复了预测式返回手势中 NavigationEventInput.dispatchOnBackProgressed
+# 对已分离输入抛 IllegalStateException 的崩溃（1.1.2 仍会 checkNotNull 抛异常）。
+# 覆盖 navigation3 1.1.4 传递依赖的 1.1.2，等上游发布含该修复的稳定版后可移除。
+navigationevent = "1.2.0-alpha04"
 markwon = "4.6.2"
 material = "1.14.0"
-material3 = "1.5.0-alpha20"
+material3 = "1.5.0-alpha28"
 material3IconsExtended = "1.7.8"
-materialKolor = "4.1.1"
+materialKolor = "5.0.1"
 media = "1.8.0"
-media3 = "1.8.0"
-navigationCompose = "2.9.8"
-okhttp = "5.3.2"
+media3 = "1.11.0"
+navigationCompose = "2.10.0"
+okhttp = "5.5.0"
 palette = "1.0.0"
 preference = "1.2.1"
 protobufJavalite = "4.26.1"
 quickChineseTransfer = "0.2.17"
-room = "2.8.4"
+# 书源 JS 通过 Packages.cn.hutool.* 直接调用，Hutool 作为书源运行时加密库保留在 classpath。
+# 应用代码不直接依赖它；加密走 JCA / help/crypto/CryptoUtils.kt。版本固定，勿升级（参考上游基线）。
+hutool = "5.8.22"
+room = "2.8.5"
+robolectric = "4.17"
 splitties = "3.0.0"
 rhino = "1.8.1"
 desugar = "2.1.5"
@@ -74,24 +80,25 @@ recyclerview = "1.4.0"
 #noinspection GradleDependency
 uiViewbinding = "1.9.4"
 viewpager2 = "1.1.0"
-webkit = "1.16.0"
+webkit = "1.17.0"
 collection = "1.6.0"
 
 zxingLite = "3.4.1"
 
-koin-bom = "4.2.1"
+koin-bom = "4.2.2"
 biometricKtx = "1.1.0"
 
 reorderable = "3.1.0"
-haze = "1.7.2"
+haze = "1.7.3"
 timber = "5.0.1"
-miuix = "0.9.1"
-backdrop = "2.0.0"
+telephoto = "0.19.0"
+miuix = "0.9.4"
+backdrop = "2.0.1"
 capsule = "2.1.3"
 lyricViewx = "1.3.2"
-uiautomator = "2.3.0"
+uiautomator = "2.4.0"
 benchmarkMacroJunit4 = "1.4.1"
-baselineprofile = "1.4.1"
+baselineprofile = "1.5.0"
 profileinstaller = "1.4.1"
 [libraries]
 
@@ -100,6 +107,7 @@ activity-compose = { module = "androidx.activity:activity-compose", version.ref 
 activity-ktx = { module = "androidx.activity:activity-ktx", version.ref = "activity" }
 
 androidx-annotation = { group = "androidx.annotation", name = "annotation", version = "1.10.0" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometricKtx" }
 androidx-collection = { module = "androidx.collection:collection", version.ref = "collection" }
 androidx-compose-adaptive = { module = "androidx.compose.material3.adaptive:adaptive", version.ref = "adaptive" }
 androidx-compose-adaptive-layout = { module = "androidx.compose.material3.adaptive:adaptive-layout", version.ref = "adaptiveLayout" }
@@ -110,6 +118,8 @@ androidx-compose-foundation = { module = "androidx.compose.foundation:foundation
 androidx-compose-material = { module = "androidx.compose.material:material" }
 androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
+androidx-navigationevent = { module = "androidx.navigationevent:navigationevent", version.ref = "navigationevent" }
+androidx-navigationevent-compose = { module = "androidx.navigationevent:navigationevent-compose", version.ref = "navigationevent" }
 compose-materialIcons = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "material3IconsExtended" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
@@ -130,15 +140,18 @@ androidx-constraintlayout = { module = "androidx.constraintlayout:constraintlayo
 
 haze-core = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-materials = { module = "dev.chrisbanes.haze:haze-materials", version.ref = "haze" }
+hutool-crypto = { module = "cn.hutool:hutool-crypto", version.ref = "hutool" }
 koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin-bom" }
 koin-core = { module = "io.insert-koin:koin-core" }
 koin-android = { group = "io.insert-koin", name = "koin-android" }
 koin-compose = { group = "io.insert-koin", name = "koin-androidx-compose" }
 koin-compose-viewmodel = { group = "io.insert-koin", name = "koin-compose-viewmodel" }
 
-coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coilCompose" }
-coil-gif = { module = "io.coil-kt:coil-gif", version.ref = "coilCompose" }
-coil-svg = { module = "io.coil-kt:coil-svg", version.ref = "coilCompose" }
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coilCompose" }
+coil-gif = { module = "io.coil-kt.coil3:coil-gif", version.ref = "coilCompose" }
+coil-svg = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coilCompose" }
+coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coilCompose" }
+telephoto-zoomable-image-coil3 = { module = "me.saket.telephoto:zoomable-image-coil3", version.ref = "telephoto" }
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
 
 androidx-espresso-core = { module = "androidx.test.espresso:espresso-core", version = "3.7.0" }
@@ -152,9 +165,8 @@ fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragm
 
 androidx-junit = { module = "androidx.test.ext:junit", version = "1.3.0" }
 
-hutool-crypto = { module = "cn.hutool:hutool-crypto", version.ref = "hutool" }
-
 kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "kotlinxCollectionsImmutable" }
+kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 libarchive = { module = "me.zhanghai.android.libarchive:library", version.ref = "libarchive" }
 lifecycle-common-java8 = { module = "androidx.lifecycle:lifecycle-common-java8", version.ref = "lifecycle" }
 lifecycle-service = { module = "androidx.lifecycle:lifecycle-service", version.ref = "lifecycle" }
@@ -187,6 +199,7 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 glide-glide = { module = "com.github.bumptech.glide:glide", version.ref = "glide" }
 glide-okhttp= { module = "com.github.bumptech.glide:okhttp3-integration", version.ref ="glide" }
@@ -218,6 +231,7 @@ intellij-markdown = { module = "org.jetbrains:markdown-jvm", version.ref = "inte
 junit = { module = "junit:junit", version = "4.13.2" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
 

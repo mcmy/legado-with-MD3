@@ -7,12 +7,16 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import io.legado.app.BuildConfig
 import io.legado.app.databinding.ViewToastBinding
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import org.koin.core.context.GlobalContext
 import splitties.systemservices.layoutInflater
 
 private var toastForJs: Toast? = null
 private var toast: Toast? = null
 private var toastLegacy: Toast? = null
+
+private val otherSettingsGateway
+    get() = GlobalContext.get().get<OtherSettingsGateway>()
 
 fun Context.toastOnUi(message: Int, duration: Int = Toast.LENGTH_SHORT) {
     toastOnUi(getString(message), duration)
@@ -31,7 +35,7 @@ fun Context.toastOnUi(message: CharSequence?, duration: Int = Toast.LENGTH_SHORT
 fun Context.toastOnUiLegacy(message: CharSequence) {
     runOnUI {
         kotlin.runCatching {
-            if (toastLegacy == null || BuildConfig.DEBUG || AppConfig.recordLog) {
+            if (toastLegacy == null || BuildConfig.DEBUG || otherSettingsGateway.currentSettings.recordLog) {
                 toastLegacy = Toast.makeText(this, message, Toast.LENGTH_SHORT)
             } else {
                 toastLegacy?.setText(message)
@@ -53,7 +57,7 @@ fun Context.longToastOnUi(message: CharSequence?) {
 fun Context.longToastOnUiLegacy(message: CharSequence) {
     runOnUI {
         kotlin.runCatching {
-            if (toastLegacy == null || BuildConfig.DEBUG || AppConfig.recordLog) {
+            if (toastLegacy == null || BuildConfig.DEBUG || otherSettingsGateway.currentSettings.recordLog) {
                 toastLegacy = Toast.makeText(this, message, Toast.LENGTH_LONG)
             } else {
                 toastLegacy?.setText(message)

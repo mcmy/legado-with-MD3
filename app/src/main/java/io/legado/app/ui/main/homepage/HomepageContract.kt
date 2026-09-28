@@ -4,6 +4,7 @@ import androidx.compose.runtime.Stable
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.rule.ExploreKind
 import io.legado.app.domain.model.BookShelfState
+import io.legado.app.domain.model.BookshelfConflict
 import io.legado.app.domain.model.HomepageModuleType
 import io.legado.app.domain.model.ModuleDef
 import kotlinx.collections.immutable.ImmutableList
@@ -20,7 +21,9 @@ data class HomepageUiState(
     val modules: ImmutableList<HomepageModuleUi> = persistentListOf(),
     val isManageMode: Boolean = false,
     val isRefreshing: Boolean = false,
-    val manageState: HomepageManageUiState = HomepageManageUiState()
+    val manageState: HomepageManageUiState = HomepageManageUiState(),
+    val bookshelfConflict: BookshelfConflict? = null,
+    val isResolvingBookshelfConflict: Boolean = false,
 )
 
 @Stable
@@ -40,6 +43,8 @@ data class HomepageManageActions(
     val onJoinModule: (String, String?, ModuleDef) -> Unit = { _, _, _ -> },
     val onAddCustomModule: (String, String?, ModuleDef) -> Unit = { _, _, _ -> },
     val onAddButtonGroupFromKinds: (String, String?, String, List<String>) -> Unit = { _, _, _, _ -> },
+    val onAddRankingFromKinds: (String, String?, String, String, List<String>) -> Unit =
+        { _, _, _, _, _ -> },
     val onGetExploreKinds: (String) -> List<Pair<String, String>> = { emptyList() },
     val onUpdateModule: (String, ModuleDef) -> Unit = { _, _ -> },
     val onDeleteModule: (String) -> Unit = {},
@@ -119,5 +124,17 @@ sealed interface ModuleLoadState {
     data class Buttons(val kinds: ImmutableList<ExploreKind>) : ModuleLoadState
 
     @Stable
+    data class Rankings(
+        val sources: ImmutableList<HomepageRankingSourceUi>
+    ) : ModuleLoadState
+
+    @Stable
     data class Error(val message: String) : ModuleLoadState
 }
+
+@Stable
+data class HomepageRankingSourceUi(
+    val title: String,
+    val url: String?,
+    val state: ModuleLoadState,
+)

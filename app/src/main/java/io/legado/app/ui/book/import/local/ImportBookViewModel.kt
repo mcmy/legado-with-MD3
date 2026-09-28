@@ -1,23 +1,25 @@
 package io.legado.app.ui.book.import.local
 
-import io.legado.app.ui.config.otherConfig.OtherConfig
 import android.app.Application
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.getTreeDocumentId
+import androidx.compose.runtime.Immutable
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
-import androidx.compose.runtime.Immutable
 import androidx.lifecycle.viewModelScope
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern
 import io.legado.app.constant.AppPattern.archiveFileRegex
 import io.legado.app.constant.AppPattern.bookFileRegex
-import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
+import io.legado.app.data.repository.BookImportRepository
+import io.legado.app.domain.gateway.ImportBookSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.model.settings.ImportBookSettings
+import io.legado.app.domain.model.settings.OtherSettings
 import io.legado.app.model.localBook.LocalBook
-import io.legado.app.ui.config.importBookConfig.ImportBookConfig
 import io.legado.app.ui.widget.components.list.InteractionState
 import io.legado.app.ui.widget.components.list.ListUiState
 import io.legado.app.utils.AlphanumComparator
@@ -30,24 +32,22 @@ import io.legado.app.utils.isUri
 import io.legado.app.utils.list
 import io.legado.app.utils.mapParallel
 import io.legado.app.utils.takePersistablePermissionSafely
-import io.legado.app.utils.toastOnUi
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Dispatchers.Main
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
@@ -64,7 +64,8 @@ data class ImportBookUiState(
     val interaction: InteractionState = InteractionState(),
     val pathNames: List<String> = emptyList(),
     val canGoBack: Boolean = false,
-    val sort: Int = 0
+    val sort: Int = 0,
+    val fileNameRule: String = "",
 ) : ListUiState<ImportBook> {
     override val isSearch: Boolean get() = interaction.isSearchMode
     override val isLoading: Boolean get() = interaction.isLoading
@@ -79,20 +80,24 @@ sealed interface ImportBookIntent {
     data object Initialize : ImportBookIntent
     data object SelectFolderClick : ImportBookIntent
     data class FolderPicked(val uri: Uri?, val target: ImportFolderPickTarget) : ImportBookIntent
+    data class BookFilesPicked(val uris: List<Uri>) : ImportBookIntent
     data class SearchToggle(val enabled: Boolean) : ImportBookIntent
     data class SearchQueryChange(val query: String) : ImportBookIntent
     data class SortChange(val sort: Int) : ImportBookIntent
     data object ScanFolder : ImportBookIntent
+    data object ImportCurrentFolderAsManga : ImportBookIntent
     data object NavigateBack : ImportBookIntent
     data class NavigateToLevel(val level: Int) : ImportBookIntent
     data object SelectAll : ImportBookIntent
     data object SelectInvert : ImportBookIntent
+    data object ClearSelection : ImportBookIntent
     data object AddToBookshelf : ImportBookIntent
     data class AddSingleToBookshelf(val item: ImportBook) : ImportBookIntent
     data object DeleteSelection : ImportBookIntent
     data class ItemClick(val item: ImportBook) : ImportBookIntent
     data class ArchiveEntrySelected(val fileDoc: FileDoc, val fileName: String) : ImportBookIntent
     data class ImportArchiveConfirmed(val fileDoc: FileDoc, val fileName: String) : ImportBookIntent
+    data class SetFileNameRule(val value: String) : ImportBookIntent
 }
 
 sealed interface ImportBookEffect {
@@ -105,9 +110,15 @@ sealed interface ImportBookEffect {
     data class ShowArchiveEntries(val fileDoc: FileDoc, val fileNames: List<String>) : ImportBookEffect
     data class ShowImportArchiveDialog(val fileDoc: FileDoc, val fileName: String) : ImportBookEffect
     data class ShowToastRes(val resId: Int) : ImportBookEffect
+    data class ShowToast(val message: String) : ImportBookEffect
 }
 
-class ImportBookViewModel(application: Application) : BaseViewModel(application) {
+class ImportBookViewModel(
+    application: Application,
+    private val importBookSettingsGateway: ImportBookSettingsGateway,
+    private val otherSettingsGateway: OtherSettingsGateway,
+    private val repository: BookImportRepository,
+) : BaseViewModel(application) {
 
     private enum class SourceMode {
         CURRENT_DIR,
@@ -126,7 +137,7 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
     )
 
     private val _state = MutableStateFlow(
-        InternalState(sort = ImportBookConfig.localBookImportSort)
+        InternalState(sort = importBookSettingsGateway.currentSettings.localBookImportSort)
     )
     private val _effects = MutableSharedFlow<ImportBookEffect>(extraBufferCapacity = 1)
     val effects = _effects.asSharedFlow()
@@ -141,7 +152,7 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
                 _effects.tryEmit(
                     ImportBookEffect.RequestFolderPicker(
                         target = ImportFolderPickTarget.IMPORT_FOLDER,
-                        initialUri = ImportBookConfig.importBookPath
+                        initialUri = importBookSettingsGateway.currentSettings.importBookPath
                             ?.takeIf { it.isUri() }
                             ?.toUri()
                     )
@@ -149,14 +160,17 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             }
 
             is ImportBookIntent.FolderPicked -> onFolderPicked(intent.uri, intent.target)
+            is ImportBookIntent.BookFilesPicked -> importPickedBookFiles(intent.uris)
             is ImportBookIntent.SearchToggle -> setSearchMode(intent.enabled)
             is ImportBookIntent.SearchQueryChange -> setSearchKey(intent.query)
             is ImportBookIntent.SortChange -> setSort(intent.sort)
             ImportBookIntent.ScanFolder -> scanCurrentDoc()
+            ImportBookIntent.ImportCurrentFolderAsManga -> importCurrentFolderAsManga()
             ImportBookIntent.NavigateBack -> navigateBack()
             is ImportBookIntent.NavigateToLevel -> navigateToLevel(intent.level)
             ImportBookIntent.SelectAll -> selectAllCheckable()
             ImportBookIntent.SelectInvert -> invertSelection()
+            ImportBookIntent.ClearSelection -> clearSelection()
             ImportBookIntent.AddToBookshelf -> addSelectedToBookshelf()
             is ImportBookIntent.AddSingleToBookshelf -> addSingleToBookshelf(intent.item)
             ImportBookIntent.DeleteSelection -> deleteSelectedDocs()
@@ -170,13 +184,17 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
                 intent.fileDoc,
                 intent.fileName
             )
+            is ImportBookIntent.SetFileNameRule -> {
+                updateImportBookSetting { it.copy(bookImportFileName = intent.value) }
+            }
         }
     }
 
     val uiState = combine(
         _state,
-        appDb.bookDao.flowLocal()
-    ) { state, localBooks ->
+        repository.flowLocalBooks(),
+        importBookSettingsGateway.settings,
+    ) { state, localBooks, settings ->
         val localFileNames = localBooks.asSequence().map { it.originName }.toSet()
 
         val docs = state.sourceDocs.map { fileDoc ->
@@ -220,7 +238,8 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             interaction = state.interaction,
             pathNames = pathNames,
             canGoBack = state.subDocs.isNotEmpty(),
-            sort = state.sort
+            sort = state.sort,
+            fileNameRule = settings.bookImportFileName.orEmpty(),
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(
@@ -231,8 +250,22 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
 
     fun hasRootDoc(): Boolean = _state.value.rootDoc != null
 
+    private fun importCurrentFolderAsManga() {
+        val state = _state.value
+        val directory = state.subDocs.lastOrNull() ?: state.rootDoc ?: return
+        execute { LocalBook.importMangaDirectory(directory) }
+            .onSuccess { _effects.tryEmit(ImportBookEffect.ShowToast("漫画目录已加入书架")) }
+            .onError {
+                _effects.tryEmit(
+                    ImportBookEffect.ShowToast(
+                        it.localizedMessage ?: "导入漫画目录失败"
+                    )
+                )
+            }
+    }
+
     private fun initialize() {
-        val defaultPath = OtherConfig.defaultBookTreeUri?.takeIf { it.isUri() }
+        val defaultPath = otherSettingsGateway.currentSettings.defaultBookTreeUri?.takeIf { it.isUri() }
         val effectiveDefaultPath = defaultPath ?: firstPersistedTreeUri()?.toString()
         if (effectiveDefaultPath.isNullOrBlank()) {
             _effects.tryEmit(
@@ -240,12 +273,12 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             )
             return
         }
-        if (OtherConfig.defaultBookTreeUri != effectiveDefaultPath) {
-            OtherConfig.defaultBookTreeUri = effectiveDefaultPath
+        if (otherSettingsGateway.currentSettings.defaultBookTreeUri != effectiveDefaultPath) {
+            updateOtherSetting { it.copy(defaultBookTreeUri = effectiveDefaultPath) }
         }
-        val importPath = ImportBookConfig.importBookPath
+        val importPath = importBookSettingsGateway.currentSettings.importBookPath
         if (importPath.isNullOrBlank() || !importPath.isUri()) {
-            ImportBookConfig.importBookPath = effectiveDefaultPath
+            updateImportBookSetting { it.copy(importBookPath = effectiveDefaultPath) }
         }
         initRootDoc(changedFolder = true)
         startAutoSync()
@@ -256,16 +289,16 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
         val pickedUri = persistFolderPermission(uri)
         when (target) {
             ImportFolderPickTarget.DEFAULT_BOOK -> {
-                OtherConfig.defaultBookTreeUri = pickedUri.toString()
-                if (ImportBookConfig.importBookPath.isNullOrBlank()) {
-                    ImportBookConfig.importBookPath = OtherConfig.defaultBookTreeUri
+                updateOtherSetting { it.copy(defaultBookTreeUri = pickedUri.toString()) }
+                if (importBookSettingsGateway.currentSettings.importBookPath.isNullOrBlank()) {
+                    updateImportBookSetting { it.copy(importBookPath = pickedUri.toString()) }
                 }
             }
 
             ImportFolderPickTarget.IMPORT_FOLDER -> {
-                ImportBookConfig.importBookPath = pickedUri.toString()
-                if (OtherConfig.defaultBookTreeUri.isNullOrBlank()) {
-                    OtherConfig.defaultBookTreeUri = pickedUri.toString()
+                updateImportBookSetting { it.copy(importBookPath = pickedUri.toString()) }
+                if (otherSettingsGateway.currentSettings.defaultBookTreeUri.isNullOrBlank()) {
+                    updateOtherSetting { it.copy(defaultBookTreeUri = pickedUri.toString()) }
                 }
             }
         }
@@ -300,18 +333,18 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             return
         }
         val candidates = linkedSetOf<String>().apply {
-            ImportBookConfig.importBookPath
+            importBookSettingsGateway.currentSettings.importBookPath
                 ?.takeIf { it.isNotBlank() && it.isUri() }
                 ?.let(::add)
-            OtherConfig.defaultBookTreeUri
+            otherSettingsGateway.currentSettings.defaultBookTreeUri
                 ?.takeIf { it.isNotBlank() && it.isUri() }
                 ?.let(::add)
         }
         if (candidates.isEmpty()) {
             firstPersistedTreeUri()?.toString()?.let { persistedPath ->
                 if (trySetRootDoc(persistedPath)) {
-                    OtherConfig.defaultBookTreeUri = persistedPath
-                    ImportBookConfig.importBookPath = persistedPath
+                    updateOtherSetting { it.copy(defaultBookTreeUri = persistedPath) }
+                    updateImportBookSetting { it.copy(importBookPath = persistedPath) }
                     return
                 }
             }
@@ -323,8 +356,8 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
 
         for (path in candidates) {
             if (trySetRootDoc(path)) {
-                if (ImportBookConfig.importBookPath != path) {
-                    ImportBookConfig.importBookPath = path
+                if (importBookSettingsGateway.currentSettings.importBookPath != path) {
+                    updateImportBookSetting { it.copy(importBookPath = path) }
                 }
                 return
             }
@@ -334,7 +367,7 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             if (persistedUri != null) {
                 val persistedPath = persistedUri.toString()
                 if (trySetRootDoc(persistedPath)) {
-                    ImportBookConfig.importBookPath = persistedPath
+                    updateImportBookSetting { it.copy(importBookPath = persistedPath) }
                     return
                 }
             }
@@ -342,8 +375,8 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
 
         firstPersistedTreeUri()?.toString()?.let { persistedPath ->
             if (trySetRootDoc(persistedPath)) {
-                OtherConfig.defaultBookTreeUri = persistedPath
-                ImportBookConfig.importBookPath = persistedPath
+                updateOtherSetting { it.copy(defaultBookTreeUri = persistedPath) }
+                updateImportBookSetting { it.copy(importBookPath = persistedPath) }
                 return
             }
         }
@@ -478,7 +511,7 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
 
     fun setSort(sort: Int) {
         _state.update { it.copy(sort = sort) }
-        ImportBookConfig.localBookImportSort = sort
+        updateImportBookSetting { it.copy(localBookImportSort = sort) }
     }
 
     fun setSearchMode(isSearch: Boolean) {
@@ -539,12 +572,25 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
         execute {
             LocalBook.importFiles(selectedBooks.map { it.file.uri })
         }.onError {
-            context.toastOnUi("添加书架失败，请尝试重新选择文件夹")
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架失败，请尝试重新选择文件夹"))
             AppLog.put("添加书架失败\n${it.localizedMessage}", it)
         }.onSuccess {
-            context.toastOnUi("添加书架成功")
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架成功"))
         }.onFinally {
             clearSelection()
+        }
+    }
+
+    private fun importPickedBookFiles(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        uris.forEach { it.takePersistablePermissionSafely(context) }
+        execute {
+            LocalBook.importFiles(uris)
+        }.onError {
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架失败，请重新选择书籍文件"))
+            AppLog.put("添加书架失败\n${it.localizedMessage}", it)
+        }.onSuccess {
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架成功"))
         }
     }
 
@@ -553,10 +599,10 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
         execute {
             LocalBook.importFiles(listOf(item.file.uri))
         }.onError {
-            context.toastOnUi("添加书架失败，请尝试重新选择文件夹")
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架失败，请尝试重新选择文件夹"))
             AppLog.put("添加书架失败\n${it.localizedMessage}", it)
         }.onSuccess {
-            context.toastOnUi("添加书架成功")
+            _effects.tryEmit(ImportBookEffect.ShowToast("添加书架成功"))
         }.onFinally {
             _state.update { state ->
                 state.copy(selectedIds = state.selectedIds - item.selectionId)
@@ -574,13 +620,10 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
 
     private fun onImportedFileClick(fileDoc: FileDoc) {
         if (!ArchiveUtils.isArchive(fileDoc.name)) {
-            appDb.bookDao.getBookByFileName(fileDoc.name)?.let { book ->
-                val filePath = fileDoc.toString()
-                if (book.bookUrl != filePath) {
-                    book.bookUrl = filePath
-                    appDb.bookDao.insert(book)
+            viewModelScope.launch {
+                repository.findAndRebind(fileDoc.name, fileDoc.toString())?.let { book ->
+                    _effects.tryEmit(ImportBookEffect.OpenBook(book))
                 }
-                _effects.tryEmit(ImportBookEffect.OpenBook(book))
             }
             return
         }
@@ -598,9 +641,13 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
     }
 
     private fun onArchiveEntrySelected(fileDoc: FileDoc, fileName: String) {
-        appDb.bookDao.getBookByFileName(fileName)?.let {
-            _effects.tryEmit(ImportBookEffect.OpenBook(it))
-        } ?: _effects.tryEmit(ImportBookEffect.ShowImportArchiveDialog(fileDoc, fileName))
+        viewModelScope.launch {
+            val book = repository.findByFileName(fileName)
+            _effects.tryEmit(
+                book?.let(ImportBookEffect::OpenBook)
+                    ?: ImportBookEffect.ShowImportArchiveDialog(fileDoc, fileName)
+            )
+        }
     }
 
     private fun addArchiveToBookShelf(fileDoc: FileDoc, fileName: String) {
@@ -662,7 +709,9 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
                 }
             }.onFailure {
                 withContext(Main) {
-                    context.toastOnUi("扫描文件夹出错\n${it.localizedMessage}")
+                    _effects.tryEmit(
+                        ImportBookEffect.ShowToast("扫描文件夹出错\n${it.localizedMessage}")
+                    )
                 }
                 _state.update { state ->
                     state.copy(interaction = state.interaction.copy(isLoading = false))
@@ -701,7 +750,9 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
                 )
             }
         }.onError {
-            context.toastOnUi("获取文件列表出错\n${it.localizedMessage}")
+            _effects.tryEmit(
+                ImportBookEffect.ShowToast("获取文件列表出错\n${it.localizedMessage}")
+            )
             _state.update { state ->
                 state.copy(interaction = state.interaction.copy(isLoading = false))
             }
@@ -795,6 +846,18 @@ class ImportBookViewModel(application: Application) : BaseViewModel(application)
             .collect {}
 
         return docs
+    }
+
+    private fun updateImportBookSetting(transform: (ImportBookSettings) -> ImportBookSettings) {
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            importBookSettingsGateway.update(transform)
+        }
+    }
+
+    private fun updateOtherSetting(transform: (OtherSettings) -> OtherSettings) {
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            otherSettingsGateway.update(transform)
+        }
     }
 
     override fun onCleared() {

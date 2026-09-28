@@ -35,8 +35,13 @@ class GetReadRecordOverviewUseCase {
             }
         }
 
-        val totalTime = filteredDetails.sumOf { it.readTime }
-        val totalWords = filteredDetails.sumOf { it.readWords }
+        // 阅读时间口径与阅读记录页/首页一致：「总」模式使用合并后的 readRecord 汇总
+        // （包含无每日详情来源的旧版遗留时长），周期模式只能按有日期的详情统计。
+        val totalTime = if (period == ReadPeriod.ALL) {
+            latestRecords.sumOf { it.readTime }
+        } else {
+            filteredDetails.sumOf { it.readTime }
+        }
         val readingDays = filteredDetails.map { it.date }.distinct().size
 
         val periodBooks = filteredDetails.groupBy { it.bookName to it.bookAuthor }
@@ -139,7 +144,6 @@ class GetReadRecordOverviewUseCase {
             totalBooks = totalBooks,
             finishedBooks = finishedCount,
             readingBooks = readingCount,
-            totalWords = totalWords,
             dailyTimeData = dailyTimeData,
             topBooks = topBooks,
             dailyTopBook = dailyTopBookMap,

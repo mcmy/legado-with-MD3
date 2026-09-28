@@ -34,7 +34,7 @@ import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppFloatingActionButton
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.AdaptiveSwitch
-import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
@@ -54,15 +54,15 @@ fun HighlightTagRuleEditSheet(
     val scope = rememberCoroutineScope()
 
     val isNew = rule == null || rule.id == 0L
-    val initial = remember(rule) {
+    val initial = remember(show, rule) {
         rule ?: HighlightTagRule()
     }
 
-    var title by remember(initial) { mutableStateOf(initial.title) }
-    var pattern by remember(initial) { mutableStateOf(initial.pattern) }
-    var enabled by remember(initial) { mutableStateOf(initial.enabled) }
+    var title by remember(show, rule) { mutableStateOf(initial.title) }
+    var pattern by remember(show, rule) { mutableStateOf(initial.pattern) }
+    var enabled by remember(show, rule) { mutableStateOf(initial.enabled) }
 
-    var showMenu by remember { mutableStateOf(false) }
+    var showMenu by remember(show, rule) { mutableStateOf(false) }
 
     fun getCurrentRule(): HighlightTagRule {
         return initial.copy(
@@ -79,18 +79,18 @@ fun HighlightTagRuleEditSheet(
             stringResource(R.string.highlight_tag_edit_rule)
         },
         startAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = onDismissRequest,
                 icon = Icons.Default.Close,
-                contentDescription = "Close",
+                contentDescription = stringResource(R.string.close),
             )
         },
         endAction = {
             Box {
-                MediumPlainButton(
+                MediumTonalButton(
                     onClick = { showMenu = true },
                     icon = Icons.Default.MoreVert,
-                    contentDescription = "More"
+                    contentDescription = stringResource(R.string.more_menu)
                 )
                 RoundDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     RoundDropdownMenuItem(
@@ -169,6 +169,7 @@ fun HighlightTagRuleEditSheet(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(16.dp),
+                tooltipText = stringResource(R.string.action_save),
                 icon = Icons.Default.Save
             )
         }

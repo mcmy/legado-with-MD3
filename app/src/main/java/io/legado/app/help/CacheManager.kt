@@ -153,7 +153,10 @@ object CacheManager {
     }
 }
 
+@Keep
+@Suppress("unused")
 object WebCacheManager {
+    @JvmOverloads
     @JavascriptInterface
     fun put(key: String, value: String, saveTime: Int = 0) {
         CacheManager.put(key, value, saveTime)
@@ -184,6 +187,7 @@ object WebCacheManager {
         return CacheManager.get(key, onlyDisk)
     }
 
+    @JvmOverloads
     @JavascriptInterface
     fun putFile(key: String, value: String, saveTime: Int = 0) {
         CacheManager.putFile(key, value, saveTime)

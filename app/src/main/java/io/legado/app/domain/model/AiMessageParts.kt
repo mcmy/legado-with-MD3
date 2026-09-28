@@ -121,6 +121,7 @@ object AiMessagePartJson {
      * Migrate legacy ToolCall/ToolResult pairs into unified Tool parts.
      * Handles old messages stored before the unified Tool part was introduced.
      */
+    @Suppress("DEPRECATION")
     private fun AiMessagePart.migrateLegacy(): AiMessagePart {
         return when (this) {
             is AiMessagePart.ToolCall -> AiMessagePart.Tool(

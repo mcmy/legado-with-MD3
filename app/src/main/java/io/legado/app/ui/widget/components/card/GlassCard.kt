@@ -5,9 +5,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -16,13 +16,34 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import io.legado.app.ui.config.themeConfig.ThemeConfig
 import io.legado.app.ui.theme.LegadoTheme
-import io.legado.app.ui.theme.ThemeResolver
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.basic.Card as MiuixCard
+import io.legado.app.ui.theme.LocalAppUiConfiguration
+import io.legado.app.ui.widget.components.AppContainerBackgroundType
+import io.legado.app.ui.widget.components.appContainerBackground
 import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
+
+@Composable
+private fun BaseCardContent(
+    modifier: Modifier = Modifier,
+    shape: Shape,
+    useItemBackground: Boolean,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    if (!useItemBackground) {
+        Column(modifier = modifier, content = content)
+        return
+    }
+
+    Box(modifier = modifier) {
+        Spacer(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(shape)
+                .appContainerBackground(type = AppContainerBackgroundType.Item)
+        )
+        Column(content = content)
+    }
+}
 
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
@@ -31,87 +52,62 @@ private fun BaseCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     cornerRadius: Dp = MiuixCardDefaults.CornerRadius,
-    pressFeedbackType: PressFeedbackType = PressFeedbackType.None,
     containerColor: Color? = null,
     contentColor: Color? = null,
     elevation: Dp = 0.dp,
     border: BorderStroke? = null,
     alpha: Float = 1f,
+    useItemBackground: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val resolvedContainerColor = (containerColor ?: LegadoTheme.colorScheme.surfaceContainer)
         .let { it.copy(alpha = it.alpha * alpha) }
+    val themeSettings = LocalAppUiConfiguration.current.theme
     val isTransparent = containerColor == Color.Transparent
-    val shape = RoundedCornerShape(cornerRadius)
-
-    if (isTransparent) {
-        val clickableModifier = if (onClick != null || onLongClick != null) {
-            modifier
-                .clip(shape)
-                .combinedClickable(
-                    onClick = { onClick?.invoke() },
-                    onLongClick = onLongClick
-                )
-        } else {
-            modifier.clip(shape)
-        }
-        Box(
-            modifier = clickableModifier
-        ) {
-            Column(content = content)
-        }
-    } else if (ThemeResolver.isMiuixEngine(LegadoTheme.composeEngine)) {
-        val colors = MiuixCardDefaults.defaultColors(
-            color = resolvedContainerColor,
-            contentColor = contentColor ?: LegadoTheme.colorScheme.onSurface
-        )
-        if (onClick != null) {
-            MiuixCard(
-                modifier = modifier,
-                cornerRadius = cornerRadius,
-                pressFeedbackType = pressFeedbackType,
-                showIndication = true,
-                onClick = onClick,
-                onLongPress = onLongClick,
-                content = content,
-                colors = colors
-            )
-        } else {
-            MiuixCard(
-                modifier = modifier,
-                cornerRadius = cornerRadius,
-                content = content,
-                colors = colors
-            )
-        }
+    val resolvedCornerRadius = if (themeSettings.overrideBaseCardCornerRadius) {
+        themeSettings.baseCardCornerRadius.dp
     } else {
-        val colors = CardDefaults.cardColors(
-            containerColor = resolvedContainerColor,
-            contentColor = contentColor ?: LegadoTheme.colorScheme.onSecondaryContainer,
-            disabledContainerColor = LegadoTheme.colorScheme.onSecondaryContainer.copy(alpha = alpha * 0.38f),
-            disabledContentColor = LegadoTheme.colorScheme.onSecondaryContainer.copy(alpha = alpha * 0.38f)
-        )
-        val clickableModifier = if (onClick != null || onLongClick != null) {
-            modifier
-                .clip(RoundedCornerShape(cornerRadius))
-                .combinedClickable(
-                    onClick = { onClick?.invoke() },
-                    onLongClick = onLongClick
-                )
+        cornerRadius
+    }
+    val resolvedBorder = if (themeSettings.overrideBaseCardBorder) {
+        val configuredColor = if (LegadoTheme.isDark) {
+            themeSettings.baseCardBorderColorNight
         } else {
-            modifier
+            themeSettings.baseCardBorderColor
         }
-        Surface(
-            modifier = clickableModifier,
-            shape = RoundedCornerShape(cornerRadius),
-            color = colors.containerColor,
-            contentColor = colors.contentColor,
-            tonalElevation = 0.dp,
-            shadowElevation = elevation,
-            border = border
-        ) {
-            Column(content = content)
-        }
+        BorderStroke(
+            themeSettings.baseCardBorderWidth.dp,
+            configuredColor.takeIf { it != 0 }?.let(::Color)
+                ?: LegadoTheme.colorScheme.outlineVariant
+        )
+    } else {
+        border
+    }
+    val resolvedShape = RoundedCornerShape(resolvedCornerRadius)
+    val clickableModifier = if (onClick != null || onLongClick != null) {
+        modifier
+            .clip(resolvedShape)
+            .combinedClickable(
+                onClick = { onClick?.invoke() },
+                onLongClick = onLongClick
+            )
+    } else {
+        modifier
+    }
+    Surface(
+        modifier = clickableModifier,
+        shape = resolvedShape,
+        color = if (isTransparent) Color.Transparent else resolvedContainerColor,
+        contentColor = contentColor ?: LegadoTheme.colorScheme.onSurface,
+        tonalElevation = 0.dp,
+        shadowElevation = elevation,
+        border = resolvedBorder
+    ) {
+        BaseCardContent(
+            shape = resolvedShape,
+            useItemBackground = useItemBackground,
+            content = content,
+        )
     }
 }
 
@@ -122,7 +118,6 @@ fun GlassCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     cornerRadius: Dp = MiuixCardDefaults.CornerRadius,
-    pressFeedbackType: PressFeedbackType = PressFeedbackType.None,
     containerColor: Color? = null,
     contentColor: Color? = null,
     elevation: Dp = 0.dp,
@@ -134,12 +129,12 @@ fun GlassCard(
         onClick = onClick,
         onLongClick = onLongClick,
         cornerRadius = cornerRadius,
-        pressFeedbackType = pressFeedbackType,
         containerColor = containerColor,
         contentColor = contentColor,
         elevation = elevation,
         border = border,
-        alpha = ThemeConfig.containerOpacity / 100f,
+        alpha = LocalAppUiConfiguration.current.theme.containerOpacity / 100f,
+        useItemBackground = true,
         content = content
     )
 }
@@ -151,7 +146,6 @@ fun NormalCard(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     cornerRadius: Dp = MiuixCardDefaults.CornerRadius,
-    pressFeedbackType: PressFeedbackType = PressFeedbackType.None,
     containerColor: Color? = null,
     contentColor: Color? = null,
     elevation: Dp = 0.dp,
@@ -163,12 +157,12 @@ fun NormalCard(
         onClick = onClick,
         onLongClick = onLongClick,
         cornerRadius = cornerRadius,
-        pressFeedbackType = pressFeedbackType,
         containerColor = containerColor,
         contentColor = contentColor,
         elevation = elevation,
         border = border,
         alpha = 1f,
+        useItemBackground = false,
         content = content
     )
 }

@@ -54,7 +54,6 @@ import io.legado.app.R
 import io.legado.app.constant.AppConst
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
-import io.legado.app.ui.config.importBookConfig.ImportBookConfig
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.ActionItem
 import io.legado.app.ui.widget.components.AppPullToRefresh
@@ -71,6 +70,7 @@ import io.legado.app.ui.widget.components.list.ListScaffold
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.text.AppText
+import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.utils.ConvertUtils
 import io.legado.app.utils.startActivityForBook
@@ -85,7 +85,9 @@ private fun ImportBookContent(
     onSearchToggle: (Boolean) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onSelectFolder: () -> Unit,
+    onSelectBookFiles: () -> Unit,
     onScanFolder: () -> Unit,
+    onImportCurrentFolderAsManga: () -> Unit,
     onImportFileName: () -> Unit,
     onSortChange: (Int) -> Unit,
     onNavigateBack: () -> Unit,
@@ -98,9 +100,11 @@ private fun ImportBookContent(
     onDeleteSelection: () -> Unit,
     onItemClick: (ImportBook) -> Unit
 ) {
+    val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     ListScaffold(
         title = state.pathNames.lastOrNull() ?: stringResource(R.string.local_book),
         state = state,
+        scrollBehavior = scrollBehavior,
         onBackClick = onBackClick,
         onSearchToggle = onSearchToggle,
         onSearchQueryChange = onSearchQueryChange,
@@ -113,6 +117,13 @@ private fun ImportBookContent(
             )
         },
         dropDownMenuContent = { dismiss ->
+            RoundDropdownMenuItem(
+                text = stringResource(R.string.import_current_folder_as_manga),
+                onClick = {
+                    onImportCurrentFolderAsManga()
+                    dismiss()
+                },
+            )
             RoundDropdownMenuItem(
                 text = stringResource(R.string.sort_by_name),
                 onClick = {
@@ -189,7 +200,7 @@ private fun ImportBookContent(
                 )
             )
         ),
-        onAddClick = null
+        onAddClick = onSelectBookFiles
     ) { paddingValues ->
         AppPullToRefresh(
             modifier = Modifier
@@ -197,7 +208,8 @@ private fun ImportBookContent(
                 .padding(paddingValues),
             isRefreshing = state.isLoading,
             onRefresh = onScanFolder,
-            topPadding = paddingValues.calculateTopPadding()
+            topPadding = paddingValues.calculateTopPadding(),
+            scrollBehavior = scrollBehavior
         ) {
             when {
                 state.items.isEmpty() && state.isLoading -> {
@@ -232,7 +244,7 @@ private fun ImportBookContent(
 }
 
 @Composable
-fun ImportBookScreen(
+fun ImportBookRouteScreen(
     onBackClick: () -> Unit,
     viewModel: ImportBookViewModel = koinViewModel()
 ) {
@@ -241,23 +253,24 @@ fun ImportBookScreen(
     var showFolderPicker by remember { mutableStateOf(false) }
     var showImportFileNameDialog by remember { mutableStateOf(false) }
     var pendingSingleAddBook by remember { mutableStateOf<ImportBook?>(null) }
-    var fileNameJs by remember { mutableStateOf(ImportBookConfig.bookImportFileName.orEmpty()) }
+    var fileNameJs by remember { mutableStateOf("") }
     var pickerTarget by remember { mutableStateOf(ImportFolderPickTarget.IMPORT_FOLDER) }
     val selectDocTree = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         viewModel.dispatch(ImportBookIntent.FolderPicked(uri, pickerTarget))
     }
+    val selectBookFiles = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        viewModel.dispatch(ImportBookIntent.BookFilesPicked(uris))
+    }
     val handleBack = {
         when {
-            uiState.selectedIds.isNotEmpty() -> viewModel.clearSelection()
+            uiState.selectedIds.isNotEmpty() -> viewModel.dispatch(ImportBookIntent.ClearSelection)
             uiState.canGoBack -> viewModel.dispatch(ImportBookIntent.NavigateBack)
             else -> onBackClick()
         }
-    }
-
-    BackHandler(enabled = !showFolderPicker && !showImportFileNameDialog) {
-        handleBack()
     }
 
     LaunchedEffect(viewModel) {
@@ -298,78 +311,126 @@ fun ImportBookScreen(
                 is ImportBookEffect.ShowToastRes -> {
                     context.toastOnUi(effect.resId)
                 }
+
+                is ImportBookEffect.ShowToast -> context.toastOnUi(effect.message)
             }
         }
     }
 
+    ImportBookScreen(
+        state = uiState,
+        onIntent = viewModel::dispatch,
+        onBackClick = handleBack,
+        showFolderPicker = showFolderPicker,
+        onShowFolderPickerChange = { showFolderPicker = it },
+        showImportFileNameDialog = showImportFileNameDialog,
+        onShowImportFileNameDialogChange = { showImportFileNameDialog = it },
+        fileNameJs = fileNameJs,
+        onFileNameJsChange = { fileNameJs = it },
+        pendingSingleAddBook = pendingSingleAddBook,
+        onPendingSingleAddBookChange = { pendingSingleAddBook = it },
+        onSelectBookFiles = {
+            selectBookFiles.launch(
+                arrayOf(
+                    "text/plain", "application/epub+zip", "application/pdf",
+                    "application/x-mobipocket-ebook", "application/vnd.amazon.ebook",
+                    "application/zip", "application/x-rar-compressed",
+                    "application/x-7z-compressed", "application/octet-stream",
+                )
+            )
+        },
+    )
+}
+
+@Composable
+fun ImportBookScreen(
+    state: ImportBookUiState,
+    onIntent: (ImportBookIntent) -> Unit,
+    onBackClick: () -> Unit,
+    showFolderPicker: Boolean,
+    onShowFolderPickerChange: (Boolean) -> Unit,
+    showImportFileNameDialog: Boolean,
+    onShowImportFileNameDialogChange: (Boolean) -> Unit,
+    fileNameJs: String,
+    onFileNameJsChange: (String) -> Unit,
+    pendingSingleAddBook: ImportBook?,
+    onPendingSingleAddBookChange: (ImportBook?) -> Unit,
+    onSelectBookFiles: () -> Unit,
+) {
+    BackHandler(enabled = !showFolderPicker && !showImportFileNameDialog) { onBackClick() }
+
     FilePickerSheet(
         show = showFolderPicker,
-        onDismissRequest = { showFolderPicker = false },
+        onDismissRequest = { onShowFolderPickerChange(false) },
         title = stringResource(R.string.select_folder),
         onSelectSysDir = {
-            showFolderPicker = false
-            viewModel.dispatch(ImportBookIntent.SelectFolderClick)
+            onShowFolderPickerChange(false)
+            onIntent(ImportBookIntent.SelectFolderClick)
         }
     )
 
     AppAlertDialog(
         show = showImportFileNameDialog,
-        onDismissRequest = { showImportFileNameDialog = false },
+        onDismissRequest = { onShowImportFileNameDialogChange(false) },
         title = stringResource(R.string.import_file_name),
         content = {
             AppText("Use js to parse file name from src, then assign name/author.")
             OutlinedTextField(
                 value = fileNameJs,
-                onValueChange = { fileNameJs = it },
+                onValueChange = onFileNameJsChange,
                 label = { AppText("js") }
             )
         },
         confirmText = stringResource(android.R.string.ok),
         onConfirm = {
-            ImportBookConfig.bookImportFileName = fileNameJs
-            showImportFileNameDialog = false
+            onIntent(ImportBookIntent.SetFileNameRule(fileNameJs))
+            onShowImportFileNameDialogChange(false)
         },
         dismissText = stringResource(android.R.string.cancel),
-        onDismiss = { showImportFileNameDialog = false }
+        onDismiss = { onShowImportFileNameDialogChange(false) }
     )
 
     pendingSingleAddBook?.let { book ->
         AppAlertDialog(
             show = true,
-            onDismissRequest = { pendingSingleAddBook = null },
+            onDismissRequest = { onPendingSingleAddBookChange(null) },
             title = stringResource(R.string.add_to_bookshelf),
             text = stringResource(R.string.check_add_bookshelf, book.name),
             confirmText = stringResource(android.R.string.ok),
             onConfirm = {
-                viewModel.dispatch(ImportBookIntent.AddSingleToBookshelf(book))
-                pendingSingleAddBook = null
+                onIntent(ImportBookIntent.AddSingleToBookshelf(book))
+                onPendingSingleAddBookChange(null)
             },
             dismissText = stringResource(android.R.string.cancel),
-            onDismiss = { pendingSingleAddBook = null }
+            onDismiss = { onPendingSingleAddBookChange(null) }
         )
     }
 
     ImportBookContent(
-        state = uiState,
-        onBackClick = handleBack,
-        onSearchToggle = { viewModel.dispatch(ImportBookIntent.SearchToggle(it)) },
-        onSearchQueryChange = { viewModel.dispatch(ImportBookIntent.SearchQueryChange(it)) },
-        onSelectFolder = { showFolderPicker = true },
-        onScanFolder = { viewModel.dispatch(ImportBookIntent.ScanFolder) },
-        onImportFileName = {
-            fileNameJs = ImportBookConfig.bookImportFileName.orEmpty()
-            showImportFileNameDialog = true
+        state = state,
+        onBackClick = onBackClick,
+        onSearchToggle = { onIntent(ImportBookIntent.SearchToggle(it)) },
+        onSearchQueryChange = { onIntent(ImportBookIntent.SearchQueryChange(it)) },
+        onSelectFolder = { onShowFolderPickerChange(true) },
+        onSelectBookFiles = onSelectBookFiles,
+        onScanFolder = { onIntent(ImportBookIntent.ScanFolder) },
+        onImportCurrentFolderAsManga = {
+            onIntent(ImportBookIntent.ImportCurrentFolderAsManga)
         },
-        onSortChange = { viewModel.dispatch(ImportBookIntent.SortChange(it)) },
-        onNavigateBack = { viewModel.dispatch(ImportBookIntent.NavigateBack) },
-        onNavigateToLevel = { viewModel.dispatch(ImportBookIntent.NavigateToLevel(it)) },
-        onSelectAll = { viewModel.dispatch(ImportBookIntent.SelectAll) },
-        onClearSelection = { viewModel.clearSelection() },
-        onSelectInvert = { viewModel.dispatch(ImportBookIntent.SelectInvert) },
-        onAddToBookshelf = { viewModel.dispatch(ImportBookIntent.AddToBookshelf) },
-        onItemAddToBookshelf = { pendingSingleAddBook = it },
-        onDeleteSelection = { viewModel.dispatch(ImportBookIntent.DeleteSelection) },
-        onItemClick = { viewModel.dispatch(ImportBookIntent.ItemClick(it)) }
+        onImportFileName = {
+            onFileNameJsChange(state.fileNameRule)
+            onShowImportFileNameDialogChange(true)
+        },
+        onSortChange = { onIntent(ImportBookIntent.SortChange(it)) },
+        onNavigateBack = { onIntent(ImportBookIntent.NavigateBack) },
+        onNavigateToLevel = { onIntent(ImportBookIntent.NavigateToLevel(it)) },
+        onSelectAll = { onIntent(ImportBookIntent.SelectAll) },
+        onClearSelection = { onIntent(ImportBookIntent.ClearSelection) },
+        onSelectInvert = { onIntent(ImportBookIntent.SelectInvert) },
+        onAddToBookshelf = { onIntent(ImportBookIntent.AddToBookshelf) },
+        onItemAddToBookshelf = onPendingSingleAddBookChange,
+        onDeleteSelection = { onIntent(ImportBookIntent.DeleteSelection) },
+        onItemClick = { onIntent(ImportBookIntent.ItemClick(it)) }
     )
 }
 
@@ -430,7 +491,7 @@ private fun ImportPathNavigationBar(
             SmallTonalButton(
                 onClick = onNavigateBack,
                 icon = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "back"
+                contentDescription = stringResource(R.string.back)
             )
         }
     }
@@ -513,7 +574,8 @@ private fun ImportBookItem(
                 Spacer(modifier = Modifier.width(8.dp))
                 SmallPlainButton(
                     onClick = onAddToBookshelf,
-                    icon = if (isSelected) Icons.Default.Check else Icons.Default.AddCircleOutline
+                    icon = if (isSelected) Icons.Default.Check else Icons.Default.AddCircleOutline,
+                    contentDescription = stringResource(R.string.add_to_bookshelf)
                 )
             }
         }

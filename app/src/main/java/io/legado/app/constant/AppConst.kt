@@ -4,8 +4,9 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.annotation.Keep
-import cn.hutool.crypto.digest.DigestUtil
 import io.legado.app.BuildConfig
+import io.legado.app.help.crypto.digest
+import io.legado.app.help.crypto.toHexString
 import io.legado.app.help.update.AppVariant
 import org.apache.commons.lang3.time.FastDateFormat
 import splitties.init.appCtx
@@ -17,6 +18,7 @@ object AppConst {
     const val APP_TAG = "Legado"
 
     const val channelIdDownload = "channel_download"
+    const val channelIdBookSourceCheck = "channel_book_source_check"
     const val channelIdReadAloud = "channel_read_aloud"
     const val channelIdWeb = "channel_web"
 
@@ -80,7 +82,7 @@ object AppConst {
     private val sha256Signature: String by lazy {
         val packageInfo =
             appCtx.packageManager.getPackageInfo(appCtx.packageName, PackageManager.GET_SIGNATURES)
-        DigestUtil.sha256Hex(packageInfo.signatures!![0].toByteArray()).uppercase()
+        digest("SHA-256", packageInfo.signatures!![0].toByteArray()).toHexString().uppercase()
     }
 
     private val isOfficial = sha256Signature == OFFICIAL_SIGNATURE
@@ -88,7 +90,7 @@ object AppConst {
     private val isBeta = sha256Signature == BETA_SIGNATURE || BuildConfig.DEBUG
 
     val charsets =
-        arrayListOf("UTF-8", "GB2312", "GB18030", "GBK", "Unicode", "UTF-16", "UTF-16LE", "ASCII")
+        arrayListOf("UTF-8", "GB2312", "GB18030", "GBK", "Unicode", "UTF-16", "UTF-16LE", "UTF-16BE", "ASCII")
 
     @Keep
     data class AppInfo(

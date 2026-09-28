@@ -2,19 +2,23 @@ package io.legado.app.model.analyzeRule
 
 import android.text.TextUtils
 import androidx.annotation.Keep
+import com.google.gson.internal.LinkedTreeMap
 import com.script.CompiledScript
 import com.script.buildScriptBindings
 import com.script.rhino.RhinoScriptEngine
 import io.legado.app.constant.AppPattern.JS_PATTERN
+import io.legado.app.constant.AppPattern.WebJS_PATTERN
 import io.legado.app.data.entities.BaseBook
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.RssArticle
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.CacheManager
 import io.legado.app.help.JsExtensions
+import io.legado.app.help.http.BackstageWebView
 import io.legado.app.help.http.CookieStore
 import io.legado.app.help.source.getShareScope
 import io.legado.app.model.Debug
@@ -22,10 +26,12 @@ import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.GSON
 import io.legado.app.utils.GSONStrict
 import io.legado.app.utils.NetworkUtils
+import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.getOrPutLimit
 import io.legado.app.utils.isDataUrl
 import io.legado.app.utils.isJson
+import io.legado.app.utils.isMainThread
 import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.splitNotBlank
 import io.legado.app.utils.stackTraceStr
@@ -36,10 +42,10 @@ import org.apache.commons.text.StringEscapeUtils
 import org.jsoup.nodes.Node
 import org.mozilla.javascript.NativeObject
 import org.mozilla.javascript.Scriptable
+import org.koin.core.context.GlobalContext
 import java.lang.ref.WeakReference
 import java.net.URL
 import java.util.Locale
-import java.util.regex.Pattern
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -73,6 +79,7 @@ class AnalyzeRule(
 
     private val stringRuleCache = hashMapOf<String, List<SourceRule>>()
     private val regexCache = hashMapOf<String, Regex?>()
+    private val cacheSettingsGateway get() = GlobalContext.get().get<DownloadCacheSettingsGateway>()
     private val scriptCache = hashMapOf<String, CompiledScript>()
     private var topScopeRef: WeakReference<Scriptable>? = null
     private var evalJSCallCount = 0
@@ -163,6 +170,23 @@ class AnalyzeRule(
         }
     }
 
+    private fun getWebJsResult(jsStr: String, result: Any): String {
+        check(!isMainThread) { "webJs must be called on a background thread" }
+        return runBlocking {
+            BackstageWebView(
+                url = baseUrl,
+                html = content.toString(),
+                javaScript = jsStr,
+                headerMap = getSource()?.getHeaderMap(cacheSettingsGateway.currentSettings.userAgent, true),
+                tag = getSource()?.getKey(),
+                cacheFirst = true,
+                timeout = 10000,
+                result = GSON.toJson(result),
+                isRule = true,
+            ).getStrResponse().body.orEmpty()
+        }
+    }
+
     /**
      * 获取文本列表
      */
@@ -187,12 +211,17 @@ class AnalyzeRule(
                 val sourceRule = ruleList.first()
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result = if (sourceRule.getParamSize() > 1) {
+                result = when {
+                    // 快捷路径同样要按 mode 分发（与下方通用路径一致）：`@js:` 书源列表
+                    // 规则产出的 JS 对象条目上，`$.x` / `@js:xxx` 若被当字面量键名处理会
+                    // 返回空，BookList 丢掉空书名条目 → 书源校验把搜索/发现误判为失效。
+                    sourceRule.mode == Mode.Js -> evalJS(sourceRule.rule, result)
+                    sourceRule.mode == Mode.Json ->
+                        getAnalyzeByJSonPath(result).getStringList(sourceRule.rule)
                     // get {{}}
-                    sourceRule.rule
-                } else {
+                    sourceRule.getParamSize() > 1 -> sourceRule.rule
                     // 键值直接访问
-                    result[sourceRule.rule]
+                    else -> result[sourceRule.rule]
                 }
                 result?.let {
                     if (sourceRule.replaceRegex.isNotEmpty() && it is List<*>) {
@@ -203,6 +232,8 @@ class AnalyzeRule(
                         result = replaceRegex(result.toString(), sourceRule)
                     }
                 }
+            } else if (result is LinkedTreeMap<*, *>) {
+                result = result[ruleList.first().rule]
             } else {
                 for (sourceRule in ruleList) {
                     putRule(sourceRule.putMap)
@@ -211,6 +242,9 @@ class AnalyzeRule(
                     val rule = sourceRule.rule
                     if (rule.isNotEmpty()) {
                         result = when (sourceRule.mode) {
+                            Mode.WebJs -> getWebJsResult(rule, result).let {
+                                GSON.fromJsonArray<String>(it).getOrNull() ?: it
+                            }
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getStringList(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getStringList(rule)
@@ -281,15 +315,21 @@ class AnalyzeRule(
                 val sourceRule = ruleList.first()
                 putRule(sourceRule.putMap)
                 sourceRule.makeUpRule(result)
-                result = if (sourceRule.getParamSize() > 1) {
+                result = when {
+                    // 与 getStringList 同理：JS 对象条目必须按 mode 分发，否则 `$.name`
+                    // 与 `@js:xxx` 都会被当字面量键名而返回空串。
+                    sourceRule.mode == Mode.Js -> evalJS(sourceRule.rule, result)
+                    sourceRule.mode == Mode.Json ->
+                        getAnalyzeByJSonPath(result).getString(sourceRule.rule)
                     // get {{}}
-                    sourceRule.rule
-                } else {
+                    sourceRule.getParamSize() > 1 -> sourceRule.rule
                     // 键值直接访问
-                    result[sourceRule.rule]?.toString()
+                    else -> result[sourceRule.rule]?.toString()
                 }?.let {
-                    replaceRegex(it, sourceRule)
+                    replaceRegex(it.toString(), sourceRule)
                 }
+            } else if (result is LinkedTreeMap<*, *>) {
+                result = result[ruleList.first().rule]?.toString()
             } else {
                 for (sourceRule in ruleList) {
                     putRule(sourceRule.putMap)
@@ -298,6 +338,7 @@ class AnalyzeRule(
                     val rule = sourceRule.rule
                     if (rule.isNotBlank() || sourceRule.replaceRegex.isEmpty()) {
                         result = when (sourceRule.mode) {
+                            Mode.WebJs -> getWebJsResult(rule, result)
                             Mode.Js -> evalJS(rule, result)
                             Mode.Json -> getAnalyzeByJSonPath(result).getString(rule)
                             Mode.XPath -> getAnalyzeByXPath(result).getString(rule)
@@ -354,6 +395,10 @@ class AnalyzeRule(
                         rule.splitNotBlank("&&")
                     )
 
+                    Mode.WebJs -> GSON.fromJsonObject<Map<String, Any?>>(
+                        getWebJsResult(rule, result)
+                    ).getOrNull()
+
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getObject(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
@@ -387,6 +432,10 @@ class AnalyzeRule(
                         rule.splitNotBlank("&&")
                     )
 
+                    Mode.WebJs -> GSON.fromJsonArray<Map<String, Any?>>(
+                        getWebJsResult(rule, result)
+                    ).getOrNull()
+
                     Mode.Js -> evalJS(rule, result)
                     Mode.Json -> getAnalyzeByJSonPath(result).getList(rule)
                     Mode.XPath -> getAnalyzeByXPath(result).getElements(rule)
@@ -414,10 +463,9 @@ class AnalyzeRule(
      */
     private fun splitPutRule(ruleStr: String, putMap: HashMap<String, String>): String {
         var vRuleStr = ruleStr
-        val putMatcher = putPattern.matcher(vRuleStr)
-        while (putMatcher.find()) {
-            vRuleStr = vRuleStr.replace(putMatcher.group(), "")
-            val putJsonStr = putMatcher.group(1)
+        for (putMatch in putPattern.findAll(vRuleStr)) {
+            vRuleStr = vRuleStr.replace(putMatch.value, "")
+            val putJsonStr = putMatch.groupValues[1]
             val putJson = GSONStrict.fromJsonObject<Map<String, String>>(putJsonStr)
                 .getOrNull()
             if (putJson != null) {
@@ -448,10 +496,9 @@ class AnalyzeRule(
         if (rule.replaceFirst) {
             /* ##match##replace### 获取第一个匹配到的结果并进行替换 */
             if (regex != null) kotlin.runCatching {
-                val pattern = regex.toPattern()
-                val matcher = pattern.matcher(result)
-                return if (matcher.find()) {
-                    matcher.group(0)!!.replaceFirst(regex, replacement)
+                val match = regex.find(result)
+                return if (match != null) {
+                    match.value.replaceFirst(regex, replacement)
                 } else {
                     ""
                 }
@@ -503,16 +550,26 @@ class AnalyzeRule(
             mMode = Mode.Regex
         }
         var tmp: String
-        val jsMatcher = JS_PATTERN.matcher(ruleStr)
-        while (jsMatcher.find()) {
-            if (jsMatcher.start() > start) {
-                tmp = ruleStr.substring(start, jsMatcher.start()).trim { it <= ' ' }
+        for (jsMatch in JS_PATTERN.findAll(ruleStr)) {
+            if (jsMatch.range.first > start) {
+                tmp = ruleStr.substring(start, jsMatch.range.first).trim { it <= ' ' }
                 if (tmp.isNotEmpty()) {
                     ruleList.add(SourceRule(tmp, mMode))
                 }
             }
-            ruleList.add(SourceRule(jsMatcher.group(2) ?: jsMatcher.group(1), Mode.Js))
-            start = jsMatcher.end()
+            ruleList.add(SourceRule(jsMatch.groupValues[2].ifEmpty { jsMatch.groupValues[1] }, Mode.Js))
+            start = jsMatch.range.last + 1
+        }
+
+        for (webJsMatch in WebJS_PATTERN.findAll(ruleStr)) {
+            if (webJsMatch.range.first > start) {
+                tmp = ruleStr.substring(start, webJsMatch.range.first).trim { it <= ' ' }
+                if (tmp.isNotEmpty()) {
+                    ruleList.add(SourceRule(tmp, mMode))
+                }
+            }
+            ruleList.add(SourceRule(webJsMatch.groupValues[1], Mode.WebJs))
+            start = webJsMatch.range.last + 1
         }
 
         if (ruleStr.length > start) {
@@ -589,38 +646,37 @@ class AnalyzeRule(
             //@get,{{ }}, 拆分
             var start = 0
             var tmp: String
-            val evalMatcher = evalPattern.matcher(rule)
-
-            if (evalMatcher.find()) {
-                tmp = rule.substring(start, evalMatcher.start())
+            val firstMatch = evalPattern.find(rule)
+            if (firstMatch != null) {
+                tmp = rule.substring(start, firstMatch.range.first)
                 if (mode != Mode.Js && mode != Mode.Regex &&
-                    (evalMatcher.start() == 0 || !tmp.contains("##"))
+                    (firstMatch.range.first == 0 || !tmp.contains("##"))
                 ) {
                     mode = Mode.Regex
                 }
-                do {
-                    if (evalMatcher.start() > start) {
-                        tmp = rule.substring(start, evalMatcher.start())
+            }
+            for (evalMatch in evalPattern.findAll(rule)) {
+                if (evalMatch.range.first > start) {
+                    tmp = rule.substring(start, evalMatch.range.first)
+                    splitRegex(tmp)
+                }
+                tmp = evalMatch.value
+                when {
+                    tmp.startsWith("@get:", true) -> {
+                        ruleType.add(getRuleType)
+                        ruleParam.add(tmp.substring(6, tmp.lastIndex))
+                    }
+
+                    tmp.startsWith("{{") -> {
+                        ruleType.add(jsRuleType)
+                        ruleParam.add(tmp.substring(2, tmp.length - 2))
+                    }
+
+                    else -> {
                         splitRegex(tmp)
                     }
-                    tmp = evalMatcher.group()
-                    when {
-                        tmp.startsWith("@get:", true) -> {
-                            ruleType.add(getRuleType)
-                            ruleParam.add(tmp.substring(6, tmp.lastIndex))
-                        }
-
-                        tmp.startsWith("{{") -> {
-                            ruleType.add(jsRuleType)
-                            ruleParam.add(tmp.substring(2, tmp.length - 2))
-                        }
-
-                        else -> {
-                            splitRegex(tmp)
-                        }
-                    }
-                    start = evalMatcher.end()
-                } while (evalMatcher.find())
+                }
+                start = evalMatch.range.last + 1
             }
             if (rule.length > start) {
                 tmp = rule.substring(start)
@@ -635,23 +691,21 @@ class AnalyzeRule(
             var start = 0
             var tmp: String
             val ruleStrArray = ruleStr.split("##")
-            val regexMatcher = regexPattern.matcher(ruleStrArray[0])
-
-            if (regexMatcher.find()) {
+            if (regexPattern.find(ruleStrArray[0]) != null) {
                 if (mode != Mode.Js && mode != Mode.Regex) {
                     mode = Mode.Regex
                 }
-                do {
-                    if (regexMatcher.start() > start) {
-                        tmp = ruleStr.substring(start, regexMatcher.start())
-                        ruleType.add(defaultRuleType)
-                        ruleParam.add(tmp)
-                    }
-                    tmp = regexMatcher.group()
-                    ruleType.add(tmp.substring(1).toInt())
+            }
+            for (regexMatch in regexPattern.findAll(ruleStrArray[0])) {
+                if (regexMatch.range.first > start) {
+                    tmp = ruleStr.substring(start, regexMatch.range.first)
+                    ruleType.add(defaultRuleType)
                     ruleParam.add(tmp)
-                    start = regexMatcher.end()
-                } while (regexMatcher.find())
+                }
+                tmp = regexMatch.value
+                ruleType.add(tmp.substring(1).toInt())
+                ruleParam.add(tmp)
+                start = regexMatch.range.last + 1
             }
             if (ruleStr.length > start) {
                 tmp = ruleStr.substring(start)
@@ -738,7 +792,7 @@ class AnalyzeRule(
     }
 
     enum class Mode {
-        XPath, Json, Default, Js, Regex
+        XPath, Json, Default, Js, Regex, WebJs
     }
 
     /**
@@ -826,6 +880,10 @@ class AnalyzeRule(
      * js实现跨域访问,不能删
      */
     override fun ajax(url: Any): String? {
+        return ajax(url, null)
+    }
+
+    override fun ajax(url: Any, callTimeout: Long?): String? {
         val urlStr = if (url is List<*>) {
             url.firstOrNull().toString()
         } else {
@@ -835,6 +893,7 @@ class AnalyzeRule(
             urlStr,
             source = source,
             ruleData = book,
+            callTimeout = callTimeout,
             coroutineContext = coroutineContext
         )
         return kotlin.runCatching {
@@ -893,10 +952,10 @@ class AnalyzeRule(
     }
 
     companion object {
-        private val putPattern = Pattern.compile("@put:(\\{[^}]+?\\})", Pattern.CASE_INSENSITIVE)
+        private val putPattern = Regex("@put:(\\{[^}]+?\\})", RegexOption.IGNORE_CASE)
         private val evalPattern =
-            Pattern.compile("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", Pattern.CASE_INSENSITIVE)
-        private val regexPattern = Pattern.compile("\\$\\d{1,2}")
+            Regex("@get:\\{[^}]+?\\}|\\{\\{[\\w\\W]*?\\}\\}", RegexOption.IGNORE_CASE)
+        private val regexPattern = Regex("\\$\\d{1,2}")
 
         fun AnalyzeRule.setCoroutineContext(context: CoroutineContext): AnalyzeRule {
             coroutineContext = context.minusKey(ContinuationInterceptor)

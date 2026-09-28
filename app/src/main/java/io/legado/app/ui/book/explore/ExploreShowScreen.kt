@@ -42,14 +42,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
+import io.legado.app.R
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.domain.model.BookShelfState
-import io.legado.app.ui.config.coverConfig.CoverConfig
 import io.legado.app.ui.main.bookCoverSharedElementKey
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.responsiveHazeEffect
@@ -62,6 +63,7 @@ import io.legado.app.ui.widget.components.book.SearchBookGridItem
 import io.legado.app.ui.widget.components.book.SearchBookListItem
 import io.legado.app.ui.widget.components.book.SearchBookPreviewSheet
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.conflict.BookshelfConflictSheet
 import io.legado.app.ui.widget.components.explore.ExploreKindSelectSheet
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.text.AppText
@@ -69,7 +71,9 @@ import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import io.legado.app.utils.toastOnUi
 import org.koin.androidx.compose.koinViewModel
+import splitties.init.appCtx
 
 private enum class BookFilterState(val id: Int) {
     SHOW_ALL(0),
@@ -88,7 +92,7 @@ private enum class BookFilterState(val id: Int) {
     ExperimentalMaterial3ExpressiveApi::class, ExperimentalSharedTransitionApi::class
 )
 @Composable
-fun ExploreShowScreen(
+fun ExploreShowRouteScreen(
     viewModel: ExploreShowViewModel = koinViewModel(),
     title: String = "",
     onBack: () -> Unit,
@@ -112,15 +116,42 @@ fun ExploreShowScreen(
                     effect.sharedCoverKey,
                 )
 
-                is ExploreShowEffect.ShowMessage -> {}
+                is ExploreShowEffect.ShowMessage -> appCtx.toastOnUi(effect.message)
             }
         }
     }
 
+    ExploreShowScreen(
+        state = state,
+        onIntent = viewModel::onIntent,
+        title = title,
+        onBack = onBack,
+        onBookClick = onBookClick,
+        sharedTransitionScope = sharedTransitionScope,
+        animatedVisibilityScope = animatedVisibilityScope,
+    )
+}
+
+@SuppressLint("LocalContextConfigurationRead", "ConfigurationScreenWidthHeight")
+@OptIn(
+    ExperimentalMaterial3Api::class, ExperimentalHazeMaterialsApi::class,
+    ExperimentalMaterial3ExpressiveApi::class, ExperimentalSharedTransitionApi::class
+)
+@Composable
+fun ExploreShowScreen(
+    state: ExploreShowUiState,
+    onIntent: (ExploreShowIntent) -> Unit,
+    title: String = "",
+    onBack: () -> Unit,
+    onBookClick: (SearchBook, String?) -> Unit,
+    sharedTransitionScope: SharedTransitionScope? = null,
+    animatedVisibilityScope: AnimatedVisibilityScope? = null,
+) {
+
     var previewBook by remember { mutableStateOf<SearchBook?>(null) }
     var previewSharedCoverKey by remember { mutableStateOf<String?>(null) }
 
-    val filterStateId = CoverConfig.exploreFilterState
+    val filterStateId = state.filterStateId
     val books = remember(state.books, filterStateId) {
         val filter = BookFilterState.fromId(filterStateId)
         when (filter) {
@@ -163,7 +194,7 @@ fun ExploreShowScreen(
         state.books.size,
     ) {
         if (shouldLoadMore && canLoadMore) {
-            viewModel.onIntent(ExploreShowIntent.LoadMore)
+            onIntent(ExploreShowIntent.LoadMore)
         }
     }
 
@@ -171,7 +202,7 @@ fun ExploreShowScreen(
     // but the ViewModel hasn't reached the end of data yet.
     LaunchedEffect(books.isEmpty(), state.isLoading, state.isEnd, state.books.size) {
         if (books.isEmpty() && !state.isLoading && !state.isEnd && state.books.isNotEmpty()) {
-            viewModel.onIntent(ExploreShowIntent.ForceLoadNext)
+            onIntent(ExploreShowIntent.ForceLoadNext)
         }
     }
 
@@ -189,7 +220,7 @@ fun ExploreShowScreen(
 
     AppModalBottomSheet(
         show = state.sheet == ExploreShowSheet.GridCount,
-        onDismissRequest = { viewModel.onIntent(ExploreShowIntent.DismissSheet) }
+        onDismissRequest = { onIntent(ExploreShowIntent.DismissSheet) }
     ) {
         Row(
             modifier = Modifier
@@ -216,7 +247,7 @@ fun ExploreShowScreen(
         AppSlider(
             value = state.gridCount.toFloat(),
             onValueChange = {
-                viewModel.onIntent(ExploreShowIntent.SaveGridCount(it.toInt().coerceIn(1, 10)))
+                onIntent(ExploreShowIntent.SaveGridCount(it.toInt().coerceIn(1, 10)))
             },
             valueRange = 1f..10f,
             steps = 8,
@@ -229,13 +260,26 @@ fun ExploreShowScreen(
 
     ExploreKindSelectSheet(
         show = state.sheet == ExploreShowSheet.KindSelect,
-        onDismissRequest = { viewModel.onIntent(ExploreShowIntent.DismissSheet) },
+        onDismissRequest = { onIntent(ExploreShowIntent.DismissSheet) },
         sourceUrl = state.sourceUrl,
         onSelected = { selectedKinds ->
             selectedKinds.firstOrNull()?.let { kind ->
-                viewModel.onIntent(ExploreShowIntent.SwitchKind(kind))
+                onIntent(ExploreShowIntent.SwitchKind(kind))
             }
         }
+    )
+
+    BookshelfConflictSheet(
+        conflict = state.bookshelfConflict,
+        isResolving = state.isResolvingBookshelfConflict,
+        onDismissRequest = { onIntent(ExploreShowIntent.DismissBookshelfConflict) },
+        onOpenExistingBook = { onIntent(ExploreShowIntent.OpenBookshelfConflictBook(it)) },
+        onCoexist = { existingBookUrl, options ->
+            onIntent(ExploreShowIntent.CoexistWithBookshelfConflict(existingBookUrl, options))
+        },
+        onMigrate = { existingBookUrl, options ->
+            onIntent(ExploreShowIntent.MigrateBookshelfConflict(existingBookUrl, options))
+        },
     )
 
     AppScaffold(
@@ -257,27 +301,27 @@ fun ExploreShowScreen(
                     ) {
                         TopBarActionButton(
                             onClick = {
-                                viewModel.onIntent(
+                                onIntent(
                                     ExploreShowIntent.ShowSheet(
                                         ExploreShowSheet.GridCount
                                     )
                                 )
                             },
                             imageVector = Icons.AutoMirrored.Outlined.FormatListBulleted,
-                            contentDescription = "列数设置"
+                            contentDescription = stringResource(R.string.a11y_grid_columns)
                         )
                     }
 
                     TopBarActionButton(
-                        onClick = { viewModel.onIntent(ExploreShowIntent.ShowSheet(ExploreShowSheet.KindSelect)) },
+                        onClick = { onIntent(ExploreShowIntent.ShowSheet(ExploreShowSheet.KindSelect)) },
                         imageVector = Icons.Outlined.FilterAlt,
-                        contentDescription = "分类"
+                        contentDescription = stringResource(R.string.select_or_search_category)
                     )
 
                     TopBarActionButton(
-                        onClick = { viewModel.onIntent(ExploreShowIntent.ToggleLayout) },
+                        onClick = { onIntent(ExploreShowIntent.ToggleLayout) },
                         imageVector = if (!isGridMode) Icons.AutoMirrored.Outlined.FormatListBulleted else Icons.Default.GridView,
-                        contentDescription = "切换布局"
+                        contentDescription = stringResource(R.string.a11y_switch_layout)
                     )
                 },
                 scrollBehavior = scrollBehavior
@@ -287,8 +331,9 @@ fun ExploreShowScreen(
         AppPullToRefresh(
             modifier = Modifier.fillMaxSize(),
             isRefreshing = state.isRefreshing,
-            onRefresh = { viewModel.onIntent(ExploreShowIntent.Refresh) },
-            topPadding = paddingValues.calculateTopPadding()
+            onRefresh = { onIntent(ExploreShowIntent.Refresh) },
+            topPadding = paddingValues.calculateTopPadding(),
+            scrollBehavior = scrollBehavior
         ) {
             Crossfade(
                 targetState = isGridMode,
@@ -323,7 +368,7 @@ fun ExploreShowScreen(
                                 book = item.book,
                                 shelfState = item.shelfState,
                                 onClick = {
-                                    viewModel.onIntent(
+                                    onIntent(
                                         ExploreShowIntent.OpenBook(
                                             item.book,
                                             sharedCoverKey
@@ -345,8 +390,8 @@ fun ExploreShowScreen(
                             item(span = { GridItemSpan(maxLineSpan) }) {
                                 ExploreShowLoadMoreFooter(
                                     state = state,
-                                    onRetry = { viewModel.onIntent(ExploreShowIntent.LoadMore) },
-                                    onLoadMore = { viewModel.onIntent(ExploreShowIntent.ForceLoadNext) },
+                                    onRetry = { onIntent(ExploreShowIntent.LoadMore) },
+                                    onLoadMore = { onIntent(ExploreShowIntent.ForceLoadNext) },
                                 )
                             }
                         }
@@ -374,7 +419,7 @@ fun ExploreShowScreen(
                                 book = item.book,
                                 shelfState = item.shelfState,
                                 onClick = {
-                                    viewModel.onIntent(
+                                    onIntent(
                                         ExploreShowIntent.OpenBook(
                                             item.book,
                                             sharedCoverKey
@@ -396,8 +441,8 @@ fun ExploreShowScreen(
                             item {
                                 ExploreShowLoadMoreFooter(
                                     state = state,
-                                    onRetry = { viewModel.onIntent(ExploreShowIntent.LoadMore) },
-                                    onLoadMore = { viewModel.onIntent(ExploreShowIntent.ForceLoadNext) },
+                                    onRetry = { onIntent(ExploreShowIntent.LoadMore) },
+                                    onLoadMore = { onIntent(ExploreShowIntent.ForceLoadNext) },
                                 )
                             }
                         }
@@ -421,7 +466,7 @@ fun ExploreShowScreen(
             onBookClick(book, sharedCoverKey)
         },
         onAddToShelf = { book ->
-            viewModel.onIntent(ExploreShowIntent.AddToShelf(book))
+            onIntent(ExploreShowIntent.AddToShelf(book))
         },
     )
 }

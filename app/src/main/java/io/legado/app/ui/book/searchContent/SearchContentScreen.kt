@@ -37,18 +37,21 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.legado.app.R
 import io.legado.app.data.entities.SearchContentHistory
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveHorizontalPadding
@@ -62,6 +65,7 @@ import io.legado.app.ui.widget.components.button.series.SmallToggleButton
 import io.legado.app.ui.widget.components.button.series.ToggleStyle
 import io.legado.app.ui.widget.components.card.TextCard
 import io.legado.app.ui.widget.components.icon.AppIcon
+import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.progressIndicator.AppLinearProgressIndicator
 import io.legado.app.ui.widget.components.text.AppText
@@ -74,25 +78,59 @@ import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SearchContentScreen(
+fun SearchContentRouteScreen(
     onBack: () -> Unit,
+    autoFocus: Boolean = true,
     viewModel: SearchContentViewModel = koinViewModel()
 ) {
-    val uiState by viewModel.uiState.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val replaceEnabled by viewModel.replaceEnabled.collectAsState()
-    val regexReplace by viewModel.regexReplace.collectAsState()
-    val searchHistory by viewModel.searchHistory.collectAsState()
-    val historyOnlyThisBook by viewModel.historyOnlyThisBook.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                SearchContentEffect.NavigateBack -> onBack()
+            }
+        }
+    }
+    DisposableEffect(viewModel) {
+        onDispose { viewModel.onIntent(SearchContentIntent.LeaveSearch) }
+    }
+    SearchContentScreen(
+        state = state,
+        autoFocus = autoFocus,
+        onIntent = viewModel::onIntent,
+        onBack = onBack,
+    )
+}
 
-    val isSearching = uiState.isSearching
-    val searchResults = uiState.searchResults
-    val durChapterIndex = uiState.durChapterIndex
-    val error = uiState.error
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun SearchContentScreen(
+    state: SearchContentUiState,
+    autoFocus: Boolean = true,
+    onIntent: (SearchContentIntent) -> Unit,
+    onBack: () -> Unit,
+) {
+    val searchQuery = state.searchQuery
+    val replaceEnabled = state.replaceEnabled
+    val regexReplace = state.regexReplace
+    val searchHistory = state.searchHistory
+    val historyOnlyThisBook = state.historyOnlyThisBook
+
+    val isSearching = state.isSearching
+    val searchResults = state.searchResults
+    val durChapterIndex = state.durChapterIndex
+    val isEInkMode = state.isEInkMode
+    val error = state.error
 
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val hideSearchKeyboard = {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+    }
 
     val scrollToCurrentChapter = {
         val targetIndex = searchResults.indexOfFirst { it.chapterIndex == durChapterIndex }
@@ -104,13 +142,13 @@ fun SearchContentScreen(
     }
 
     LaunchedEffect(searchResults) {
-        if (searchResults.isNotEmpty() && viewModel.shouldAutoScroll()) {
+        if (searchResults.isNotEmpty() && state.shouldAutoScroll) {
             val targetIndex = searchResults.indexOfFirst { it.chapterIndex == durChapterIndex }
             if (targetIndex != -1) {
                 snapshotFlow { listState.layoutInfo.totalItemsCount }.collect { count ->
                     if (count > targetIndex) {
                         listState.animateScrollToItem(targetIndex)
-                        viewModel.markScrollDone()
+                        onIntent(SearchContentIntent.MarkAutoScrollDone)
                         return@collect
                     }
                 }
@@ -136,27 +174,23 @@ fun SearchContentScreen(
                     } else "搜索内容",
                     navigationIcon = { TopBarNavigationButton(onClick = onBack) },
                     actions = {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            TopBarAnimatedActionButton(
-                                checked = replaceEnabled,
-                                onCheckedChange = { viewModel.toggleReplace(it) },
-                                iconChecked = Icons.Default.FindReplace,
-                                iconUnchecked = Icons.Default.FindReplace,
-                                activeText = "替换开启",
-                                inactiveText = "替换关闭"
-                            )
+                        TopBarAnimatedActionButton(
+                            checked = replaceEnabled,
+                            onCheckedChange = { onIntent(SearchContentIntent.ToggleReplace(it)) },
+                            iconChecked = Icons.Default.FindReplace,
+                            iconUnchecked = Icons.Default.FindReplace,
+                            activeText = "替换开启",
+                            inactiveText = "替换关闭"
+                        )
 
-                            TopBarAnimatedActionButton(
-                                checked = regexReplace,
-                                onCheckedChange = { viewModel.toggleRegex(it) },
-                                iconChecked = Icons.Default.Code,
-                                iconUnchecked = Icons.Default.Code,
-                                activeText = "正则开启",
-                                inactiveText = "正则关闭"
-                            )
-                        }
+                        TopBarAnimatedActionButton(
+                            checked = regexReplace,
+                            onCheckedChange = { onIntent(SearchContentIntent.ToggleRegex(it)) },
+                            iconChecked = Icons.Default.Code,
+                            iconUnchecked = Icons.Default.Code,
+                            activeText = "正则开启",
+                            inactiveText = "正则关闭"
+                        )
                     },
                     scrollBehavior = scrollBehavior
                 )
@@ -165,8 +199,22 @@ fun SearchContentScreen(
                 ) {
                     SearchBar(
                         query = searchQuery,
+                        autoFocus = autoFocus,
                         scrollState = listState,
-                        onQueryChange = { viewModel.onQueryChange(it) }
+                        onQueryChange = { onIntent(SearchContentIntent.UpdateQuery(it)) },
+                        onSearch = { onIntent(SearchContentIntent.SubmitSearch(it)) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                SmallPlainButton(
+                                    modifier = Modifier.padding(horizontal = 8.dp),
+                                    onClick = {
+                                        onIntent(SearchContentIntent.UpdateQuery(""))
+                                    },
+                                    icon = AppIcons.Close,
+                                    contentDescription = stringResource(R.string.clear)
+                                )
+                            }
+                        }
                     )
                 }
 
@@ -184,7 +232,7 @@ fun SearchContentScreen(
                 ),
                 onClick = {
                     if (isSearching) {
-                        viewModel.stopSearch()
+                        onIntent(SearchContentIntent.StopSearch)
                     } else {
                         scrollToCurrentChapter()
                     }
@@ -196,9 +244,12 @@ fun SearchContentScreen(
                     label = "FabIconTransition"
                 ) { searching ->
                     if (searching) {
-                        AppIcon(Icons.Default.Stop, contentDescription = "停止搜索")
+                        AppIcon(Icons.Default.Stop, contentDescription = stringResource(R.string.stop))
                     } else {
-                        AppIcon(Icons.Default.MyLocation, contentDescription = "定位当前章节")
+                        AppIcon(
+                            Icons.Default.MyLocation,
+                            contentDescription = stringResource(R.string.a11y_locate_current_chapter)
+                        )
                     }
                 }
             }
@@ -228,10 +279,15 @@ fun SearchContentScreen(
                         SearchHistoryList(
                             history = searchHistory,
                             onlyThisBook = historyOnlyThisBook,
-                            onHistoryClick = { viewModel.onQueryChange(it.query) },
-                            onDeleteHistory = { viewModel.deleteHistory(it) },
-                            onClearHistory = { viewModel.clearHistory() },
-                            onToggleScope = { viewModel.toggleHistoryScope() }
+                            onHistoryClick = {
+                                hideSearchKeyboard()
+                                onIntent(SearchContentIntent.UpdateQuery(it.query))
+                            },
+                            onDeleteHistory = {
+                                onIntent(SearchContentIntent.DeleteHistory(it))
+                            },
+                            onClearHistory = { onIntent(SearchContentIntent.ClearHistory) },
+                            onToggleScope = { onIntent(SearchContentIntent.ToggleHistoryScope) }
                         )
                     }
                     SearchContentState.EmptyResult -> {
@@ -252,11 +308,10 @@ fun SearchContentScreen(
                                 SearchResultItem(
                                     modifier = Modifier.animateItem(),
                                     result = result,
+                                    isEInkMode = isEInkMode,
                                     isCurrentChapter = result.chapterIndex == durChapterIndex,
                                     onClick = {
-                                        if (viewModel.onSearchResultClick(result)) {
-                                            onBack()
-                                        }
+                                        onIntent(SearchContentIntent.OpenResult(result))
                                     }
                                 )
                             }
@@ -318,13 +373,6 @@ fun SearchHistoryList(
                         modifier = Modifier
                             .clickable { onHistoryClick(item) }
                             .animateItem(),
-                        headlineContent = {
-                            AppText(
-                                text = item.query,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
                         leadingContent = {
                             Icon(Icons.Default.History, contentDescription = null)
                         },
@@ -332,14 +380,20 @@ fun SearchHistoryList(
                             SmallPlainButton(
                                 onClick = { onDeleteHistory(item) },
                                 icon = Icons.Default.Close,
-                                contentDescription = "删除"
+                                contentDescription = stringResource(R.string.delete)
                             )
                         },
                         colors = ListItemDefaults.colors(
                             containerColor = LegadoTheme.colorScheme.surface,
                             contentColor = LegadoTheme.colorScheme.onSurface
                         )
-                    )
+                    ) {
+                        AppText(
+                            text = item.query,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 item {
                     Box(
@@ -366,6 +420,7 @@ fun SearchHistoryList(
 fun SearchResultItem(
     modifier: Modifier,
     result: SearchResult,
+    isEInkMode: Boolean,
     isCurrentChapter: Boolean,
     onClick: () -> Unit
 ) {
@@ -383,13 +438,10 @@ fun SearchResultItem(
 
             Column {
                 AppText(
-                    text = buildAnnotatedString {
-                        append(
-                            result.getTitleSpannable(
-                                LegadoTheme.colorScheme.primary.toArgb()
-                            )
-                        )
-                    },
+                    text = result.getTitleAnnotatedString(
+                        accentColor = LegadoTheme.colorScheme.primary,
+                        isEInkMode = isEInkMode,
+                    ),
                     style = LegadoTheme.typography.titleSmall
                 )
 
@@ -400,15 +452,12 @@ fun SearchResultItem(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 AppText(
-                    text = buildAnnotatedString {
-                        append(
-                            result.getContentSpannable(
-                                textColor = LegadoTheme.colorScheme.onSurface.toArgb(),
-                                accentColor = LegadoTheme.colorScheme.primary.toArgb(),
-                                bgColor = LegadoTheme.colorScheme.primaryContainer.toArgb()
-                            )
-                        )
-                    },
+                    text = result.getContentAnnotatedString(
+                        textColor = LegadoTheme.colorScheme.onSurface,
+                        accentColor = LegadoTheme.colorScheme.primary,
+                        backgroundColor = LegadoTheme.colorScheme.primaryContainer,
+                        isEInkMode = isEInkMode,
+                    ),
                     style = LegadoTheme.typography.bodyMedium
                 )
             }

@@ -7,10 +7,11 @@ import android.net.Uri
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.BookType
-import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
+import io.legado.app.data.repository.BookRepository
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.addType
+import io.legado.app.help.book.applyTagGroupRulesForBook
 import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.isLocal
@@ -20,6 +21,7 @@ import io.legado.app.utils.FileUtils
 import io.legado.app.utils.MD5Utils
 import io.legado.app.utils.externalFiles
 import io.legado.app.utils.inputStream
+import io.legado.app.utils.splitNotBlank
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,6 +40,7 @@ data class BookInfoEditUiState(
     val coverUrl: String? = null,
     val intro: String? = null,
     val remark: String? = null,
+    val sourceKindList: List<String> = emptyList(),
     val kindList: List<String> = emptyList(),
     val originalKindList: List<String> = emptyList(),
     val selectedType: BookInfoEditType = BookInfoEditType.TEXT,
@@ -45,30 +48,34 @@ data class BookInfoEditUiState(
     val book: Book? = null,
 )
 
-class BookInfoEditViewModel(application: Application) : BaseViewModel(application) {
+class BookInfoEditViewModel(
+    application: Application,
+    private val bookRepository: BookRepository,
+) : BaseViewModel(application) {
     var book: Book? = null
     private val _uiState = MutableStateFlow(BookInfoEditUiState())
     val uiState: StateFlow<BookInfoEditUiState> = _uiState.asStateFlow()
 
     fun loadBook(bookUrl: String) {
         execute {
-            book = appDb.bookDao.getBook(bookUrl)
+            book = bookRepository.getBook(bookUrl)
             book?.let {
                 val selectedType = when {
                     it.isImage -> BookInfoEditType.IMAGE
                     it.isAudio -> BookInfoEditType.AUDIO
                     else -> BookInfoEditType.TEXT
                 }
-                val kinds =
-                    it.kind?.split(",", "\n")?.filter { kind -> kind.isNotBlank() }.orEmpty()
+                val sourceKinds = it.kind?.splitNotBlank(",", "\n").orEmpty().distinct()
+                val customTags = it.customTag?.splitNotBlank(",", "\n").orEmpty().distinct()
                 _uiState.value = BookInfoEditUiState(
                     name = it.name,
                     author = it.author,
                     coverUrl = it.getDisplayCover(),
                     intro = it.getDisplayIntro(),
                     remark = it.remark,
-                    kindList = kinds,
-                    originalKindList = kinds,
+                    sourceKindList = sourceKinds,
+                    kindList = customTags,
+                    originalKindList = customTags,
                     selectedType = selectedType,
                     fixedType = it.config.fixedType,
                     book = it
@@ -102,7 +109,7 @@ class BookInfoEditViewModel(application: Application) : BaseViewModel(applicatio
     }
 
     fun onKindListChange(kindList: List<String>) {
-        _uiState.value = _uiState.value.copy(kindList = kindList)
+        _uiState.value = _uiState.value.copy(kindList = kindList.distinct())
     }
 
     fun onBookTypeChange(bookType: BookInfoEditType) {
@@ -136,13 +143,14 @@ class BookInfoEditViewModel(application: Application) : BaseViewModel(applicatio
                 book.config.fixedType = currentState.fixedType
                 book.customCoverUrl = if (currentState.coverUrl == book.coverUrl) null else currentState.coverUrl
                 book.customIntro = if (currentState.intro == book.intro) null else currentState.intro
-                book.kind = currentState.kindList.joinToString(",")
+                book.customTag = currentState.kindList.joinToString(",").ifBlank { null }
+                applyTagGroupRulesForBook(book)
                 BookHelp.updateCacheFolder(oldBook, book)
 
-                if (ReadBook.book?.bookUrl == book.bookUrl) {
-                    ReadBook.book = book
+                if (ReadBook.isCurrentBook(book.bookUrl)) {
+                    ReadBook.replaceCurrentBook(book)
                 }
-                appDb.bookDao.update(book)
+                bookRepository.update(book)
             }
         }.onSuccess {
             onSuccess.invoke()

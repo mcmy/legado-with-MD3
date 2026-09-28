@@ -11,7 +11,6 @@ import com.bumptech.glide.load.engine.cache.MemorySizeCalculator
 import com.bumptech.glide.load.model.GlideUrl
 import com.bumptech.glide.module.AppGlideModule
 import io.legado.app.BuildConfig
-import io.legado.app.help.config.AppConfig
 import java.io.File
 import java.io.InputStream
 
@@ -19,6 +18,8 @@ import java.io.InputStream
 @Suppress("unused")
 @GlideModule
 class LegadoGlideModule : AppGlideModule() {
+
+    private val otherSettingsGateway get() = org.koin.core.context.GlobalContext.get().get<io.legado.app.domain.gateway.OtherSettingsGateway>()
 
     override fun registerComponents(context: Context, glide: Glide, registry: Registry) {
         registry.replace(
@@ -45,7 +46,7 @@ class LegadoGlideModule : AppGlideModule() {
         builder.setMemorySizeCalculator(calculator)
         builder.setBitmapPool(bitmapPool)
         builder.setDiskCache(InternalCacheDiskCacheFactory(context, 1024 * 1024 * 1000))
-        if (!BuildConfig.DEBUG && !AppConfig.recordLog) {
+        if (!BuildConfig.DEBUG && !otherSettingsGateway.currentSettings.recordLog) {
             builder.setLogLevel(Log.ERROR)
         }
     }

@@ -1,15 +1,21 @@
 package io.legado.app.ui.book.read.sheet
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,9 +37,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
@@ -44,16 +54,17 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
+import io.legado.app.constant.AppLog
 import io.legado.app.data.entities.HighlightRule
 import io.legado.app.data.repository.ReadSettingsRepository
 import io.legado.app.data.repository.configNames
 import io.legado.app.data.repository.toJsonArray
-import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.FontFolderState
 import io.legado.app.ui.widget.components.FontSelectSheet
 import io.legado.app.ui.widget.components.SectionTitle
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.dialog.ColorPickerSheet
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
@@ -63,20 +74,26 @@ import io.legado.app.ui.widget.components.settingItem.TinyDropdownSettingItem
 import io.legado.app.ui.widget.components.settingItem.TinySliderSettingItem
 import io.legado.app.ui.widget.components.settingItem.TinySwitchSettingItem
 import io.legado.app.ui.widget.components.text.AppText
+import io.legado.app.utils.toastOnUi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import splitties.init.appCtx
 import java.io.File
+import kotlin.math.roundToInt
 
 @Composable
 fun HighlightRuleEditSheet(
     show: Boolean,
     rule: HighlightRule?,
+    allConfigNames: List<String>,
     onDismissRequest: () -> Unit,
     onSave: (HighlightRule) -> Unit,
 ) {
     val isNew = rule == null
     val initial = remember(show, rule) { rule ?: HighlightRule() }
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     // Rule info state
     var pattern by remember(show, rule) { mutableStateOf(initial.pattern) }
@@ -118,8 +135,20 @@ fun HighlightRuleEditSheet(
     var bgImageScale by remember(show, rule) { mutableFloatStateOf(initial.bgImageScale) }
     var hasBgImage by remember(show, rule) { mutableStateOf(initial.bgImage?.isNotBlank() == true) }
 
+    // Font weight state
+    var fontWeight by remember(show, rule) { mutableIntStateOf(initial.fontWeight) }
+    var isItalic by remember(show, rule) { mutableStateOf(initial.isItalic) }
+    var fontSizeOffset by remember(show, rule) { mutableIntStateOf(initial.fontSizeOffset) }
+
+    // Nine-slice state
+    var npLeft by remember(show, rule) { mutableFloatStateOf(initial.npLeft) }
+    var npRight by remember(show, rule) { mutableFloatStateOf(initial.npRight) }
+    var npTop by remember(show, rule) { mutableFloatStateOf(initial.npTop) }
+    var npBottom by remember(show, rule) { mutableFloatStateOf(initial.npBottom) }
+    var showNinePatchEditor by remember(show, rule) { mutableStateOf(false) }
+    var manualNineSlice by remember(show, rule) { mutableStateOf(initial.manualNineSlice) }
+
     // Config binding state — empty set = global (applies to all configs)
-    val allConfigNames = remember { ReadBookConfig.configList.map { it.name }.filter { it.isNotBlank() } }
     var configNames by remember(show, rule) {
         mutableStateOf(initial.configName.orEmpty().configNames().toSet())
     }
@@ -137,40 +166,51 @@ fun HighlightRuleEditSheet(
     // Validation
     var patternError by remember(show, rule) { mutableStateOf<String?>(null) }
 
-    // System photo picker, with the contract's built-in fallback on older devices.
+    // File picker for background images (uses OpenDocument to avoid MediaStore transcoding)
     val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val dir = File(appCtx.filesDir, "bg_images")
-            if (!dir.exists()) dir.mkdirs()
-            val displayName = context.contentResolver.query(
-                uri,
-                arrayOf(OpenableColumns.DISPLAY_NAME),
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        .takeIf { it >= 0 }
-                        ?.let(cursor::getString)
-                } else {
-                    null
+            coroutineScope.launch {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        val dir = File(appCtx.filesDir, "bg_images")
+                        if (!dir.exists()) dir.mkdirs()
+                        val displayName = context.contentResolver.query(
+                            uri,
+                            arrayOf(OpenableColumns.DISPLAY_NAME),
+                            null,
+                            null,
+                            null,
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                    .takeIf { it >= 0 }
+                                    ?.let(cursor::getString)
+                            } else {
+                                null
+                            }
+                        }
+                        val suffix = when {
+                            displayName?.endsWith(".9.png", ignoreCase = true) == true -> ".9.png"
+                            displayName?.substringAfterLast('.', "").isNullOrBlank() -> ".img"
+                            else -> ".${displayName.substringAfterLast('.')}"
+                        }
+                        val target = File(dir, "bg_${System.currentTimeMillis()}$suffix")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            target.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        } ?: throw java.io.FileNotFoundException("Open input stream failed")
+                        target.absolutePath
+                    }
+                }.onSuccess { path ->
+                    bgImage = path
+                }.onFailure { throwable ->
+                    context.toastOnUi(R.string.error)
+                    AppLog.put("选择高亮背景图失败", throwable)
                 }
             }
-            val suffix = when {
-                displayName?.endsWith(".9.png", ignoreCase = true) == true -> ".9.png"
-                displayName?.substringAfterLast('.', "").isNullOrBlank() -> ".img"
-                else -> ".${displayName.substringAfterLast('.')}"
-            }
-            val target = File(dir, "bg_${System.currentTimeMillis()}$suffix")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            bgImage = target.absolutePath
         }
     }
 
@@ -181,44 +221,51 @@ fun HighlightRuleEditSheet(
         onDismissRequest = onDismissRequest,
         title = stringResource(titleRes),
         endAction = {
-            androidx.compose.material3.IconButton(onClick = {
-                if (pattern.isNotBlank()) {
-                    val result = runCatching { Regex(pattern) }
-                    if (result.isFailure) {
-                        patternError = result.exceptionOrNull()?.message
-                        return@IconButton
+            MediumTonalButton(
+                onClick = {
+                    if (pattern.isNotBlank()) {
+                        val result = runCatching { Regex(pattern) }
+                        if (result.isFailure) {
+                            patternError = result.exceptionOrNull()?.message
+                            return@MediumTonalButton
+                        }
                     }
-                }
-                patternError = null
-                onSave(
-                    HighlightRule(
-                        id = initial.id,
-                        name = name,
-                        pattern = pattern,
-                        sampleText = sampleText,
-                        targetScope = targetScope,
-                        enabled = enabled,
-                        position = initial.position,
-                        textColor = if (hasTextColor) textColor else null,
-                        bgColor = if (hasBgColor) bgColor else null,
-                        underlineMode = if (hasUnderline) underlineMode else 0,
-                        underlineColor = if (hasUnderlineColor && hasUnderline) underlineColor else null,
-                        underlineWidth = underlineWidth,
-                        underlineOffset = underlineOffset,
-                        underlineSvgPath = underlineSvgPath.ifBlank { null },
-                        bgImage = if (hasBgImage) bgImage.ifBlank { null } else null,
-                        bgImageFit = bgImageFit,
-                        bgImageScale = bgImageScale,
-                        configName = if (configNames.isEmpty()) null else configNames.toList().toJsonArray(),
-                        fontPath = if (hasFont) fontPath.ifBlank { null } else null,
+                    patternError = null
+                    onSave(
+                        HighlightRule(
+                            id = initial.id,
+                            name = name,
+                            pattern = pattern,
+                            sampleText = sampleText,
+                            targetScope = targetScope,
+                            enabled = enabled,
+                            position = initial.position,
+                            textColor = if (hasTextColor) textColor else null,
+                            bgColor = if (hasBgColor) bgColor else null,
+                            underlineMode = if (hasUnderline) underlineMode else 0,
+                            underlineColor = if (hasUnderlineColor && hasUnderline) underlineColor else null,
+                            underlineWidth = underlineWidth,
+                            underlineOffset = underlineOffset,
+                            underlineSvgPath = underlineSvgPath.ifBlank { null },
+                            bgImage = if (hasBgImage) bgImage.ifBlank { null } else null,
+                            bgImageFit = bgImageFit,
+                            bgImageScale = bgImageScale,
+                            configName = if (configNames.isEmpty()) null else configNames.toList().toJsonArray(),
+                            fontPath = if (hasFont) fontPath.ifBlank { null } else null,
+                            fontWeight = fontWeight,
+                            isItalic = isItalic,
+                            fontSizeOffset = fontSizeOffset,
+                            npLeft = npLeft,
+                            npRight = npRight,
+                            npTop = npTop,
+                            npBottom = npBottom,
+                            manualNineSlice = manualNineSlice,
+                        )
                     )
-                )
-            }) {
-                androidx.compose.material3.Icon(
-                    Icons.Default.Done,
-                    contentDescription = null,
-                )
-            }
+                },
+                icon = Icons.Default.Done,
+                contentDescription = stringResource(R.string.save),
+            )
         },
     ) {
         Column(
@@ -229,6 +276,16 @@ fun HighlightRuleEditSheet(
         ) {
             // === Section 1: Rule Info ===
             SectionTitle(stringResource(R.string.rule_info))
+
+            AppTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = stringResource(R.string.rule_name),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(8.dp))
 
             AppTextField(
                 value = pattern,
@@ -243,16 +300,6 @@ fun HighlightRuleEditSheet(
                 supportingText = patternError?.let {
                     { AppText(it, color = MaterialTheme.colorScheme.error) }
                 },
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            AppTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = stringResource(R.string.rule_name),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
             )
 
             Spacer(Modifier.height(8.dp))
@@ -290,7 +337,7 @@ fun HighlightRuleEditSheet(
                 checked = hasTextColor,
                 onCheckedChange = { hasTextColor = it },
             )
-            if (hasTextColor) {
+            AnimatedVisibility(visible = hasTextColor) {
                 TinyColorSettingItem(
                     title = stringResource(R.string.select_color),
                     colorValue = textColor,
@@ -298,65 +345,100 @@ fun HighlightRuleEditSheet(
                 )
             }
 
+            // Font weight — three options: Regular(400), Bold(700), Light(300)
+            val weightEntries = stringArrayResource(R.array.text_font_weight)
+            TinyDropdownSettingItem(
+                title = stringResource(R.string.font_weight_text),
+                selectedValue = fontWeight.toString(),
+                displayEntries = weightEntries,
+                entryValues = arrayOf("400", "700", "300"),
+                onValueChange = { fontWeight = it.toIntOrNull() ?: 400 },
+            )
+
+            // Italic
+            TinySwitchSettingItem(
+                title = stringResource(R.string.read_config_italic),
+                checked = isItalic,
+                onCheckedChange = { isItalic = it },
+            )
+
+            // Font size offset
+            TinySliderSettingItem(
+                title = stringResource(R.string.font_size_offset),
+                value = fontSizeOffset.toFloat(),
+                valueRange = -10f..10f,
+                steps = 19,
+                description = if (fontSizeOffset == 0) {
+                    stringResource(R.string.text_default)
+                } else {
+                    stringResource(R.string.font_size_offset_value, fontSizeOffset)
+                },
+                onValueChange = { fontSizeOffset = it.toInt() },
+            )
+
             // Underline
             TinySwitchSettingItem(
                 title = stringResource(R.string.underline_style),
                 checked = hasUnderline,
                 onCheckedChange = { hasUnderline = it },
             )
-            if (hasUnderline) {
-                val underlineEntries = arrayOf(
-                    stringResource(R.string.underline_solid),
-                    stringResource(R.string.underline_dashed),
-                    stringResource(R.string.underline_wave),
-                    stringResource(R.string.underline_title_bar),
-                    stringResource(R.string.underline_svg),
-                )
-                val underlineValues = arrayOf("1", "2", "3", "4", "5")
-                TinyDropdownSettingItem(
-                    title = stringResource(R.string.underline_style),
-                    selectedValue = underlineMode.toString(),
-                    displayEntries = underlineEntries,
-                    entryValues = underlineValues,
-                    onValueChange = { underlineMode = it.toIntOrNull() ?: 1 },
-                )
-
-                TinySwitchSettingItem(
-                    title = stringResource(R.string.underline_color),
-                    checked = hasUnderlineColor,
-                    onCheckedChange = { hasUnderlineColor = it },
-                )
-                if (hasUnderlineColor) {
-                    TinyColorSettingItem(
-                        title = stringResource(R.string.select_color),
-                        colorValue = underlineColor,
-                        onClick = { showUnderlineColorPicker = true },
+            AnimatedVisibility(visible = hasUnderline) {
+                Column {
+                    val underlineEntries = arrayOf(
+                        stringResource(R.string.underline_solid),
+                        stringResource(R.string.underline_dashed),
+                        stringResource(R.string.underline_wave),
+                        stringResource(R.string.underline_title_bar),
+                        stringResource(R.string.underline_svg),
+                        stringResource(R.string.bookmark_mark_effect_strike),
+                        stringResource(R.string.bookmark_mark_effect_highlight),
                     )
-                }
-
-                TinySliderSettingItem(
-                    title = stringResource(R.string.underline_width),
-                    value = underlineWidth,
-                    valueRange = 0.1f..10f,
-                    description = String.format("%.1f dp", underlineWidth),
-                    onValueChange = { underlineWidth = (it * 10).toInt() / 10f },
-                )
-
-                TinySliderSettingItem(
-                    title = stringResource(R.string.underline_offset),
-                    value = underlineOffset,
-                    valueRange = 0f..20f,
-                    description = String.format("%.1f dp", underlineOffset),
-                    onValueChange = { underlineOffset = (it * 10).toInt() / 10f },
-                )
-
-                if (underlineMode == 5) {
-                    AppTextField(
-                        value = underlineSvgPath,
-                        onValueChange = { underlineSvgPath = it },
-                        label = stringResource(R.string.svg_path),
-                        modifier = Modifier.fillMaxWidth(),
+                    val underlineValues = arrayOf("1", "2", "3", "4", "5", "6", "7")
+                    TinyDropdownSettingItem(
+                        title = stringResource(R.string.underline_style),
+                        selectedValue = underlineMode.toString(),
+                        displayEntries = underlineEntries,
+                        entryValues = underlineValues,
+                        onValueChange = { underlineMode = it.toIntOrNull() ?: 1 },
                     )
+
+                    TinySwitchSettingItem(
+                        title = stringResource(R.string.underline_color),
+                        checked = hasUnderlineColor,
+                        onCheckedChange = { hasUnderlineColor = it },
+                    )
+                    AnimatedVisibility(visible = hasUnderlineColor) {
+                        TinyColorSettingItem(
+                            title = stringResource(R.string.select_color),
+                            colorValue = underlineColor,
+                            onClick = { showUnderlineColorPicker = true },
+                        )
+                    }
+
+                    TinySliderSettingItem(
+                        title = stringResource(R.string.underline_width),
+                        value = underlineWidth,
+                        valueRange = 0.1f..10f,
+                        description = String.format("%.1f dp", underlineWidth),
+                        onValueChange = { underlineWidth = (it * 10).toInt() / 10f },
+                    )
+
+                    TinySliderSettingItem(
+                        title = stringResource(R.string.underline_offset),
+                        value = underlineOffset,
+                        valueRange = 0f..20f,
+                        description = String.format("%.1f dp", underlineOffset),
+                        onValueChange = { underlineOffset = (it * 10).toInt() / 10f },
+                    )
+
+                    AnimatedVisibility(visible = underlineMode == 5) {
+                        AppTextField(
+                            value = underlineSvgPath,
+                            onValueChange = { underlineSvgPath = it },
+                            label = stringResource(R.string.svg_path),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
 
@@ -366,7 +448,7 @@ fun HighlightRuleEditSheet(
                 checked = hasBgColor,
                 onCheckedChange = { hasBgColor = it },
             )
-            if (hasBgColor) {
+            AnimatedVisibility(visible = hasBgColor) {
                 TinyColorSettingItem(
                     title = stringResource(R.string.select_color),
                     colorValue = bgColor,
@@ -380,39 +462,66 @@ fun HighlightRuleEditSheet(
                 checked = hasBgImage,
                 onCheckedChange = { hasBgImage = it },
             )
-            if (hasBgImage) {
+            AnimatedVisibility(visible = hasBgImage) {
                 TinyClickableSettingItem(
                     title = stringResource(R.string.highlight_bg_image),
                     description = bgImage.ifBlank { null }?.let { File(it).name },
                     onClick = {
-                        imagePicker.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
+                        imagePicker.launch(arrayOf("image/*"))
                     },
                 )
             }
-            if (hasBgImage && bgImage.isNotBlank()) {
-                val fitEntries = arrayOf(
-                    stringResource(R.string.bg_fit_tile),
-                    stringResource(R.string.bg_fit_stretch),
-                    stringResource(R.string.bg_fit_crop),
-                )
-                val fitValues = arrayOf("0", "1", "2")
-                TinyDropdownSettingItem(
-                    title = stringResource(R.string.bg_image_fit),
-                    selectedValue = bgImageFit.toString(),
-                    displayEntries = fitEntries,
-                    entryValues = fitValues,
-                    onValueChange = { bgImageFit = it.toIntOrNull() ?: 0 },
-                )
+            AnimatedVisibility(visible = hasBgImage && bgImage.isNotBlank()) {
+                Column {
+                    val fitEntries = arrayOf(
+                        stringResource(R.string.bg_fit_tile),
+                        stringResource(R.string.bg_fit_stretch),
+                        stringResource(R.string.bg_fit_crop),
+                        stringResource(R.string.bg_fit_nine_patch),
+                    )
+                    val fitValues = arrayOf("0", "1", "2", "3")
+                    TinyDropdownSettingItem(
+                        title = stringResource(R.string.bg_image_fit),
+                        selectedValue = bgImageFit.toString(),
+                        displayEntries = fitEntries,
+                        entryValues = fitValues,
+                        onValueChange = {
+                            val newFit = it.toIntOrNull() ?: 0
+                            bgImageFit = newFit
+                            if (newFit == 3) {
+                                showNinePatchEditor = true
+                            }
+                        },
+                    )
 
-                TinySliderSettingItem(
-                    title = stringResource(R.string.highlight_bg_image_scale),
-                    value = bgImageScale,
-                    valueRange = 0.1f..5f,
-                    description = String.format("%.1fx", bgImageScale),
-                    onValueChange = { bgImageScale = (it * 10).toInt() / 10f },
-                )
+                    TinySliderSettingItem(
+                        title = stringResource(R.string.highlight_bg_image_scale),
+                        value = bgImageScale,
+                        valueRange = 0.1f..5f,
+                        steps = 48,
+                        stepSize = 0.1f,
+                        showDecimal = true,
+                        valueFormat = { String.format("%.1f", it) },
+                        description = String.format("%.1fx", bgImageScale),
+                        onValueChange = { bgImageScale = (it * 10).roundToInt() / 10f },
+                    )
+                    if (bgImageFit == 3) {
+                        TinySwitchSettingItem(
+                            title = stringResource(R.string.manual_nine_slice),
+                            checked = manualNineSlice,
+                            onCheckedChange = {
+                                manualNineSlice = it
+                                if (it) showNinePatchEditor = true
+                            },
+                        )
+                        if (manualNineSlice) {
+                            TinyClickableSettingItem(
+                                title = stringResource(R.string.edit_nine_slice),
+                                onClick = { showNinePatchEditor = true },
+                            )
+                        }
+                    }
+                }
             }
 
             // === Section 3: Config Binding ===
@@ -474,7 +583,7 @@ fun HighlightRuleEditSheet(
                 checked = hasFont,
                 onCheckedChange = { hasFont = it },
             )
-            if (hasFont) {
+            AnimatedVisibility(visible = hasFont) {
                 TinyClickableSettingItem(
                     title = stringResource(R.string.select_font),
                     description = fontPath.ifBlank { null }?.let { File(it).name },
@@ -500,6 +609,7 @@ fun HighlightRuleEditSheet(
                 underlineColor = if (hasUnderlineColor && hasUnderline) underlineColor else null,
                 underlineWidth = underlineWidth,
                 underlineOffset = underlineOffset,
+                fontSizeOffset = fontSizeOffset,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(80.dp)
@@ -534,6 +644,24 @@ fun HighlightRuleEditSheet(
         onColorSelected = { color ->
             underlineColor = color
             showUnderlineColorPicker = false
+        },
+    )
+
+    // Nine-patch editor
+    NinePatchEditorDialog(
+        show = showNinePatchEditor,
+        imagePath = bgImage,
+        initialLeft = npLeft,
+        initialRight = npRight,
+        initialTop = npTop,
+        initialBottom = npBottom,
+        onDismissRequest = { showNinePatchEditor = false },
+        onSave = { left, right, top, bottom ->
+            npLeft = left
+            npRight = right
+            npTop = top
+            npBottom = bottom
+            showNinePatchEditor = false
         },
     )
 
@@ -586,6 +714,7 @@ private fun HighlightRulePreview(
     underlineColor: Int?,
     underlineWidth: Float,
     underlineOffset: Float,
+    fontSizeOffset: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
@@ -594,7 +723,7 @@ private fun HighlightRulePreview(
     val resolvedUnderlineColor = underlineColor?.let { Color(it) } ?: resolvedTextColor
 
     val textStyle = TextStyle(
-        fontSize = 16.sp,
+        fontSize = (16 + fontSizeOffset).sp,
         color = resolvedTextColor,
     )
 
@@ -609,6 +738,16 @@ private fun HighlightRulePreview(
                 color = Color(bgColor),
                 topLeft = Offset(0f, 0f),
                 size = size.copy(height = textResult.size.height.toFloat()),
+            )
+        }
+        if (underlineMode == 7) {
+            drawRect(
+                color = resolvedUnderlineColor.copy(alpha = 0.4f),
+                topLeft = Offset(0f, textResult.size.height * 0.5f),
+                size = Size(
+                    textResult.size.width.toFloat(),
+                    textResult.size.height * 0.5f,
+                ),
             )
         }
         drawText(textResult)
@@ -674,7 +813,256 @@ private fun HighlightRulePreview(
                         cap = StrokeCap.Round,
                     )
                 }
+                6 -> {
+                    val y = textResult.size.height * 0.52f
+                    drawLine(
+                        color = resolvedUnderlineColor,
+                        start = Offset(0f, y),
+                        end = Offset(textResult.size.width.toFloat(), y),
+                        strokeWidth = strokeWidth,
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun NinePatchEditorDialog(
+    show: Boolean,
+    imagePath: String,
+    initialLeft: Float,
+    initialRight: Float,
+    initialTop: Float,
+    initialBottom: Float,
+    onDismissRequest: () -> Unit,
+    onSave: (left: Float, right: Float, top: Float, bottom: Float) -> Unit,
+) {
+    var left by remember(show, imagePath) { mutableFloatStateOf(initialLeft) }
+    var right by remember(show, imagePath) { mutableFloatStateOf(initialRight) }
+    var top by remember(show, imagePath) { mutableFloatStateOf(initialTop) }
+    var bottom by remember(show, imagePath) { mutableFloatStateOf(initialBottom) }
+    var stretchMode by remember(show) { mutableIntStateOf(0) }
+    var dragHandle by remember { mutableStateOf<NineSliceHandle?>(null) }
+
+    val bitmap = remember(imagePath) {
+        runCatching {
+            val file = File(imagePath)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(imagePath)
+            } else null
+        }.getOrNull()
+    }
+
+    AppModalBottomSheet(
+        show = show,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.nine_patch_editor),
+        endAction = {
+            MediumTonalButton(
+                onClick = { onSave(left, right, top, bottom) },
+                icon = Icons.Default.Done,
+                contentDescription = stringResource(R.string.save),
+            )
+        },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            AppText(
+                stringResource(R.string.nine_slice_drag_hint),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(
+                    R.string.nine_slice_mode_all,
+                    R.string.nine_slice_mode_horizontal,
+                    R.string.nine_slice_mode_vertical,
+                ).forEachIndexed { index, label ->
+                    FilterChip(
+                        selected = stretchMode == index,
+                        onClick = { stretchMode = index },
+                        label = { AppText(stringResource(label)) },
+                    )
+                }
+            }
+            // Image preview with split lines — use single Canvas to avoid coordinate mismatch
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(250.dp)
+                    .padding(8.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
+            ) {
+                if (bitmap != null) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(bitmap, stretchMode) {
+                                detectDragGestures(
+                                    onDragStart = { point ->
+                                        val rect = nineSlicePreviewRect(
+                                            size.width.toFloat(), size.height.toFloat(),
+                                            bitmap.width.toFloat(), bitmap.height.toFloat(),
+                                        )
+                                        val candidates = buildList {
+                                            if (stretchMode != 2) {
+                                                add(NineSliceHandle.LEFT to kotlin.math.abs(point.x - (rect.left + rect.width * left)))
+                                                add(NineSliceHandle.RIGHT to kotlin.math.abs(point.x - (rect.right - rect.width * right)))
+                                            }
+                                            if (stretchMode != 1) {
+                                                add(NineSliceHandle.TOP to kotlin.math.abs(point.y - (rect.top + rect.height * top)))
+                                                add(NineSliceHandle.BOTTOM to kotlin.math.abs(point.y - (rect.bottom - rect.height * bottom)))
+                                            }
+                                        }
+                                        dragHandle = candidates.minByOrNull { it.second }
+                                            ?.takeIf { it.second <= 32.dp.toPx() }?.first
+                                    },
+                                    onDragEnd = { dragHandle = null },
+                                    onDragCancel = { dragHandle = null },
+                                ) { change, amount ->
+                                    val rect = nineSlicePreviewRect(
+                                        size.width.toFloat(), size.height.toFloat(),
+                                        bitmap.width.toFloat(), bitmap.height.toFloat(),
+                                    )
+                                    when (dragHandle) {
+                                        NineSliceHandle.LEFT -> left =
+                                            (left + amount.x / rect.width).coerceIn(0f, 0.5f)
+
+                                        NineSliceHandle.RIGHT -> right =
+                                            (right - amount.x / rect.width).coerceIn(0f, 0.5f)
+
+                                        NineSliceHandle.TOP -> top =
+                                            (top + amount.y / rect.height).coerceIn(0f, 0.5f)
+
+                                        NineSliceHandle.BOTTOM -> bottom =
+                                            (bottom - amount.y / rect.height).coerceIn(0f, 0.5f)
+
+                                        null -> Unit
+                                    }
+                                    if (dragHandle != null) change.consume()
+                                }
+                            }) {
+                        val canvasWidth = size.width
+                        val canvasHeight = size.height
+                        val bw = bitmap.width.toFloat()
+                        val bh = bitmap.height.toFloat()
+                        val preview = nineSlicePreviewRect(canvasWidth, canvasHeight, bw, bh)
+                        val imageW = preview.width
+                        val imageH = preview.height
+                        val offsetX = preview.left
+                        val offsetY = preview.top
+
+                        // Draw bitmap
+                        drawImage(
+                            image = bitmap.asImageBitmap(),
+                            dstOffset = androidx.compose.ui.unit.IntOffset(offsetX.toInt(), offsetY.toInt()),
+                            dstSize = androidx.compose.ui.unit.IntSize(imageW.toInt(), imageH.toInt()),
+                        )
+
+                        val lineColor = Color(0xFF16C96A)
+                        val lineWidth = 2.dp.toPx()
+
+                        // Left line
+                        val lx = offsetX + imageW * left
+                        drawLine(lineColor, Offset(lx, offsetY), Offset(lx, offsetY + imageH), lineWidth)
+                        // Right line
+                        val rx = offsetX + imageW * (1f - right)
+                        drawLine(lineColor, Offset(rx, offsetY), Offset(rx, offsetY + imageH), lineWidth)
+                        // Top line
+                        val ty = offsetY + imageH * top
+                        drawLine(lineColor, Offset(offsetX, ty), Offset(offsetX + imageW, ty), lineWidth)
+                        // Bottom line
+                        val by = offsetY + imageH * (1f - bottom)
+                        drawLine(lineColor, Offset(offsetX, by), Offset(offsetX + imageW, by), lineWidth)
+                        drawRect(
+                            lineColor.copy(alpha = 0.18f),
+                            topLeft = Offset(lx, ty),
+                            size = androidx.compose.ui.geometry.Size(rx - lx, by - ty),
+                        )
+                        val radius = 5.dp.toPx()
+                        listOf(
+                            Offset(lx, (ty + by) / 2f), Offset(rx, (ty + by) / 2f),
+                            Offset((lx + rx) / 2f, ty), Offset((lx + rx) / 2f, by),
+                        ).forEach { drawCircle(lineColor, radius, it) }
+                    }
+                }
+            }
+            NineSliceSlider(
+                title = stringResource(R.string.nine_patch_split_left),
+                value = left,
+                onValueChange = { left = it },
+            )
+            NineSliceSlider(
+                title = stringResource(R.string.nine_patch_split_right),
+                value = right,
+                onValueChange = { right = it },
+            )
+            NineSliceSlider(
+                title = stringResource(R.string.nine_patch_split_top),
+                value = top,
+                onValueChange = { top = it },
+            )
+            NineSliceSlider(
+                title = stringResource(R.string.nine_patch_split_bottom),
+                value = bottom,
+                onValueChange = { bottom = it },
+            )
+        }
+    }
+}
+
+@Composable
+private fun NineSliceSlider(
+    title: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+) {
+    TinySliderSettingItem(
+        title = title,
+        value = value,
+        valueRange = 0f..0.5f,
+        steps = 49,
+        stepSize = 0.01f,
+        showDecimal = true,
+        valueFormat = { String.format("%.2f", it) },
+        description = String.format("%.0f%%", value * 100f),
+        onValueChange = { onValueChange((it * 100).roundToInt() / 100f) },
+    )
+}
+
+private enum class NineSliceHandle { LEFT, RIGHT, TOP, BOTTOM }
+
+private data class NineSlicePreviewRect(
+    val left: Float,
+    val top: Float,
+    val width: Float,
+    val height: Float,
+) {
+    val right get() = left + width
+    val bottom get() = top + height
+}
+
+private fun nineSlicePreviewRect(
+    canvasWidth: Float,
+    canvasHeight: Float,
+    bitmapWidth: Float,
+    bitmapHeight: Float,
+): NineSlicePreviewRect {
+    val imageAspect = bitmapWidth / bitmapHeight
+    return if (imageAspect > canvasWidth / canvasHeight) {
+        val height = canvasWidth / imageAspect
+        NineSlicePreviewRect(0f, (canvasHeight - height) / 2f, canvasWidth, height)
+    } else {
+        val width = canvasHeight * imageAspect
+        NineSlicePreviewRect((canvasWidth - width) / 2f, 0f, width, canvasHeight)
     }
 }

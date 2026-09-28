@@ -2,6 +2,7 @@ package io.legado.app.ui.config.ai
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.legado.app.R
 import io.legado.app.domain.gateway.AiProfileGateway
 import io.legado.app.domain.gateway.AiTextGateway
 import io.legado.app.domain.model.AiAvailableModel
@@ -10,9 +11,11 @@ import io.legado.app.domain.model.AiModelDraft
 import io.legado.app.domain.model.AiProviderConfig
 import io.legado.app.domain.model.AiProviderDraft
 import io.legado.app.domain.model.AiProviderPresets
+import io.legado.app.domain.model.AiReasoningLevel
 import io.legado.app.domain.model.TranslationConstants
 import io.legado.app.utils.GSON
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import splitties.init.appCtx
 
 class AiProviderEditViewModel(
     private val initialProviderId: String?,
@@ -70,7 +74,8 @@ class AiProviderEditViewModel(
                                 modelId = model.modelId,
                                 contextWindow = model.contextWindow,
                                 maxOutputTokens = model.maxOutputTokens,
-                                temperature = params.temperature ?: TranslationConstants.DEFAULT_TEMPERATURE
+                                temperature = params.temperature ?: TranslationConstants.DEFAULT_TEMPERATURE,
+                                reasoningLevel = params.reasoningLevel.toModelConfigLevel()
                             )
                         }
                         .toImmutableList()
@@ -113,9 +118,13 @@ class AiProviderEditViewModel(
             is AiProviderEditIntent.UpdateEditingContextWindow -> updateEditingModel { copy(contextWindow = intent.value) }
             is AiProviderEditIntent.UpdateEditingMaxOutputTokens -> updateEditingModel { copy(maxOutputTokens = intent.value) }
             is AiProviderEditIntent.UpdateEditingTemperature -> updateEditingModel { copy(temperature = intent.value) }
+            is AiProviderEditIntent.UpdateEditingReasoningLevel -> updateEditingModel { copy(reasoningLevel = intent.value) }
             AiProviderEditIntent.SaveEditingModel -> saveEditingModel()
+            AiProviderEditIntent.TestConnection -> testConnection()
             AiProviderEditIntent.SaveProvider -> saveProvider()
             AiProviderEditIntent.SyncModels -> syncModels()
+            AiProviderEditIntent.DeleteProvider -> deleteProvider()
+            is AiProviderEditIntent.DeleteModel -> deleteModel(intent.modelProfileId)
         }
     }
 
@@ -147,7 +156,8 @@ class AiProviderEditViewModel(
                     modelId = model.modelId,
                     contextWindow = model.contextWindow.takeIf { value -> value > 0 }?.toString().orEmpty(),
                     maxOutputTokens = model.maxOutputTokens.takeIf { value -> value > 0 }?.toString().orEmpty(),
-                    temperature = model.temperature.toString()
+                    temperature = model.temperature.toString(),
+                    reasoningLevel = model.reasoningLevel
                 )
             )
         }
@@ -175,7 +185,8 @@ class AiProviderEditViewModel(
                         contextWindow = editor.contextWindow.toIntOrNull() ?: 0,
                         maxOutputTokens = editor.maxOutputTokens.toIntOrNull() ?: 0,
                         temperature = editor.temperature.toFloatOrNull()
-                            ?: TranslationConstants.DEFAULT_TEMPERATURE
+                            ?: TranslationConstants.DEFAULT_TEMPERATURE,
+                        reasoningLevel = editor.reasoningLevel
                     )
                 )
             }.onSuccess { model ->
@@ -204,6 +215,31 @@ class AiProviderEditViewModel(
         }
     }
 
+    private fun testConnection() {
+        if (_uiState.value.isTesting || _uiState.value.isSaving || _uiState.value.isFetchingModels) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isTesting = true) }
+            try {
+                val models = aiTextGateway.fetchModels(_uiState.value.toProviderConfig()).getOrThrow()
+                val count = models.size
+                val message = if (count == 0) {
+                    appCtx.getString(R.string.ai_test_success_no_models)
+                } else {
+                    appCtx.getString(R.string.ai_test_success_with_models, count)
+                }
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage(message))
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                val errorMsg = error.message
+                val failMsg = appCtx.getString(R.string.ai_test_failed)
+                val message = if (errorMsg.isNullOrBlank()) failMsg else "$failMsg: $errorMsg"
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage(message))
+            } finally {
+                _uiState.update { it.copy(isTesting = false) }
+            }
+        }
+    }
+
     private fun syncModels() {
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true, isFetchingModels = true) }
@@ -213,16 +249,7 @@ class AiProviderEditViewModel(
                 _uiState.update { it.copy(providerId = provider.id) }
                 val state = _uiState.value
                 runCatching {
-                    aiTextGateway.fetchModels(
-                        AiProviderConfig(
-                            id = provider.id,
-                            name = state.providerName,
-                            protocol = state.protocol,
-                            baseUrl = state.baseUrl,
-                            apiKey = state.apiKey,
-                            modelsUrl = state.modelsUrl.ifBlank { null }
-                        )
-                    ).getOrThrow()
+                    aiTextGateway.fetchModels(state.toProviderConfig(provider.id)).getOrThrow()
                 }.onSuccess { models ->
                     aiProfileGateway.importProviderModels(provider.id, models)
                     applyFetchedModels(provider.id, models)
@@ -237,6 +264,33 @@ class AiProviderEditViewModel(
                 _effects.tryEmit(AiProviderEditEffect.ShowMessage(error.message ?: "Failed to save AI provider"))
             }
             _uiState.update { it.copy(isSaving = false, isFetchingModels = false) }
+        }
+    }
+
+    private fun deleteProvider() {
+        val providerId = _uiState.value.providerId ?: return
+        viewModelScope.launch {
+            runCatching {
+                aiProfileGateway.deleteProvider(providerId)
+            }.onSuccess {
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage("AI provider deleted"))
+                _effects.tryEmit(AiProviderEditEffect.NavigateBackAfterDelete)
+            }.onFailure { error ->
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage(error.message ?: "Failed to delete AI provider"))
+            }
+        }
+    }
+
+    private fun deleteModel(modelProfileId: String) {
+        viewModelScope.launch {
+            runCatching {
+                aiProfileGateway.deleteModel(modelProfileId)
+            }.onSuccess {
+                _uiState.update { it.copy(editingModel = null) }
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage("AI model deleted"))
+            }.onFailure { error ->
+                _effects.tryEmit(AiProviderEditEffect.ShowMessage(error.message ?: "Failed to delete AI model"))
+            }
         }
     }
 
@@ -274,10 +328,25 @@ class AiProviderEditViewModel(
         )
     }
 
+    private fun AiProviderEditUiState.toProviderConfig(id: String = providerId ?: "test_connection_id"): AiProviderConfig {
+        return AiProviderConfig(
+            id = id,
+            name = providerName,
+            protocol = protocol,
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            modelsUrl = modelsUrl.ifBlank { null }
+        )
+    }
+
     private fun parseParams(json: String?): AiGenerationParams {
         if (json.isNullOrBlank()) return AiGenerationParams()
         return runCatching {
             GSON.fromJson(json, AiGenerationParams::class.java)
         }.getOrDefault(AiGenerationParams())
+    }
+
+    private fun AiReasoningLevel.toModelConfigLevel(): AiReasoningLevel {
+        return takeIf { it in AiReasoningLevel.modelConfigEntries } ?: AiReasoningLevel.MEDIUM
     }
 }

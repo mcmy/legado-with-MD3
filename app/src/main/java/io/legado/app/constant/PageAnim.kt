@@ -18,7 +18,14 @@ object PageAnim {
 
     @Target(AnnotationTarget.VALUE_PARAMETER)
     @Retention(AnnotationRetention.SOURCE)
-    @IntDef(coverPageAnim, slidePageAnim, simulationPageAnim, scrollPageAnim, noAnim)
+    @IntDef(
+        coverPageAnim,
+        slidePageAnim,
+        simulationPageAnim,
+        scrollPageAnim,
+        fadePageAnim,
+        noAnim,
+    )
     annotation class Anim
 
 }

@@ -8,7 +8,6 @@ import io.legado.app.R
 import io.legado.app.base.BaseBottomSheetDialogFragment
 import io.legado.app.constant.AppConst
 import io.legado.app.databinding.DialogUpdateBinding
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.update.AppUpdate
 import io.legado.app.help.update.AppVariant
 import io.legado.app.model.Download
@@ -21,6 +20,8 @@ import io.noties.markwon.html.HtmlPlugin
 import io.noties.markwon.image.glide.GlideImagesPlugin
 
 class UpdateDialog() : BaseBottomSheetDialogFragment(R.layout.dialog_update) {
+
+    private val otherSettingsGateway get() = org.koin.core.context.GlobalContext.get().get<io.legado.app.domain.gateway.OtherSettingsGateway>()
 
     enum class Mode { UPDATE, VIEW_LOG }
 
@@ -35,7 +36,7 @@ class UpdateDialog() : BaseBottomSheetDialogFragment(R.layout.dialog_update) {
     }
 
     private val checkVariant: AppVariant
-        get() = when (AppConfig.updateToVariant) {
+        get() = when (otherSettingsGateway.currentSettings.updateToVariant) {
             "official_version" -> AppVariant.OFFICIAL
             "beta_release_version" -> AppVariant.BETA_RELEASE
             "all_version" -> AppVariant.ALL

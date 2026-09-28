@@ -1,7 +1,6 @@
 package io.legado.app.data.entities
 
 import android.webkit.JavascriptInterface
-import cn.hutool.crypto.symmetric.AES
 import com.script.ScriptBindings
 import com.script.buildScriptBindings
 import com.script.rhino.RhinoScriptEngine
@@ -11,7 +10,6 @@ import io.legado.app.data.entities.rule.RowUi
 import io.legado.app.help.CacheManager
 import io.legado.app.help.ConcurrentRateLimiter.Companion.updateConcurrentRate
 import io.legado.app.help.JsExtensions
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.crypto.SymmetricCryptoAndroid
 import io.legado.app.help.http.CookieStore
 import io.legado.app.help.source.clearExploreKindsCache
@@ -101,7 +99,7 @@ interface BaseSource : JsExtensions {
     /**
      * 解析header规则
      */
-    fun getHeaderMap(hasLoginHeader: Boolean = false) = HashMap<String, String>().apply {
+    fun getHeaderMap(userAgent: String, hasLoginHeader: Boolean = false) = HashMap<String, String>().apply {
         header?.let {
             try {
                 val json = when {
@@ -123,7 +121,7 @@ interface BaseSource : JsExtensions {
             }
         }
         if (!has(AppConst.UA_NAME, true)) {
-            put(AppConst.UA_NAME, AppConfig.userAgent)
+            put(AppConst.UA_NAME, userAgent)
         }
         if (hasLoginHeader) {
             getLoginHeaderMap()?.let {
@@ -171,7 +169,7 @@ interface BaseSource : JsExtensions {
         try {
             val key = AppConst.androidId.encodeToByteArray(0, 16)
             val cache = CacheManager.get("userInfo_${getKey()}") ?: return null
-            return AES(key).decryptStr(cache)
+            return SymmetricCryptoAndroid("AES", key).decryptStr(cache)
         } catch (e: Exception) {
             AppLog.put("获取登陆信息出错", e)
             return null

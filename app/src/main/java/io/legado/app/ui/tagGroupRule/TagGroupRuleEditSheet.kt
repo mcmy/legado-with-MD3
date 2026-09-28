@@ -30,7 +30,7 @@ import io.legado.app.data.entities.TagGroupRule
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppFloatingActionButton
 import io.legado.app.ui.widget.components.AppTextField
-import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
@@ -49,13 +49,13 @@ fun TagGroupRuleEditSheet(
     val scope = rememberCoroutineScope()
 
     val isNew = rule == null || rule.id == 0L
-    val initial = remember(rule) {
+    val initial = remember(show, rule) {
         rule ?: TagGroupRule()
     }
 
-    var pattern by remember(initial) { mutableStateOf(initial.pattern) }
-    var groupName by remember(initial) { mutableStateOf(initial.groupName) }
-    var showMenu by remember { mutableStateOf(false) }
+    var pattern by remember(show, rule) { mutableStateOf(initial.pattern) }
+    var groupName by remember(show, rule) { mutableStateOf(initial.groupName) }
+    var showMenu by remember(show, rule) { mutableStateOf(false) }
 
     fun getCurrentRule(): TagGroupRule {
         return initial.copy(
@@ -71,18 +71,18 @@ fun TagGroupRuleEditSheet(
             stringResource(R.string.tag_group_edit_rule)
         },
         startAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = onDismissRequest,
                 icon = Icons.Default.Close,
-                contentDescription = "Close",
+                contentDescription = stringResource(R.string.close),
             )
         },
         endAction = {
             Box {
-                MediumPlainButton(
+                MediumTonalButton(
                     onClick = { showMenu = true },
                     icon = Icons.Default.MoreVert,
-                    contentDescription = "More"
+                    contentDescription = stringResource(R.string.more_menu)
                 )
                 RoundDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     RoundDropdownMenuItem(

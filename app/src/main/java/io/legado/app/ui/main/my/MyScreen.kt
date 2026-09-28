@@ -1,5 +1,10 @@
 package io.legado.app.ui.main.my
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -19,11 +24,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Rule
-import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FindReplace
@@ -38,15 +42,16 @@ import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.ui.book.bookmark.AllBookmarkActivity
-import io.legado.app.ui.book.source.manage.BookSourceActivity
 import io.legado.app.ui.book.toc.rule.TxtTocRuleActivity
 import io.legado.app.ui.dict.rule.DictRuleActivity
 import io.legado.app.ui.file.FileManageActivity
@@ -59,20 +64,61 @@ import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.SwitchSettingItem
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
-import io.legado.app.ui.widget.components.topbar.TopBarActionButton
+import kotlinx.coroutines.flow.collectLatest
 import org.koin.androidx.compose.koinViewModel
 
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@SuppressLint("InlinedApi") // 仅 API 37+ 缺少权限时才发出该 effect，权限名常量会被内联
 @Composable
-fun MyScreen(
+fun MyRouteScreen(
     viewModel: MyViewModel = koinViewModel(),
     onOpenSettings: () -> Unit,
     onNavigateToChat: () -> Unit,
     onNavigate: (PrefClickEvent) -> Unit
 ) {
-
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val localNetworkPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.onIntent(MyIntent.StartWebService)
+        } else {
+            Toast.makeText(
+                context,
+                R.string.web_service_local_network_permission_denied,
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collectLatest { effect ->
+            when (effect) {
+                MyEffect.RequestLocalNetworkPermission -> localNetworkPermissionLauncher.launch(
+                    Manifest.permission.ACCESS_LOCAL_NETWORK
+                )
+            }
+        }
+    }
+    MyScreen(
+        state = uiState,
+        onIntent = viewModel::onIntent,
+        onOpenSettings = onOpenSettings,
+        onNavigateToChat = onNavigateToChat,
+        onNavigate = onNavigate,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun MyScreen(
+    state: MyUiState,
+    onIntent: (MyIntent) -> Unit,
+    onOpenSettings: () -> Unit,
+    onNavigateToChat: () -> Unit,
+    onNavigate: (PrefClickEvent) -> Unit,
+) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     AppScaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -81,20 +127,7 @@ fun MyScreen(
         topBar = {
             GlassMediumFlexibleTopAppBar(
                 title = stringResource(R.string.my),
-                actions = {
-                    TopBarActionButton(
-                        onClick = {
-                            onNavigate(
-                                PrefClickEvent.ShowMd(
-                                    title = "",
-                                    path = "appHelp"
-                                )
-                            )
-                        },
-                        imageVector = Icons.AutoMirrored.Filled.HelpOutline,
-                        contentDescription = null
-                    )
-                },
+                actions = {},
                 scrollBehavior = scrollBehavior
             )
         }
@@ -114,9 +147,9 @@ fun MyScreen(
                 title = ""
             ) {
                 WebServiceSettingBlock(
-                    uiState = uiState,
+                    uiState = state,
                     onToggleWebService = {
-                        viewModel.onEvent(PrefClickEvent.ToggleWebService)
+                        onIntent(MyIntent.ToggleWebService)
                     },
                     onNavigate = onNavigate
                 )
@@ -131,7 +164,7 @@ fun MyScreen(
                     imageVector = Icons.Default.Source,
                     onClick = {
                         onNavigate(
-                            PrefClickEvent.StartActivity(BookSourceActivity::class.java)
+                            PrefClickEvent.OpenBookSourceManage
                         )
                     }
                 )
@@ -283,4 +316,3 @@ fun WebServiceSettingBlock(
         }
     }
 }
-

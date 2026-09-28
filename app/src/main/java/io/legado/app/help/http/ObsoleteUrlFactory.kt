@@ -1048,7 +1048,7 @@ class ObsoleteUrlFactory(private var client: OkHttpClient) : URLStreamHandlerFac
             "NULLABILITY_MISMATCH_BASED_ON_JAVA_ANNOTATIONS"
         )
         fun format(value: Date?): String {
-            return STANDARD_DATE_FORMAT.get().format(value)
+            return STANDARD_DATE_FORMAT.get().format(value!!)
         }
 
         fun permitsRequestBody(method: String): Boolean {
@@ -1152,7 +1152,7 @@ class ObsoleteUrlFactory(private var client: OkHttpClient) : URLStreamHandlerFac
         fun getSystemProperty(key: String?, defaultValue: String?): String? {
             val value: String?
             try {
-                value = System.getProperty(key)
+                value = System.getProperty(key!!)
             } catch (ex: AccessControlException) {
                 return defaultValue
             }

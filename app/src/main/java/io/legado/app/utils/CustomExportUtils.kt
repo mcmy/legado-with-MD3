@@ -1,9 +1,13 @@
 package io.legado.app.utils
 
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.BookExportSettingsGateway
+import org.koin.core.context.GlobalContext
 
 // 匹配待“输入的章节”字符串
 private val regexEpisode = Regex("\\d+(-\\d+)?(,\\d+(-\\d+)?)*")
+
+private val bookExportSettingsGateway
+    get() = GlobalContext.get().get<BookExportSettingsGateway>()
 
 /**
  * 是否启用自定义导出
@@ -11,7 +15,8 @@ private val regexEpisode = Regex("\\d+(-\\d+)?(,\\d+(-\\d+)?)*")
  * @author Discut
  */
 fun enableCustomExport(): Boolean {
-    return AppConfig.enableCustomExport && AppConfig.exportType == 1
+    val exportSettings = bookExportSettingsGateway.currentSettings
+    return exportSettings.enableCustomExport && exportSettings.exportType == 1
 }
 
 /**

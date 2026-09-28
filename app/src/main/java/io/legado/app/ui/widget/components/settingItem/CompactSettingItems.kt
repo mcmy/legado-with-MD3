@@ -23,8 +23,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
@@ -32,6 +33,7 @@ import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.ValueStepper
 import io.legado.app.ui.widget.components.card.TextCard
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
+import io.legado.app.ui.widget.components.sliderAccessibility
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -49,7 +51,7 @@ fun CompactDropdownSettingItem(
     description: String? = null,
     imageVector: ImageVector? = null,
     color: Color? = LegadoTheme.colorScheme.onSheetContent,
-    shape: Shape = MaterialTheme.shapes.small,
+    cornerRadius: androidx.compose.ui.unit.Dp = 8.dp,
     onValueChange: (String) -> Unit
 ) {
     if (ThemeResolver.isMiuixEngine(composeEngine)) {
@@ -82,7 +84,7 @@ fun CompactDropdownSettingItem(
             description = description,
             imageVector = imageVector,
             color = color,
-            shape = shape,
+            cornerRadius = cornerRadius,
             trailingContent = {
                 TextCard(
                     cornerRadius = 8.dp,
@@ -127,13 +129,14 @@ fun CompactSliderSettingItem(
     description: String? = null,
     imageVector: ImageVector? = null,
     color: Color? = LegadoTheme.colorScheme.onSheetContent,
-    shape: Shape = MaterialTheme.shapes.small,
+    cornerRadius: androidx.compose.ui.unit.Dp = 8.dp,
     onValueChange: (Float) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     var sliderValue by remember(value) { mutableFloatStateOf(value) }
     var displayValue by remember(value) { mutableFloatStateOf(value) }
+    val sliderAccessibilityValue = description ?: displayValue.toString()
 
     if (ThemeResolver.isMiuixEngine(composeEngine)) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -168,7 +171,12 @@ fun CompactSliderSettingItem(
                         },
                         valueRange = valueRange,
                         steps = steps,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sliderAccessibility(
+                                label = title,
+                                value = sliderAccessibilityValue,
+                            )
                     )
                 }
             }
@@ -179,7 +187,7 @@ fun CompactSliderSettingItem(
             description = description,
             imageVector = imageVector,
             color = color,
-            shape = shape,
+            cornerRadius = cornerRadius,
             expanded = expanded,
             onExpandChange = { expanded = it },
             trailingContent = {
@@ -202,7 +210,12 @@ fun CompactSliderSettingItem(
                     },
                     valueRange = valueRange,
                     steps = steps,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .sliderAccessibility(
+                            label = title,
+                            value = sliderAccessibilityValue,
+                        )
                 )
             }
         )
@@ -223,7 +236,7 @@ fun CompactSwitchSettingItem(
     description: String? = null,
     imageVector: ImageVector? = null,
     color: Color? = LegadoTheme.colorScheme.onSheetContent,
-    shape: Shape = MaterialTheme.shapes.small,
+    cornerRadius: androidx.compose.ui.unit.Dp = 8.dp,
     enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
@@ -233,6 +246,7 @@ fun CompactSwitchSettingItem(
             summary = description,
             checked = checked,
             onCheckedChange = onCheckedChange,
+            modifier = Modifier,
             enabled = enabled,
         )
     } else {
@@ -241,11 +255,16 @@ fun CompactSwitchSettingItem(
             description = description,
             imageVector = imageVector,
             color = color,
-            shape = shape,
+            cornerRadius = cornerRadius,
+            enabled = enabled,
+            semanticRole = Role.Switch,
+            semanticToggleState = checked,
             onClick = { if (enabled) onCheckedChange(!checked) },
             trailingContent = {
                 Switch(
-                    modifier = Modifier.scale(0.8f),
+                    modifier = Modifier
+                        .scale(0.8f)
+                        .clearAndSetSemantics { },
                     checked = checked,
                     onCheckedChange = onCheckedChange,
                     enabled = enabled
@@ -261,7 +280,7 @@ fun CompactClickableSettingItem(
     description: String? = null,
     imageVector: ImageVector? = null,
     color: Color? = LegadoTheme.colorScheme.onSheetContent,
-    shape: Shape = MaterialTheme.shapes.small,
+    cornerRadius: androidx.compose.ui.unit.Dp = 8.dp,
     trailingContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit
 ) {
@@ -278,7 +297,7 @@ fun CompactClickableSettingItem(
             description = description,
             imageVector = imageVector,
             color = color,
-            shape = shape,
+            cornerRadius = cornerRadius,
             trailingContent = trailingContent ?: {
                 Icon(
                     imageVector = Icons.Default.ChevronRight,

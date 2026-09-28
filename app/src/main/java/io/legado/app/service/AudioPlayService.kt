@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioManager
+import android.media.audiofx.LoudnessEnhancer
 import android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media.AudioFocusRequestCompat
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import io.legado.app.R
 import io.legado.app.base.BaseService
@@ -29,9 +31,10 @@ import io.legado.app.constant.EventBus
 import io.legado.app.constant.IntentAction
 import io.legado.app.constant.NotificationId
 import io.legado.app.constant.Status
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadAloudSettingsGateway
+import io.legado.app.domain.model.PlaybackTimer
 import io.legado.app.help.MediaHelp
-import io.legado.app.help.config.AppConfig
-import io.legado.app.ui.config.readConfig.ReadConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.exoplayer.ExoPlayerHelper
 import io.legado.app.help.glide.ImageLoader
@@ -39,7 +42,7 @@ import io.legado.app.model.AudioPlay
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.analyzeRule.AnalyzeUrl.Companion.getMediaItem
 import io.legado.app.receiver.MediaButtonReceiver
-import io.legado.app.ui.book.audio.AudioPlayActivity
+import io.legado.app.ui.main.MainActivity
 import io.legado.app.utils.activityPendingIntent
 import io.legado.app.utils.postEvent
 import io.legado.app.utils.printOnDebug
@@ -50,11 +53,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import splitties.systemservices.audioManager
 import splitties.systemservices.notificationManager
 import splitties.systemservices.powerManager
 import splitties.systemservices.wifiManager
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 音频播放服务
@@ -74,6 +79,9 @@ class AudioPlayService : BaseService(),
 
         @JvmStatic
         var timeMinute: Int = 0
+            set(value) {
+                field = PlaybackTimer.normalize(value)
+            }
 
         var url: String = ""
             private set
@@ -89,7 +97,9 @@ class AudioPlayService : BaseService(),
         private const val APP_ACTION_TIMER = "Timer"
     }
 
-    private val useWakeLock = AppConfig.audioPlayUseWakeLock
+    private val otherSettingsGateway get() = GlobalContext.get().get<OtherSettingsGateway>()
+    private val aloudSettingsGateway get() = GlobalContext.get().get<ReadAloudSettingsGateway>()
+    private val useWakeLock = otherSettingsGateway.currentSettings.audioPlayUseWakeLock
     private val wakeLock by lazy {
         powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "legado:AudioPlayService")
             .apply {
@@ -116,6 +126,7 @@ class AudioPlayService : BaseService(),
     private var upNotificationJob: Coroutine<*>? = null
     private var upPlayProgressJob: Job? = null
     private var playSpeed: Float = 1f
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private var cover: Bitmap =
         BitmapFactory.decodeResource(appCtx.resources, R.drawable.ic_launcher)!!
 
@@ -175,6 +186,7 @@ class AudioPlayService : BaseService(),
                 IntentAction.prev -> AudioPlay.prev()
                 IntentAction.next -> AudioPlay.next()
                 IntentAction.adjustSpeed -> upSpeed(intent.getFloatExtra("adjust", 1f))
+                IntentAction.adjustGain -> applyGain(intent.getIntExtra("gain", 0))
                 IntentAction.addTimer -> addTimer()
                 IntentAction.setTimer -> setTimer(intent.getIntExtra("minute", 0))
                 IntentAction.adjustProgress -> {
@@ -196,6 +208,8 @@ class AudioPlayService : BaseService(),
         isRun = false
         abandonFocus()
         exoPlayer.release()
+        loudnessEnhancer?.release()
+        loudnessEnhancer = null
         mediaSessionCompat?.release()
         unregisterReceiver(broadcastReceiver)
         upMediaSessionPlaybackState(PlaybackStateCompat.STATE_STOPPED)
@@ -233,7 +247,10 @@ class AudioPlayService : BaseService(),
             )
             exoPlayer.setMediaItem(analyzeUrl.getMediaItem())
             exoPlayer.playWhenReady = true
-            exoPlayer.seekTo(position.toLong())
+            // 片头跳过设定（仅从头播放时生效）
+            val skipStartMs = (AudioPlay.book?.getOpenCredits() ?: 0) * 1000L
+            val playtime = if (position == 0) skipStartMs else position.toLong()
+            exoPlayer.seekTo(playtime)
             exoPlayer.prepare()
         }.onError {
             AppLog.put("播放出错\n${it.localizedMessage}", it)
@@ -335,6 +352,7 @@ class AudioPlayService : BaseService(),
             Player.STATE_READY -> {
                 // 准备好
                 AudioPlay.upLoading(false)
+                applyGain(AudioPlay.book?.getAudioGain() ?: 0)
                 if (exoPlayer.playWhenReady) {
                     AudioPlay.status = Status.PLAY
                     postEvent(EventBus.AUDIO_STATE, Status.PLAY)
@@ -388,12 +406,7 @@ class AudioPlayService : BaseService(),
     }
 
     private fun addTimer() {
-        if (timeMinute == 180) {
-            timeMinute = 0
-        } else {
-            timeMinute += 10
-            if (timeMinute > 180) timeMinute = 180
-        }
+        timeMinute = PlaybackTimer.addIncrement(timeMinute)
         doDs()
     }
 
@@ -404,14 +417,15 @@ class AudioPlayService : BaseService(),
         postEvent(EventBus.AUDIO_DS, timeMinute)
         upAudioPlayNotification()
         dsJob?.cancel()
+        dsJob = null
+        if (timeMinute == PlaybackTimer.MIN_MINUTES) return
         dsJob = lifecycleScope.launch {
             while (isActive) {
                 delay(60000)
+                if (timeMinute == PlaybackTimer.MIN_MINUTES) break
                 if (!pause) {
-                    if (timeMinute >= 0) {
-                        timeMinute--
-                    }
-                    if (timeMinute == 0) {
+                    timeMinute--
+                    if (timeMinute == PlaybackTimer.MIN_MINUTES) {
                         AudioPlay.stop()
                         postEvent(EventBus.AUDIO_DS, timeMinute)
                         break
@@ -428,16 +442,50 @@ class AudioPlayService : BaseService(),
      */
     private fun upPlayProgress() {
         upPlayProgressJob?.cancel()
+        val skipEnds = AudioPlay.book?.getCloseCredits() ?: 0
         upPlayProgressJob = lifecycleScope.launch {
             while (isActive) {
+                val durP = exoPlayer.currentPosition
                 //更新buffer位置
-                AudioPlay.playPositionChanged(exoPlayer.currentPosition.toInt())
+                AudioPlay.playPositionChanged(durP.toInt())
                 postEvent(EventBus.AUDIO_BUFFER_PROGRESS, exoPlayer.bufferedPosition.toInt())
                 postEvent(EventBus.AUDIO_PROGRESS, AudioPlay.durChapterPos)
                 postEvent(EventBus.AUDIO_SIZE, exoPlayer.duration.toInt())
                 upMediaSessionPlaybackState(PlaybackStateCompat.STATE_PLAYING)
-                delay(1000)
+                // 片尾跳过检查
+                if (skipEnds > 0) {
+                    val duration = exoPlayer.duration
+                    if (duration > 0 && durP >= duration - (skipEnds * 1000L)) {
+                        upPlayProgressJob?.cancel()
+                        AudioPlay.playPositionChanged(duration.toInt())
+                        pause = true
+                        AudioPlay.next()
+                    }
+                }
+                delay(1000.milliseconds)
             }
+        }
+    }
+
+    /**
+     * 应用音频增益（LoudnessEnhancer，单位 mB，范围 -6000..6000）
+     */
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun applyGain(gain: Int) {
+        try {
+            if (gain == 0) {
+                loudnessEnhancer?.release()
+                loudnessEnhancer = null
+                return
+            }
+            if (loudnessEnhancer == null) {
+                loudnessEnhancer = LoudnessEnhancer(exoPlayer.audioSessionId).apply {
+                    setEnabled(true)
+                }
+            }
+            loudnessEnhancer?.setTargetGain(gain.coerceIn(-6000, 6000))
+        } catch (e: Exception) {
+            AppLog.put("设置音频增益失败: ${e.localizedMessage}", e)
         }
     }
 
@@ -470,7 +518,7 @@ class AudioPlayService : BaseService(),
     @SuppressLint("UnspecifiedImmutableFlag")
     private fun initMediaSession() {
         mediaSessionCompat = MediaSessionCompat(this, "readAloud")
-        if (ReadConfig.systemMediaControlCompatibilityChange) {
+        if (aloudSettingsGateway.currentSettings.systemMediaControlCompatibilityChange) {
             mediaSessionCompat?.setCallback(object : MediaSessionCompat.Callback() {
                 override fun onSeekTo(pos: Long) {
                     position = pos.toInt()
@@ -535,7 +583,7 @@ class AudioPlayService : BaseService(),
      * 音频焦点变化
      */
     override fun onAudioFocusChange(focusChange: Int) {
-        if (ReadConfig.ignoreAudioFocus) {
+        if (aloudSettingsGateway.currentSettings.ignoreAudioFocus) {
             AppLog.put("忽略音频焦点处理(有声)")
             return
         }
@@ -572,7 +620,8 @@ class AudioPlayService : BaseService(),
     private fun createNotification(): NotificationCompat.Builder {
         val nTitle: String = when {
             pause -> getString(R.string.audio_pause)
-            timeMinute in 1..60 -> getString(R.string.playing_timer, timeMinute)
+            timeMinute > PlaybackTimer.MIN_MINUTES ->
+                getString(R.string.playing_timer, timeMinute)
             else -> getString(R.string.audio_play_t)
         } + ": ${AudioPlay.book?.name}"
 
@@ -587,7 +636,10 @@ class AudioPlayService : BaseService(),
             .setContentTitle(nTitle)
             .setContentText(nSubtitle)
             .setContentIntent(
-                activityPendingIntent<AudioPlayActivity>("activity")
+                activityPendingIntent(
+                    MainActivity.createAudioPlayIntent(this@AudioPlayService),
+                    "activity",
+                )
             )
         builder.setLargeIcon(cover)
         builder.addAction(
@@ -631,7 +683,7 @@ class AudioPlayService : BaseService(),
     private fun choiceMediaStyle(): androidx.media.app.NotificationCompat.MediaStyle {
         val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
         mediaStyle.setShowActionsInCompactView(1,2,4)
-        if (ReadConfig.systemMediaControlCompatibilityChange) {
+        if (aloudSettingsGateway.currentSettings.systemMediaControlCompatibilityChange) {
             //fix #4090 android 14 can not show play control in lock screen
             mediaStyle.setMediaSession(mediaSessionCompat?.sessionToken)
         }
@@ -653,15 +705,13 @@ class AudioPlayService : BaseService(),
      * 更新通知
      */
     override fun startForegroundNotification() {
-        execute {
-            try {
-                val notification = createNotification()
-                startForeground(NotificationId.AudioPlayService, notification.build())
-            } catch (e: Exception) {
-                AppLog.put("创建音频播放通知出错,${e.localizedMessage}", e, true)
-                //创建通知出错不结束服务就会崩溃,服务必须绑定通知
-                stopSelf()
-            }
+        try {
+            val notification = createNotification()
+            startForeground(NotificationId.AudioPlayService, notification.build())
+        } catch (e: Exception) {
+            AppLog.put("创建音频播放通知出错,${e.localizedMessage}", e, true)
+            //创建通知出错不结束服务就会崩溃,服务必须绑定通知
+            stopSelf()
         }
     }
 
@@ -670,7 +720,7 @@ class AudioPlayService : BaseService(),
      * @return 音频焦点
      */
     private fun requestFocus(): Boolean {
-        if (ReadConfig.ignoreAudioFocus) {
+        if (aloudSettingsGateway.currentSettings.ignoreAudioFocus) {
             return true
         }
         return MediaHelp.requestFocus(mFocusRequest)

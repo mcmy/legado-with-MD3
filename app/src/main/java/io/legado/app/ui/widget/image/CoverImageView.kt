@@ -20,15 +20,18 @@ import com.bumptech.glide.request.RequestListener
 import com.bumptech.glide.request.RequestOptions
 import com.bumptech.glide.request.target.Target
 import io.legado.app.constant.AppPattern
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.CoverSettingsGateway
 import io.legado.app.help.glide.ImageLoader
 import io.legado.app.help.glide.OkHttpModelLoader
 import io.legado.app.model.BookCover
-import io.legado.app.ui.config.coverConfig.CoverConfig
+import io.legado.app.utils.isNightMode
 import io.legado.app.utils.spToPx
+import io.legado.app.utils.sysConfiguration
 import io.legado.app.utils.textHeight
 import io.legado.app.utils.themeColor
 import io.legado.app.utils.toStringArray
+import org.koin.core.context.GlobalContext
 
 /**
  * 封面
@@ -51,9 +54,19 @@ class CoverImageView @JvmOverloads constructor(
     private var author: String? = null
     private var nameHeight = 0f
     private var authorHeight = 0f
-    private val isNightTheme get() = AppConfig.isNightTheme
-    private val colorKey get() = if (isNightTheme) CoverConfig.coverTextColorN else CoverConfig.coverTextColor
-    private val shadowKey get() = if (isNightTheme) CoverConfig.coverShadowColorN else CoverConfig.coverShadowColor
+    private val coverSettingsGateway
+        get() = GlobalContext.get().get<CoverSettingsGateway>()
+    private val coverSettings get() = coverSettingsGateway.currentSettings
+    private val appShellSettingsGateway
+        get() = GlobalContext.get().get<AppShellSettingsGateway>()
+    private val isNightTheme: Boolean
+        get() = when (appShellSettingsGateway.currentSettings.themeMode) {
+            "1" -> false
+            "2" -> true
+            else -> sysConfiguration.isNightMode
+        }
+    private val colorKey get() = if (isNightTheme) coverSettings.textColorDark else coverSettings.textColor
+    private val shadowKey get() = if (isNightTheme) coverSettings.shadowColorDark else coverSettings.shadowColor
     private val namePaint by lazy {
         val textPaint = TextPaint()
         textPaint.typeface = Typeface.DEFAULT_BOLD
@@ -128,14 +141,14 @@ class CoverImageView @JvmOverloads constructor(
     private fun drawNameAuthor(canvas: Canvas) {
         var startX = width * 0.2f
         var startY = viewHeight * 0.2f
-        val showName = if (isNightTheme) CoverConfig.coverShowNameN else CoverConfig.coverShowName
+        val showName = if (isNightTheme) coverSettings.showNameDark else coverSettings.showName
         if (showName) {
             name?.toStringArray()?.let { nameChars ->
                 val textSize = viewWidth / 8
                 namePaint.textSize = textSize
                 namePaint.strokeWidth = textSize / 8
 
-                if (CoverConfig.coverShowShadow) {
+                if (coverSettings.showShadow) {
                     namePaint.setShadowLayer(
                         4f,
                         0f,
@@ -147,12 +160,12 @@ class CoverImageView @JvmOverloads constructor(
                 }
 
                 nameChars.forEach { char ->
-                    if (CoverConfig.coverShowStroke) {
+                    if (coverSettings.showStroke) {
                         namePaint.color = Color.WHITE
                         namePaint.style = Paint.Style.STROKE
                         canvas.drawText(char, startX, startY, namePaint)
                     }
-                    if (CoverConfig.coverDefaultColor)
+                    if (coverSettings.useDefaultColor)
                         namePaint.color = context.themeColor(com.google.android.material.R.attr.colorSecondary)
                     else
                         namePaint.color = colorKey
@@ -171,7 +184,7 @@ class CoverImageView @JvmOverloads constructor(
         }
 
         val showAuthor =
-            if (isNightTheme) CoverConfig.coverShowAuthorN else CoverConfig.coverShowAuthor
+            if (isNightTheme) coverSettings.showAuthorDark else coverSettings.showAuthor
         if (showAuthor) {
             author?.toStringArray()?.let { author ->
                 authorPaint.textSize = viewWidth / 10
@@ -179,7 +192,7 @@ class CoverImageView @JvmOverloads constructor(
                 startX = width * 0.8f
                 startY = viewHeight * 0.95f - author.size * authorPaint.textHeight
                 startY = maxOf(startY, viewHeight * 0.2f)
-                if (CoverConfig.coverShowShadow) {
+                if (coverSettings.showShadow) {
                     authorPaint.setShadowLayer(
                         4f,
                         0f,
@@ -191,12 +204,12 @@ class CoverImageView @JvmOverloads constructor(
                 }
 
                 author.forEach {
-                    if (CoverConfig.coverShowStroke) {
+                    if (coverSettings.showStroke) {
                         authorPaint.color = Color.WHITE
                         authorPaint.style = Paint.Style.STROKE
                         canvas.drawText(it, startX, startY, authorPaint)
                     }
-                    if (CoverConfig.coverDefaultColor)
+                    if (coverSettings.useDefaultColor)
                         authorPaint.color = context.themeColor(com.google.android.material.R.attr.colorSecondary)
                     else
                         authorPaint.color = colorKey
@@ -262,7 +275,7 @@ class CoverImageView @JvmOverloads constructor(
         this.author = author?.replace(AppPattern.bdRegex, "")?.trim()
         defaultCover = true
         invalidate()
-        if (AppConfig.useDefaultCover) {
+        if (coverSettings.useDefaultCover) {
             ImageLoader.load(context, BookCover.defaultDrawable)
                 .centerCrop()
                 .into(this)

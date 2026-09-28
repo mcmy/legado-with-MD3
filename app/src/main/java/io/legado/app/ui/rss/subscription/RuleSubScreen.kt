@@ -22,7 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,10 +35,10 @@ import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.data.entities.RuleSub
 import io.legado.app.data.entities.RuleSubType
-import io.legado.app.ui.association.ImportBookSourceDialog
 import io.legado.app.ui.association.ImportReplaceRuleDialog
 import io.legado.app.ui.association.ImportRssSourceDialog
 import io.legado.app.ui.theme.LegadoTheme
@@ -59,25 +59,69 @@ import org.koin.androidx.compose.koinViewModel
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun RuleSubScreen(
+fun RuleSubRouteScreen(
     onBackClick: () -> Unit,
+    onImportBookSource: (String) -> Unit,
     viewModel: RuleSubViewModel = koinViewModel()
 ) {
     val context = LocalContext.current
-    val state by viewModel.state.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                is RuleSubEffect.ShowMessage -> context.toastOnUi(effect.message)
+                is RuleSubEffect.OpenRule -> {
+                    val ruleSub = effect.rule
+                    when (ruleSub.type) {
+                        RuleSubType.BOOK_SOURCE -> onImportBookSource(ruleSub.url)
+                        RuleSubType.RSS_SOURCE ->
+                            (context as? AppCompatActivity)?.showDialogFragment(
+                                ImportRssSourceDialog(ruleSub.url)
+                            )
+                        RuleSubType.REPLACE_RULE ->
+                            (context as? AppCompatActivity)?.showDialogFragment(
+                                ImportReplaceRuleDialog(ruleSub.url)
+                            )
+                        RuleSubType.AUTO -> {
+                            val encodedUrl = java.net.URLEncoder.encode(ruleSub.url, "UTF-8")
+                            context.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    "legado://import/importonline?src=$encodedUrl".toUri(),
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    RuleSubScreen(
+        state = state,
+        onIntent = viewModel::onIntent,
+        onBackClick = onBackClick,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun RuleSubScreen(
+    state: RuleSubUiState,
+    onIntent: (RuleSubIntent) -> Unit,
+    onBackClick: () -> Unit,
+) {
     val snackbarHostState = remember { SnackbarHostState() }
-    var showEditDialog by remember { mutableStateOf<RuleSub?>(null) }
 
     RuleListScaffold(
         title = stringResource(R.string.rule_subscription),
         state = state,
         onBackClick = onBackClick,
-        onSearchToggle = viewModel::onSearchToggle,
-        onSearchQueryChange = viewModel::onSearchQueryChange,
-        onClearSelection = viewModel::clearSelection,
-        onSelectAll = viewModel::selectAll,
-        onSelectInvert = viewModel::selectInvert,
-        onDeleteSelected = { viewModel.deleteSelected() },
+        onSearchToggle = { onIntent(RuleSubIntent.ToggleSearch(it)) },
+        onSearchQueryChange = { onIntent(RuleSubIntent.Search(it)) },
+        onClearSelection = { onIntent(RuleSubIntent.ClearSelection) },
+        onSelectAll = { onIntent(RuleSubIntent.SelectAll) },
+        onSelectInvert = { onIntent(RuleSubIntent.InvertSelection) },
+        onDeleteSelected = { onIntent(RuleSubIntent.DeleteSelected) },
         snackbarHostState = snackbarHostState,
         selectionSecondaryActions = emptyList(),
         topBarActions = {},
@@ -88,7 +132,7 @@ fun RuleSubScreen(
                     Icon(Icons.AutoMirrored.Filled.Sort, null, modifier = Modifier.size(18.dp))
                 },
                 onClick = {
-                    viewModel.resetOrder()
+                    onIntent(RuleSubIntent.ResetOrder)
                     dismiss()
                 }
             )
@@ -101,7 +145,7 @@ fun RuleSubScreen(
                         alignment = Alignment.BottomEnd,
                     ),
                 onClick = {
-                    showEditDialog = RuleSub(customOrder = state.items.size + 1)
+                    onIntent(RuleSubIntent.Add)
                 },
                 tooltipText = stringResource(R.string.add),
                 icon = Icons.Default.Add
@@ -139,44 +183,23 @@ fun RuleSubScreen(
                         inSelectionMode = state.selectedIds.isNotEmpty(),
                         onToggleSelection = {
                             if (state.selectedIds.isNotEmpty()) {
-                                viewModel.toggleSelection(ruleSub)
+                                onIntent(RuleSubIntent.ToggleSelection(ruleSub))
                             } else {
-                                when (ruleSub.type) {
-                                    RuleSubType.BOOK_SOURCE -> (context as? AppCompatActivity)?.showDialogFragment(
-                                        ImportBookSourceDialog(ruleSub.url)
-                                    )
-
-                                    RuleSubType.RSS_SOURCE -> (context as? AppCompatActivity)?.showDialogFragment(
-                                        ImportRssSourceDialog(ruleSub.url)
-                                    )
-
-                                    RuleSubType.REPLACE_RULE -> (context as? AppCompatActivity)?.showDialogFragment(
-                                        ImportReplaceRuleDialog(ruleSub.url)
-                                    )
-
-                                    RuleSubType.AUTO -> {
-                                        val encodedUrl = java.net.URLEncoder.encode(ruleSub.url, "UTF-8")
-                                        val intent = android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            "legado://import/importonline?src=$encodedUrl".toUri()
-                                        )
-                                        context.startActivity(intent)
-                                    }
-                                }
+                                onIntent(RuleSubIntent.Open(ruleSub))
                             }
                         },
                         trailingAction = {
                             SmallPlainButton(
-                                onClick = { showEditDialog = ruleSub },
+                                onClick = { onIntent(RuleSubIntent.Edit(ruleSub)) },
                                 icon = Icons.Default.Edit,
-                                contentDescription = "Edit"
+                                contentDescription = stringResource(R.string.edit)
                             )
                         },
                         dropdownContent = { dismiss ->
                             RoundDropdownMenuItem(
                                 text = stringResource(R.string.delete),
                                 onClick = {
-                                    viewModel.delete(ruleSub)
+                                    onIntent(RuleSubIntent.Delete(ruleSub))
                                     dismiss()
                                 }
                             )
@@ -188,14 +211,10 @@ fun RuleSubScreen(
     }
 
     RuleSubEditDialog(
-        ruleSub = showEditDialog,
-        onDismiss = { showEditDialog = null },
+        ruleSub = state.editingRule,
+        onDismiss = { onIntent(RuleSubIntent.DismissEditor) },
         onConfirm = { updatedRuleSub ->
-            viewModel.save(
-                updatedRuleSub,
-                onSuccess = { showEditDialog = null },
-                onError = { context.toastOnUi(it) }
-            )
+            onIntent(RuleSubIntent.Save(updatedRuleSub))
         }
     )
 }
@@ -246,7 +265,9 @@ fun RuleSubEditDialog(
                 )
 
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     typeArray.indices.chunked(2).forEach { indices ->

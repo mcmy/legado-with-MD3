@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -22,6 +24,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,11 +32,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -52,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
+import coil3.compose.AsyncImage
 import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
 import kotlinx.coroutines.Dispatchers
@@ -60,7 +66,6 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
-import splitties.systemservices.clipboardManager
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -70,6 +75,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
+import splitties.systemservices.clipboardManager
 
 // ---- Markdown parser (lazy singleton) ----
 
@@ -85,6 +91,14 @@ private data class MarkdownParseResult(
     val content: String,
     val astTree: ASTNode,
 )
+
+private data class MarkdownImageHandlers(
+    val model: (String) -> Any? = { it },
+    val onClick: (String) -> Unit = {},
+    val onLongClick: (String) -> Unit = {},
+)
+
+private val LocalMarkdownImageHandlers = staticCompositionLocalOf { MarkdownImageHandlers() }
 
 private fun parseMarkdown(content: String): MarkdownParseResult {
     return MarkdownParseResult(content, parser.buildMarkdownTreeFromString(content))
@@ -104,6 +118,9 @@ fun MarkdownBlock(
     modifier: Modifier = Modifier,
     style: TextStyle = LegadoTheme.typography.bodyLarge,
     onClickLink: ((String) -> Unit)? = null,
+    imageModel: (String) -> Any? = { it },
+    onImageClick: (String) -> Unit = {},
+    onImageLongClick: (String) -> Unit = {},
 ) {
     var data by remember { mutableStateOf(parseMarkdown(content)) }
 
@@ -117,14 +134,22 @@ fun MarkdownBlock(
             .collect { data = it }
     }
 
-    ProvideTextStyle(style) {
-        Column(modifier = modifier.padding(horizontal = 4.dp)) {
-            data.astTree.children.fastForEach { child ->
-                MarkdownNode(
-                    node = child,
-                    content = data.content,
-                    onClickLink = onClickLink,
-                )
+    CompositionLocalProvider(
+        LocalMarkdownImageHandlers provides MarkdownImageHandlers(
+            model = imageModel,
+            onClick = onImageClick,
+            onLongClick = onImageLongClick,
+        )
+    ) {
+        ProvideTextStyle(style) {
+            Column(modifier = modifier.padding(horizontal = 4.dp)) {
+                data.astTree.children.fastForEach { child ->
+                    MarkdownNode(
+                        node = child,
+                        content = data.content,
+                        onClickLink = onClickLink,
+                    )
+                }
             }
         }
     }
@@ -323,7 +348,36 @@ private fun MarkdownParagraph(
             style = textStyle,
             overflow = TextOverflow.Visible,
         )
+        node.children
+            .filter { it.type == MarkdownElementTypes.IMAGE }
+            .forEach { imageNode ->
+                MarkdownImage(
+                    source = imageNode.findChildOfTypeRecursive(MarkdownElementTypes.LINK_DESTINATION)
+                        ?.getTextInNode(content).orEmpty(),
+                    description = imageNode.findChildOfTypeRecursive(MarkdownElementTypes.LINK_TEXT)
+                        ?.getTextInNode(content).orEmpty(),
+                )
+            }
     }
+}
+
+@Composable
+private fun MarkdownImage(source: String, description: String) {
+    if (source.isBlank()) return
+    val handlers = LocalMarkdownImageHandlers.current
+    AsyncImage(
+        model = handlers.model(source),
+        contentDescription = description.ifBlank { null },
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 480.dp)
+            .padding(vertical = 4.dp)
+            .combinedClickable(
+                onClick = { handlers.onClick(source) },
+                onLongClick = { handlers.onLongClick(source) },
+            ),
+    )
 }
 
 @Composable
@@ -652,7 +706,10 @@ private fun MarkdownTable(
         modifier = modifier
             .padding(vertical = 8.dp)
             .clip(RoundedCornerShape(8.dp))
-            .border(BorderStroke(0.5.dp, LegadoTheme.colorScheme.outlineVariant), RoundedCornerShape(8.dp))
+            .border(
+                BorderStroke(0.5.dp, LegadoTheme.colorScheme.outlineVariant),
+                RoundedCornerShape(8.dp)
+            )
     ) {
         // Header
         Row(

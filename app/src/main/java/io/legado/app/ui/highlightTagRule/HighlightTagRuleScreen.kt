@@ -53,17 +53,18 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun HighlightTagRuleScreen(
+fun HighlightTagRuleRouteScreen(
     viewModel: HighlightTagRuleViewModel = koinViewModel(),
     onBackClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val importState by viewModel.importState.collectAsStateWithLifecycle()
 
-    HighlightTagRuleContent(
+    HighlightTagRuleScreen(
         state = uiState,
         importState = importState,
         events = viewModel.events,
+        effects = viewModel.effects,
         onIntent = viewModel::onIntent,
         onPasteRule = viewModel::pasteRule,
         onBackClick = onBackClick,
@@ -72,10 +73,11 @@ fun HighlightTagRuleScreen(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun HighlightTagRuleContent(
+fun HighlightTagRuleScreen(
     state: HighlightTagRuleUiState,
     importState: BaseImportUiState<HighlightTagRule>,
     events: Flow<BaseRuleEvent>,
+    effects: Flow<HighlightTagRuleEffect>,
     onIntent: (HighlightTagRuleIntent) -> Unit,
     onPasteRule: () -> HighlightTagRule?,
     onBackClick: () -> Unit,
@@ -131,6 +133,15 @@ private fun HighlightTagRuleContent(
         }
     }
 
+    LaunchedEffect(effects) {
+        effects.collect { effect ->
+            when (effect) {
+                is HighlightTagRuleEffect.ShowMessage ->
+                    snackbarHostState.showSnackbar(effect.message)
+            }
+        }
+    }
+
     val importDoc = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri ->
@@ -179,7 +190,7 @@ private fun HighlightTagRuleContent(
     FilePickerSheet(
         show = showImportSheet,
         onDismissRequest = { showImportSheet = false },
-        title = stringResource(R.string.import_str),
+        title = stringResource(R.string.import_highlight_tag_rule),
         onSelectSysFile = { types ->
             importDoc.launch(types)
             showImportSheet = false
@@ -213,6 +224,7 @@ private fun HighlightTagRuleContent(
         data = showDeleteRuleDialog,
         onDismissRequest = { showDeleteRuleDialog = null },
         title = stringResource(R.string.delete),
+        text = stringResource(R.string.sure_del),
         confirmText = stringResource(R.string.ok),
         onConfirm = { rule ->
             onIntent(HighlightTagRuleIntent.DeleteRule(rule))
@@ -246,7 +258,7 @@ private fun HighlightTagRuleContent(
             onIntent(HighlightTagRuleIntent.SetSearchMode(active))
         },
         onSearchQueryChange = { onIntent(HighlightTagRuleIntent.UpdateSearchQuery(it)) },
-        searchPlaceholder = stringResource(R.string.replace_purify_search),
+        searchPlaceholder = stringResource(R.string.search_highlight_tag_rule),
         onClearSelection = { onIntent(HighlightTagRuleIntent.ClearSelection) },
         onSelectAll = { onIntent(HighlightTagRuleIntent.SelectAll) },
         onSelectInvert = {
@@ -294,9 +306,27 @@ private fun HighlightTagRuleContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(rules, key = { it.id }) { item ->
+                    val enabledState = stringResource(
+                        if (item.isEnabled) R.string.enabled else R.string.disabled
+                    )
+                    val itemDescription = listOfNotNull(
+                        item.displayName,
+                        item.pattern.takeIf { it.isNotBlank() },
+                        enabledState,
+                        if (!inSelectionMode) {
+                            stringResource(R.string.a11y_long_press_reorder)
+                        } else {
+                            null
+                        }
+                    ).joinToString()
                     ReorderableSelectionItem(
                         state = reorderableState,
                         key = item.id,
+                        reorderIndex = rules.indexOf(item),
+                        reorderItemCount = rules.size,
+                        onMoveItem = { from, to ->
+                            onIntent(HighlightTagRuleIntent.MoveItem(from, to))
+                        },
                         title = item.displayName,
                         subtitle = item.pattern,
                         isEnabled = item.isEnabled,
@@ -306,11 +336,24 @@ private fun HighlightTagRuleContent(
                         onEnabledChange = { enabled ->
                             onIntent(HighlightTagRuleIntent.SetRuleEnabled(item.rule, enabled))
                         },
+                        contentDescription = itemDescription,
+                        enableSwitchContentDescription = stringResource(
+                            R.string.a11y_rule_enabled_switch,
+                            item.displayName
+                        ),
+                        editContentDescription = stringResource(
+                            R.string.a11y_edit_named,
+                            item.displayName
+                        ),
                         onClickEdit = { editingRule = item.rule; showEditSheet = true },
                         trailingAction = {
                             SmallPlainButton(
                                 onClick = { showDeleteRuleDialog = item.rule },
-                                icon = AppIcons.Delete
+                                icon = AppIcons.Delete,
+                                contentDescription = stringResource(
+                                    R.string.a11y_delete_named,
+                                    item.displayName
+                                )
                             )
                         }
                     )

@@ -6,7 +6,6 @@ import com.script.rhino.runScriptWithContext
 import io.legado.app.base.BaseViewModel
 import io.legado.app.data.entities.RssSource
 import io.legado.app.data.repository.RssRepository
-import io.legado.app.utils.toastOnUi
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -77,6 +76,23 @@ class RssViewModel(
         _uiState.update { it.copy(searchKey = key, isSearch = key.isNotEmpty()) }
     }
 
+    fun onIntent(intent: RssIntent) {
+        when (intent) {
+            is RssIntent.Search -> search(intent.query)
+            is RssIntent.ToggleSearch -> toggleSearchVisible(intent.visible)
+            is RssIntent.SetGroup -> setGroup(intent.group)
+            is RssIntent.OpenSource -> openSource(intent.source)
+            is RssIntent.TopSource -> topSource(intent.source)
+            is RssIntent.EditSource -> openSourceEdit(intent.source)
+            is RssIntent.DeleteSource -> del(intent.source)
+            is RssIntent.DisableSource -> disable(intent.source)
+            is RssIntent.Login -> login(intent.source)
+            RssIntent.OpenRuleSub -> openRuleSub()
+            RssIntent.OpenFavorites -> openFavorites()
+            RssIntent.OpenSourceManage -> openSourceManage()
+        }
+    }
+
     fun setGroup(group: String) {
         groupFlow.value = group
         searchKeyFlow.value = ""
@@ -138,7 +154,19 @@ class RssViewModel(
 
     fun openSource(rssSource: RssSource) {
         if (!rssSource.singleUrl) {
-            _effects.tryEmit(RssEffect.OpenSort(rssSource.sourceUrl, null, null))
+            if (rssSource.startHtml.isNullOrBlank()) {
+                _effects.tryEmit(RssEffect.OpenSort(rssSource.sourceUrl, null, null))
+            } else {
+                _effects.tryEmit(
+                    RssEffect.OpenRead(
+                        title = rssSource.sourceName,
+                        origin = rssSource.sourceUrl,
+                        link = null,
+                        openUrl = null,
+                        startPage = true
+                    )
+                )
+            }
             return
         }
 
@@ -159,7 +187,7 @@ class RssViewModel(
                     _effects.tryEmit(RssEffect.OpenExternalUrl(url))
                 }
             }.onError {
-                context.toastOnUi(it.localizedMessage)
+                _effects.tryEmit(RssEffect.ShowMessage(it.localizedMessage ?: "打开订阅源失败"))
             }
     }
 
@@ -192,6 +220,8 @@ class RssViewModel(
 }
 
 sealed interface RssEffect {
+    data class ShowMessage(val message: String) : RssEffect
+
     data class OpenSort(
         val sourceUrl: String,
         val sortUrl: String?,
@@ -202,7 +232,8 @@ sealed interface RssEffect {
         val title: String?,
         val origin: String,
         val link: String?,
-        val openUrl: String?
+        val openUrl: String?,
+        val startPage: Boolean = false
     ) : RssEffect
 
     data class OpenExternalUrl(val url: String) : RssEffect
@@ -211,4 +242,19 @@ sealed interface RssEffect {
     data object OpenRuleSub : RssEffect
     data object OpenFavorites : RssEffect
     data object OpenSourceManage : RssEffect
+}
+
+sealed interface RssIntent {
+    data class Search(val query: String) : RssIntent
+    data class ToggleSearch(val visible: Boolean) : RssIntent
+    data class SetGroup(val group: String) : RssIntent
+    data class OpenSource(val source: RssSource) : RssIntent
+    data class TopSource(val source: RssSource) : RssIntent
+    data class EditSource(val source: RssSource) : RssIntent
+    data class DeleteSource(val source: RssSource) : RssIntent
+    data class DisableSource(val source: RssSource) : RssIntent
+    data class Login(val source: RssSource) : RssIntent
+    data object OpenRuleSub : RssIntent
+    data object OpenFavorites : RssIntent
+    data object OpenSourceManage : RssIntent
 }

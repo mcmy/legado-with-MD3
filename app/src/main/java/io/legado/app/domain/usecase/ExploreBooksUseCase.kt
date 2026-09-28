@@ -26,6 +26,7 @@ class ExploreBooksUseCase(
     ): ExploreResult = withContext(Dispatchers.IO) {
         val request = resolveRequest(sourceUrl, moduleUrl, args, key)
         val books = gateway.exploreBooks(request.source, request.url, page, key = key)
+        if (books.isNotEmpty()) gateway.saveSearchBooks(books)
         ExploreResult(request.url, books)
     }
 
@@ -47,7 +48,9 @@ class ExploreBooksUseCase(
             if (next.isEmpty()) break
             books = (books + next)
         }
-        books.take(MAX_RANKING_BOOKS)
+        val result = books.take(MAX_RANKING_BOOKS)
+        if (result.isNotEmpty()) gateway.saveSearchBooks(result)
+        result
     }
 
     private suspend fun resolveRequest(
@@ -58,7 +61,10 @@ class ExploreBooksUseCase(
     ): ExploreRequest {
         val base = gateway.getBookSource(sourceUrl)
             ?: throw SourceNotFound(sourceUrl)
-        val source = args?.let { base.copy().also { s -> s.setTemporaryVariable(it) } } ?: base
+        val source = args
+            ?.takeIf(String::isNotBlank)
+            ?.let { base.copy().also { s -> s.setTemporaryVariable(it) } }
+            ?: base
         val url = moduleUrl
             ?: (if (key != null) source.searchUrl else null)
             ?: source.exploreUrl

@@ -1,67 +1,79 @@
 package io.legado.app.ui.book.read.sheet
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.ImeAction
 import io.legado.app.R
 import io.legado.app.constant.AppConst
 import io.legado.app.model.ReadBook
-import io.legado.app.ui.theme.LegadoTheme
-import io.legado.app.ui.widget.components.settingItem.TinyDropdownSettingItem
+import io.legado.app.ui.widget.components.AppTextField
+import io.legado.app.ui.widget.components.alert.AppAlertDialog
+import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 
 @Composable
 fun CharsetConfigSheet(
+    show: Boolean,
     onDismissRequest: () -> Unit,
 ) {
     var charset by remember { mutableStateOf(ReadBook.book?.charset ?: "UTF-8") }
-    val charsetEntries = remember { AppConst.charsets.toTypedArray() }
+    val charsetEntries = remember { AppConst.charsets }
+    var expanded by remember { mutableStateOf(false) }
+    val title = stringResource(R.string.set_charset)
 
-    AlertDialog(
+    AppAlertDialog(
+        show = show,
         onDismissRequest = onDismissRequest,
-        containerColor = LegadoTheme.colorScheme.surfaceContainer,
-        title = { Text(stringResource(R.string.set_charset)) },
-        text = {
-            Column {
-                OutlinedTextField(
+        title = title,
+        content = {
+            Box {
+                AppTextField(
                     value = charset,
                     onValueChange = { charset = it },
-                    label = { Text(stringResource(R.string.set_charset)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = title,
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    trailingIcon = {
+                        SmallPlainButton(
+                            onClick = { expanded = !expanded },
+                            selected = expanded,
+                            icon = Icons.Default.KeyboardArrowDown,
+                            contentDescription = title,
+                        )
+                    },
                 )
-                TinyDropdownSettingItem(
-                    title = stringResource(R.string.set_charset),
-                    selectedValue = charset,
-                    displayEntries = charsetEntries,
-                    entryValues = charsetEntries,
-                    onValueChange = { charset = it },
-                )
+                RoundDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    charsetEntries.forEach { entry ->
+                        RoundDropdownMenuItem(
+                            text = entry,
+                            isSelected = charset == entry,
+                            onClick = {
+                                charset = entry
+                                expanded = false
+                            },
+                        )
+                    }
+                }
             }
         },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    ReadBook.setCharset(charset)
-                    onDismissRequest()
-                },
-            ) {
-                Text(stringResource(R.string.ok))
-            }
+        confirmText = stringResource(R.string.ok),
+        onConfirm = {
+            ReadBook.setCharset(charset)
+            onDismissRequest()
         },
-        dismissButton = {
-            TextButton(onClick = onDismissRequest) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = onDismissRequest,
     )
 }

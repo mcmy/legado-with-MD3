@@ -2,6 +2,7 @@ package io.legado.app.ui.config.ai
 
 import androidx.compose.runtime.Stable
 import io.legado.app.domain.model.AiProtocol
+import io.legado.app.domain.model.AiReasoningLevel
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -18,6 +19,7 @@ data class AiProviderEditUiState(
     val apiKey: String = "",
     val providerModels: ImmutableList<AiProviderModelUi> = persistentListOf(),
     val editingModel: AiProviderModelEditorUi? = null,
+    val isTesting: Boolean = false,
     val isSaving: Boolean = false,
     val isFetchingModels: Boolean = false,
     val initialized: Boolean = false
@@ -50,7 +52,8 @@ data class AiProviderModelUi(
     val modelId: String,
     val contextWindow: Int = 0,
     val maxOutputTokens: Int = 0,
-    val temperature: Float = 0.3f
+    val temperature: Float = 0.3f,
+    val reasoningLevel: AiReasoningLevel = AiReasoningLevel.MEDIUM
 )
 
 @Stable
@@ -60,7 +63,8 @@ data class AiProviderModelEditorUi(
     val modelId: String = "",
     val contextWindow: String = "",
     val maxOutputTokens: String = "",
-    val temperature: String = "0.3"
+    val temperature: String = "0.3",
+    val reasoningLevel: AiReasoningLevel = AiReasoningLevel.MEDIUM
 )
 
 sealed interface AiProviderEditIntent {
@@ -78,12 +82,17 @@ sealed interface AiProviderEditIntent {
     data class UpdateEditingContextWindow(val value: String) : AiProviderEditIntent
     data class UpdateEditingMaxOutputTokens(val value: String) : AiProviderEditIntent
     data class UpdateEditingTemperature(val value: String) : AiProviderEditIntent
+    data class UpdateEditingReasoningLevel(val value: AiReasoningLevel) : AiProviderEditIntent
     data object SaveEditingModel : AiProviderEditIntent
+    data object TestConnection : AiProviderEditIntent
     data object SaveProvider : AiProviderEditIntent
     data object SyncModels : AiProviderEditIntent
+    data object DeleteProvider : AiProviderEditIntent
+    data class DeleteModel(val modelProfileId: String) : AiProviderEditIntent
 }
 
 sealed interface AiProviderEditEffect {
     data class ShowMessage(val message: String) : AiProviderEditEffect
     data object NavigateBack : AiProviderEditEffect
+    data object NavigateBackAfterDelete : AiProviderEditEffect
 }

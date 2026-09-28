@@ -29,14 +29,23 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.AdaptiveSwitch
+import io.legado.app.ui.widget.components.reorderAccessibility
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.checkBox.AppCheckbox
 import io.legado.app.ui.widget.components.icon.AppIcons
@@ -63,7 +72,11 @@ fun SelectionItemCard(
     trailingAction: @Composable (RowScope.() -> Unit)? = null,
     dropdownContent: @Composable (ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null,
     containerColor: Color? = null,
-    selectedContainerColor: Color? = null
+    selectedContainerColor: Color? = null,
+    contentDescription: String? = null,
+    enableSwitchContentDescription: String? = null,
+    editContentDescription: String? = null,
+    moreContentDescription: String? = null
 ) {
     val composeEngine = ThemeResolver.isMiuixEngine(composeEngine)
     val animatedContainerColor by animateColorAsState(
@@ -80,7 +93,20 @@ fun SelectionItemCard(
     GlassCard(
         onClick = onToggleSelection,
         modifier = modifier
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .then(
+                if (contentDescription != null || inSelectionMode) {
+                    Modifier.semantics {
+                        contentDescription?.let { this.contentDescription = it }
+                        if (inSelectionMode) {
+                            selected = isSelected
+                        }
+                        role = Role.Button
+                    }
+                } else {
+                    Modifier
+                }
+            ),
         cornerRadius = 12.dp,
         containerColor = animatedContainerColor,
         elevation = elevation
@@ -96,7 +122,10 @@ fun SelectionItemCard(
             onEnabledChange = onEnabledChange,
             onClickEdit = onClickEdit,
             trailingAction = trailingAction,
-            dropdownContent = dropdownContent
+            dropdownContent = dropdownContent,
+            enableSwitchContentDescription = enableSwitchContentDescription,
+            editContentDescription = editContentDescription,
+            moreContentDescription = moreContentDescription
         )
     }
 }
@@ -113,9 +142,14 @@ fun SelectionItemCardContent(
     onEnabledChange: ((Boolean) -> Unit)? = null,
     onClickEdit: (() -> Unit)? = null,
     trailingAction: @Composable (RowScope.() -> Unit)? = null,
-    dropdownContent: @Composable (ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null
+    dropdownContent: @Composable (ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null,
+    enableSwitchContentDescription: String? = null,
+    editContentDescription: String? = null,
+    moreContentDescription: String? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val defaultEditDescription = stringResource(R.string.edit)
+    val defaultMoreDescription = stringResource(R.string.more_menu)
 
     Row(
         modifier = Modifier
@@ -137,7 +171,9 @@ fun SelectionItemCardContent(
                     if (selectionMode) {
                         AppCheckbox(
                             checked = isSelected,
-                            onCheckedChange = null
+                            onCheckedChange = null,
+                            includeStateSemantics = false,
+                            modifier = Modifier.clearAndSetSemantics { }
                         )
                     } else {
                         leadingContent?.invoke()
@@ -171,14 +207,6 @@ fun SelectionItemCardContent(
         } else {
             ListItem(
                 modifier = Modifier.weight(1f),
-                headlineContent = {
-                    AppText(
-                        text = title,
-                        style = LegadoTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
                 supportingContent = when {
                     supportingContent != null -> supportingContent
                     !subtitle.isNullOrBlank() -> {
@@ -194,7 +222,14 @@ fun SelectionItemCardContent(
                     else -> null
                 },
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-            )
+            ) {
+                AppText(
+                    text = title,
+                    style = LegadoTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         Row(
@@ -205,7 +240,15 @@ fun SelectionItemCardContent(
         ) {
             onEnabledChange?.let {
                 AdaptiveSwitch(
-                    modifier = Modifier.scale(0.8f),
+                    modifier = Modifier
+                        .scale(0.8f)
+                        .then(
+                            enableSwitchContentDescription?.let { description ->
+                                Modifier.semantics {
+                                    contentDescription = description
+                                }
+                            } ?: Modifier
+                        ),
                     checked = isEnabled,
                     onCheckedChange = it
                 )
@@ -215,7 +258,7 @@ fun SelectionItemCardContent(
                 SmallPlainButton(
                     onClick = onClickEdit,
                     icon = AppIcons.Edit,
-                    contentDescription = "Edit"
+                    contentDescription = editContentDescription ?: defaultEditDescription
                 )
             }
 
@@ -228,7 +271,7 @@ fun SelectionItemCardContent(
                     SmallPlainButton(
                         onClick = { showMenu = true },
                         icon = AppIcons.MoreVert,
-                        contentDescription = "More"
+                        contentDescription = moreContentDescription ?: defaultMoreDescription
                     )
                     RoundDropdownMenu(
                         expanded = showMenu,
@@ -262,9 +305,24 @@ fun LazyItemScope.ReorderableSelectionItem(
     trailingAction: @Composable (RowScope.() -> Unit)? = null,
     dropdownContent: @Composable (ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null,
     containerColor: Color? = null,
-    selectedContainerColor: Color? = null
+    selectedContainerColor: Color? = null,
+    contentDescription: String? = null,
+    enableSwitchContentDescription: String? = null,
+    editContentDescription: String? = null,
+    moreContentDescription: String? = null,
+    reorderIndex: Int? = null,
+    reorderItemCount: Int = 0,
+    onMoveItem: ((from: Int, to: Int) -> Unit)? = null,
 ) {
     val hapticFeedback = LocalHapticFeedback.current
+    val reorderAccessibilityModifier = if (reorderIndex != null && onMoveItem != null) {
+        Modifier.reorderAccessibility(
+            index = reorderIndex,
+            itemCount = reorderItemCount,
+            enabled = canReorder && !inSelectionMode,
+            onMove = onMoveItem,
+        )
+    } else Modifier
 
     ReorderableItem(state, key = key) { isDragging ->
         val elevation by animateDpAsState(
@@ -288,7 +346,12 @@ fun LazyItemScope.ReorderableSelectionItem(
             dropdownContent = dropdownContent,
             containerColor = containerColor,
             selectedContainerColor = selectedContainerColor,
+            contentDescription = contentDescription,
+            enableSwitchContentDescription = enableSwitchContentDescription,
+            editContentDescription = editContentDescription,
+            moreContentDescription = moreContentDescription,
             modifier = modifier
+                .then(reorderAccessibilityModifier)
                 .zIndex(if (isDragging) 1f else 0f)
                 .then(
                     if (canReorder && !inSelectionMode) {
@@ -306,4 +369,3 @@ fun LazyItemScope.ReorderableSelectionItem(
         )
     }
 }
-

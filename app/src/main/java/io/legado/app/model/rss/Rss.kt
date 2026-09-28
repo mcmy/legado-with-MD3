@@ -47,13 +47,40 @@ object Rss {
         val analyzeUrl = AnalyzeUrl(
             sortUrl,
             page = page,
+            key = searchKey,
+            baseUrl = rssSource.sourceUrl,
             source = rssSource,
             ruleData = ruleData,
             coroutineContext = coroutineContext,
             hasLoginHeader = false
         )
-        val res = analyzeUrl.getStrResponseAwait()
+        val checkJs = rssSource.loginCheckJs
+        val res = kotlin.runCatching {
+            analyzeUrl.getStrResponseAwait().let {
+                if (!checkJs.isNullOrBlank()) {
+                    analyzeUrl.evalJS(checkJs, it) as StrResponse
+                } else {
+                    it
+                }
+            }
+        }.getOrElse { throwable ->
+            if (!checkJs.isNullOrBlank()) {
+                val errResponse = analyzeUrl.getErrStrResponse(throwable)
+                try {
+                    (analyzeUrl.evalJS(checkJs, errResponse) as StrResponse).also {
+                        if (it.code() == 500) {
+                            throw throwable
+                        }
+                    }
+                } catch (_: Throwable) {
+                    throw throwable
+                }
+            } else {
+                throw throwable
+            }
+        }
         checkRedirect(rssSource, res)
+        Debug.log(rssSource.sourceUrl, "≡获取成功:${analyzeUrl.ruleUrl}")
         return RssParserByRule.parseXML(sortName, sortUrl, res.url, res.body, rssSource, ruleData)
     }
 
@@ -82,7 +109,31 @@ object Rss {
             coroutineContext = coroutineContext,
             hasLoginHeader = false
         )
-        val res = analyzeUrl.getStrResponseAwait()
+        val checkJs = rssSource.loginCheckJs
+        val res = kotlin.runCatching {
+            analyzeUrl.getStrResponseAwait().let {
+                if (!checkJs.isNullOrBlank()) {
+                    analyzeUrl.evalJS(checkJs, it) as StrResponse
+                } else {
+                    it
+                }
+            }
+        }.getOrElse { throwable ->
+            if (!checkJs.isNullOrBlank()) {
+                val errResponse = analyzeUrl.getErrStrResponse(throwable)
+                try {
+                    (analyzeUrl.evalJS(checkJs, errResponse) as StrResponse).also {
+                        if (it.code() == 500) {
+                            throw throwable
+                        }
+                    }
+                } catch (_: Throwable) {
+                    throw throwable
+                }
+            } else {
+                throw throwable
+            }
+        }
         checkRedirect(rssSource, res)
         Debug.log(rssSource.sourceUrl, "≡获取成功:${rssSource.sourceUrl}")
         Debug.log(rssSource.sourceUrl, res.body ?: "", state = 20)

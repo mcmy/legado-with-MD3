@@ -7,7 +7,7 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.BackupSettingsGateway
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
@@ -17,7 +17,6 @@ import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
 import io.legado.app.lib.webdav.WebDavFile
 import io.legado.app.model.remote.RemoteBookWebDav
-import io.legado.app.ui.config.backupConfig.BackupConfig
 import io.legado.app.utils.AlphanumComparator
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
@@ -33,12 +32,15 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import splitties.init.appCtx
+import org.koin.core.context.GlobalContext
 import java.io.File
 
 /**
  * webDav初始化会访问网络,不要放到主线程
  */
 object AppWebDav {
+    private val backupGateway by lazy { GlobalContext.get().get<BackupSettingsGateway>() }
+
     private const val defaultWebDavUrl = "https://dav.jianguoyun.com/dav/"
     private val bookProgressUrl get() = "${rootWebDavUrl}bookProgress/"
     private val exportsWebDavUrl get() = "${rootWebDavUrl}books/"
@@ -60,10 +62,10 @@ object AppWebDav {
 
     private val rootWebDavUrl: String
         get() {
-            val configUrl = BackupConfig.webDavUrl.trim()
+            val configUrl = backupGateway.currentSettings.webDavUrl.trim()
             var url = if (configUrl.isEmpty()) defaultWebDavUrl else configUrl
             if (!url.endsWith("/")) url = "${url}/"
-            AppConfig.webDavDir.trim().let {
+            backupGateway.currentSettings.webDavDir.trim().let {
                 if (it.isNotEmpty()) {
                     url = "${url}${it}/"
                 }
@@ -74,10 +76,10 @@ object AppWebDav {
     suspend fun upConfig() {
         configMutex.withLock {
             val config = AppliedWebDavConfig(
-                url = BackupConfig.webDavUrl,
-                account = BackupConfig.webDavAccount,
-                password = BackupConfig.webDavPassword,
-                dir = BackupConfig.webDavDir,
+                url = backupGateway.currentSettings.webDavUrl,
+                account = backupGateway.currentSettings.webDavAccount,
+                password = backupGateway.currentSettings.webDavPassword,
+                dir = backupGateway.currentSettings.webDavDir,
             )
             if (appliedConfig == config) return
 
@@ -176,8 +178,8 @@ object AppWebDav {
 
     suspend fun testWebDav(): Boolean {
         return kotlin.runCatching {
-            val account = BackupConfig.webDavAccount
-            val password = BackupConfig.webDavPassword
+            val account = backupGateway.currentSettings.webDavAccount
+            val password = backupGateway.currentSettings.webDavPassword
             if (account.isNullOrEmpty() || password.isNullOrEmpty()) {
                 appCtx.toastOnUi("账号或密码为空")
                 return false
@@ -289,7 +291,7 @@ object AppWebDav {
         onSuccess: (() -> Unit)? = null
     ) {
         val authorization = authorization ?: return
-        if (!AppConfig.syncBookProgress) return
+        if (!backupGateway.currentSettings.syncBookProgress) return
         if (!NetworkUtils.isAvailable()) return
         try {
             val bookProgress = BookProgress(book)
@@ -310,7 +312,7 @@ object AppWebDav {
     ): Boolean {
         try {
             val authorization = authorization ?: return false
-            if (!AppConfig.syncBookProgress) return false
+            if (!backupGateway.currentSettings.syncBookProgress) return false
             if (!NetworkUtils.isAvailable()) return false
             val json = GSON.toJson(bookProgress)
             val url = getProgressUrl(bookProgress.name, bookProgress.author)

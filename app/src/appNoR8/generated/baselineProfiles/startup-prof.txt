@@ -22726,12 +22726,6 @@ Lio/legado/app/ui/book/toc/TocViewModel;
 Lio/legado/app/ui/book/toc/rule/TxtTocRuleViewModel;
 Lio/legado/app/ui/config/PrefDelegate;
 Lio/legado/app/ui/config/PrefDelegateKt;
-HSPLio/legado/app/ui/config/PrefDelegateKt;->prefDelegate$default(Ljava/lang/String;Ljava/lang/Object;Landroidx/lifecycle/LifecycleOwner;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lio/legado/app/ui/config/PrefDelegate;
-HSPLio/legado/app/ui/config/PrefDelegateKt;->prefDelegate(Ljava/lang/String;Ljava/lang/Object;Landroidx/lifecycle/LifecycleOwner;Lkotlin/jvm/functions/Function1;)Lio/legado/app/ui/config/PrefDelegate;
-Lio/legado/app/ui/config/PrefDelegateKt$prefDelegate$1;
-HSPLio/legado/app/ui/config/PrefDelegateKt$prefDelegate$1;-><init>(Landroidx/lifecycle/LifecycleOwner;Ljava/lang/Object;Ljava/lang/String;Lkotlin/jvm/functions/Function1;)V
-HSPLio/legado/app/ui/config/PrefDelegateKt$prefDelegate$1;->getValue(Ljava/lang/Object;Lkotlin/reflect/KProperty;)Ljava/lang/Object;
-HSPLio/legado/app/ui/config/PrefDelegateKt$prefDelegate$1;->readInitialValue()Ljava/lang/Object;
 Lio/legado/app/ui/config/backupConfig/BackupConfigViewModel;
 Lio/legado/app/ui/config/bookshelfConfig/BookshelfConfig;
 HSPLio/legado/app/ui/config/bookshelfConfig/BookshelfConfig;-><clinit>()V
@@ -24422,7 +24416,6 @@ Lio/legado/app/ui/widget/dialog/TextDialog$special$$inlined$viewBindingFragment$
 HSPLio/legado/app/ui/widget/dialog/TextDialog$special$$inlined$viewBindingFragment$default$1;-><init>()V
 HSPLio/legado/app/ui/widget/dialog/TextDialog$special$$inlined$viewBindingFragment$default$1;->invoke(Landroidx/fragment/app/Fragment;)Landroidx/viewbinding/ViewBinding;
 HSPLio/legado/app/ui/widget/dialog/TextDialog$special$$inlined$viewBindingFragment$default$1;->invoke(Ljava/lang/Object;)Ljava/lang/Object;
-Lio/legado/app/ui/widget/dialog/VariableDialog$Callback;
 Lio/legado/app/ui/widget/text/ScrollTextView;
 HSPLio/legado/app/ui/widget/text/ScrollTextView;-><clinit>()V
 HSPLio/legado/app/ui/widget/text/ScrollTextView;-><init>(Landroid/content/Context;Landroid/util/AttributeSet;)V

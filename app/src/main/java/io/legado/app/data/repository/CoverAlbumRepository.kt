@@ -5,14 +5,14 @@ import androidx.annotation.Keep
 import com.google.gson.annotations.SerializedName
 import io.legado.app.R
 import io.legado.app.constant.AppLog
+import io.legado.app.constant.PreferKey
 import io.legado.app.data.local.preferences.LocalPreferencesKeys
-import io.legado.app.data.local.preferences.LocalPreferencesRepository
 import io.legado.app.domain.gateway.CoverAlbumGateway
 import io.legado.app.domain.model.CoverAlbum
 import io.legado.app.domain.model.CoverAlbumImage
 import io.legado.app.domain.model.CoverAlbumImageInput
 import io.legado.app.domain.model.CoverAlbumSelection
-import io.legado.app.ui.config.coverConfig.CoverConfig
+import io.legado.app.help.config.AppConfigStore
 import io.legado.app.utils.GSON
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,11 +31,11 @@ import java.io.FileOutputStream
 import java.nio.file.StandardCopyOption
 import java.security.DigestInputStream
 import java.security.MessageDigest
-import java.util.UUID
+import kotlin.uuid.Uuid
 
 class CoverAlbumRepository(
     private val context: Context,
-    private val preferences: LocalPreferencesRepository,
+    private val preferences: SettingsRepository,
 ) : CoverAlbumGateway {
 
     companion object {
@@ -98,7 +98,7 @@ class CoverAlbumRepository(
     override suspend fun createAlbum(name: String): String = withContext(Dispatchers.IO) {
         operationMutex.withLock {
             val album = CoverAlbum(
-                id = UUID.randomUUID().toString(),
+                id = Uuid.random().toString(),
                 name = name.trim(),
                 lightImages = emptyList(),
                 darkImages = emptyList(),
@@ -114,7 +114,7 @@ class CoverAlbumRepository(
         darkImages: List<CoverAlbumImageInput>,
     ): String = withContext(Dispatchers.IO) {
         operationMutex.withLock {
-            val albumId = UUID.randomUUID().toString()
+            val albumId = Uuid.random().toString()
             val importedLightImages = copyImages(albumId, lightImages)
             val importedDarkImages = copyImages(albumId, darkImages)
             val album = CoverAlbum(
@@ -239,8 +239,12 @@ class CoverAlbumRepository(
                 LocalPreferencesKeys.COVER_ALBUM_MIGRATED,
                 false,
             ).first()
-            val legacyLight = CoverConfig.defaultCover.toExistingFiles()
-            val legacyDark = CoverConfig.defaultCoverDark.toExistingFiles()
+            val legacyLight = AppConfigStore.getString(PreferKey.defaultCover)
+                .orEmpty()
+                .toExistingFiles()
+            val legacyDark = AppConfigStore.getString(PreferKey.defaultCoverDark)
+                .orEmpty()
+                .toExistingFiles()
             val needsRecovery = _albums.value.isEmpty() &&
                 _selection.value.albumId == null &&
                 (legacyLight.isNotEmpty() || legacyDark.isNotEmpty())
@@ -288,8 +292,12 @@ class CoverAlbumRepository(
     }
 
     private fun syncLegacyCoverPaths() {
-        CoverConfig.defaultCover = selectedImagePaths(isDark = false).joinToString(",")
-        CoverConfig.defaultCoverDark = selectedImagePaths(isDark = true).joinToString(",")
+        AppConfigStore.putAll(
+            mapOf(
+                PreferKey.defaultCover to selectedImagePaths(isDark = false).joinToString(","),
+                PreferKey.defaultCoverDark to selectedImagePaths(isDark = true).joinToString(","),
+            )
+        )
     }
 
     private fun copyImages(
@@ -305,7 +313,7 @@ class CoverAlbumRepository(
                     .lowercase()
                     .takeIf { it.matches(Regex("[a-z0-9]{1,8}")) }
                     ?: "img"
-                val tempFile = File(albumDir, ".${UUID.randomUUID()}.tmp")
+                val tempFile = File(albumDir, ".${Uuid.random()}.tmp")
                 val digest = MessageDigest.getInstance("SHA-256")
                 input.openStream().use { source ->
                     DigestInputStream(source, digest).use { digestInput ->

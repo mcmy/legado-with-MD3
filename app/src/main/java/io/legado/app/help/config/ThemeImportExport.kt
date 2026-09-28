@@ -1,19 +1,16 @@
 package io.legado.app.help.config
 
-import android.content.Context
-import android.net.Uri
 import androidx.annotation.Keep
-import com.google.gson.GsonBuilder
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
-import io.legado.app.ui.config.coverConfig.CoverConfig
-import io.legado.app.ui.config.themeConfig.ThemeConfig
+import io.legado.app.domain.model.settings.ThemeExportData
 import io.legado.app.utils.EncoderUtils
 import io.legado.app.utils.GSON
 import splitties.init.appCtx
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.uuid.Uuid
 
 /**
  * 轻量级主题导入导出系统
@@ -22,235 +19,32 @@ import java.io.FileOutputStream
  */
 object ThemeImportExport {
 
-    private const val DIR_NAME = "saved_themes"
-    private val baseDir get() = File(appCtx.filesDir, DIR_NAME)
-
-    private val EXPORT_GSON = GsonBuilder()
-        .setPrettyPrinting()
-        .disableHtmlEscaping()
-        .create()
-
-    private val _savedThemes = mutableListOf<SavedTheme>()
-    val savedThemes: List<SavedTheme> get() = _savedThemes
-
-    init {
-        loadAll()
-    }
-
-    private fun loadAll() {
-        _savedThemes.clear()
-        baseDir.mkdirs()
-        baseDir.listFiles()?.forEach { file ->
-            if (file.isFile && file.extension == "json") {
-                kotlin.runCatching {
-                    val json = file.readText()
-                    val data = parseThemeData(json)
-                        ?: error("不支持的主题配置格式")
-                    val name = file.nameWithoutExtension
-                    _savedThemes.add(SavedTheme(name = name, data = data))
-                }
-            }
-        }
-    }
-
-    fun reload() {
-        loadAll()
-    }
-
-    /**
-     * 保存当前设置为新主题
-     */
-    fun saveCurrentAsTheme(name: String): SavedTheme {
-        val data = exportFromCurrent()
-        return saveThemeData(name, data)
-    }
-
-    /**
-     * 保存指定数据为新主题
-     */
-    fun saveCurrentAsTheme(name: String, data: ThemeExportData): SavedTheme {
-        return saveThemeData(name, data)
-    }
-
-    private fun saveThemeData(name: String, data: ThemeExportData): SavedTheme {
-        val file = File(baseDir, "$name.json")
-        baseDir.mkdirs()
-        file.writeText(EXPORT_GSON.toJson(data))
-        val theme = SavedTheme(name = name, data = data)
-        _savedThemes.removeAll { it.name == name }
-        _savedThemes.add(theme)
-        return theme
-    }
-
-    /**
-     * 应用已保存的主题
-     */
-    fun applySavedTheme(theme: SavedTheme): Boolean {
-        return try {
-            applyToThemeConfig(theme.data)
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    /**
-     * 删除已保存的主题
-     */
-    fun deleteSavedTheme(theme: SavedTheme) {
-        val file = File(baseDir, "${theme.name}.json")
-        if (file.exists()) {
-            file.delete()
-        }
-        _savedThemes.remove(theme)
-    }
-
-    /**
-     * 导出已保存的主题到文件
-     */
-    fun exportSavedThemeToFile(context: Context, theme: SavedTheme, uri: Uri): Boolean {
-        return try {
-            val json = EXPORT_GSON.toJson(theme.data)
-            context.contentResolver.openOutputStream(uri)?.use {
-                it.write(json.toByteArray())
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    /**
-     * 从当前配置创建导出数据
-     */
-    fun exportFromCurrent(includeEmbeddedAssets: Boolean = true): ThemeExportData {
-        return ThemeExportData(
-            // 基础主题设置
-            appTheme = ThemeConfig.appTheme,
-            themeMode = ThemeConfig.themeMode,
-            isPureBlack = ThemeConfig.isPureBlack,
-            composeEngine = ThemeConfig.composeEngine,
-            paletteStyle = ThemeConfig.paletteStyle,
-            materialVersion = ThemeConfig.materialVersion,
-            customMode = ThemeConfig.customMode,
-            customContrast = ThemeConfig.customContrast,
-            launcherIcon = ThemeConfig.launcherIcon,
-            isPredictiveBackEnabled = ThemeConfig.isPredictiveBackEnabled,
-            fontScale = ThemeConfig.fontScale,
-
-            // 深度个性化颜色
-            enableDeepPersonalization = ThemeConfig.enableDeepPersonalization,
-            cPrimary = ThemeConfig.cPrimary,
-            cNPrimary = ThemeConfig.cNPrimary,
-            themeColor = ThemeConfig.themeColor,
-            secondaryThemeColor = ThemeConfig.secondaryThemeColor,
-            primaryTextColor = ThemeConfig.primaryTextColor,
-            secondaryTextColor = ThemeConfig.secondaryTextColor,
-            themeBackgroundColor = ThemeConfig.themeBackgroundColor,
-            labelContainerColor = ThemeConfig.labelContainerColor,
-            themeColorNight = ThemeConfig.themeColorNight,
-            secondaryThemeColorNight = ThemeConfig.secondaryThemeColorNight,
-            primaryTextColorNight = ThemeConfig.primaryTextColorNight,
-            secondaryTextColorNight = ThemeConfig.secondaryTextColorNight,
-            themeBackgroundColorNight = ThemeConfig.themeBackgroundColorNight,
-            labelContainerColorNight = ThemeConfig.labelContainerColorNight,
-            bookInfoInputColor = ThemeConfig.bookInfoInputColor,
-
-            // 容器设置
-            containerOpacity = ThemeConfig.containerOpacity,
-
-            // 分割线设置
-            enableItemDivider = ThemeConfig.enableItemDivider,
-            itemDividerWidth = ThemeConfig.itemDividerWidth,
-            itemDividerLength = ThemeConfig.itemDividerLength,
-            itemDividerColor = ThemeConfig.itemDividerColor,
-
-            // 模糊设置
-            enableBlur = ThemeConfig.enableBlur,
-            enableProgressiveBlur = ThemeConfig.enableProgressiveBlur,
-            topBarBlurRadius = ThemeConfig.topBarBlurRadius,
-            bottomBarBlurRadius = ThemeConfig.bottomBarBlurRadius,
-            topBarBlurAlpha = ThemeConfig.topBarBlurAlpha,
-            bottomBarBlurAlpha = ThemeConfig.bottomBarBlurAlpha,
-            bottomBarLensRadius = ThemeConfig.bottomBarLensRadius,
-
-            // 透明度设置
-            topBarOpacity = ThemeConfig.topBarOpacity,
-            bottomBarOpacity = ThemeConfig.bottomBarOpacity,
-
-            // 标签颜色
-            enableCustomTagColors = ThemeConfig.enableCustomTagColors,
-            customTagColorsJson = ThemeConfig.customTagColorsJson,
-
-            // 主界面设置
-            showHome = ThemeConfig.showHome,
-            showDiscovery = ThemeConfig.showDiscovery,
-            showRss = ThemeConfig.showRss,
-            showStatusBar = ThemeConfig.showStatusBar,
-            swipeAnimation = ThemeConfig.swipeAnimation,
-            showBottomView = ThemeConfig.showBottomView,
-            useFloatingBottomBar = ThemeConfig.useFloatingBottomBar,
-            useFloatingBottomBarLiquidGlass = ThemeConfig.useFloatingBottomBarLiquidGlass,
-            tabletInterface = ThemeConfig.tabletInterface,
-            labelVisibilityMode = ThemeConfig.labelVisibilityMode,
-            defaultHomePage = ThemeConfig.defaultHomePage,
-            mainNavigationOrder = ThemeConfig.mainNavigationOrder,
-
-            // 导航栏图标
-            navIconHome = ThemeConfig.navIconHome,
-            navIconBookshelf = ThemeConfig.navIconBookshelf,
-            navIconExplore = ThemeConfig.navIconExplore,
-            navIconRss = ThemeConfig.navIconRss,
-            navIconMy = ThemeConfig.navIconMy,
-
-            // Miuix 设置
-            useMiuixMonet = ThemeConfig.useMiuixMonet,
-
-            // 其他
-            useFlexibleTopAppBar = ThemeConfig.useFlexibleTopAppBar,
-            bgImageLight = ThemeConfig.bgImageLight,
-            bgImageDark = ThemeConfig.bgImageDark,
-            bgImageBlurring = ThemeConfig.bgImageBlurring,
-            bgImageNBlurring = ThemeConfig.bgImageNBlurring,
-            appFontPath = ThemeConfig.appFontPath,
-
-            // 封面配置 (CoverConfig)
-            coverLoadOnlyWifi = CoverConfig.loadCoverOnlyWifi,
-            coverUseDefault = CoverConfig.useDefaultCover,
-            coverShowShadow = CoverConfig.coverShowShadow,
-            coverShowStroke = CoverConfig.coverShowStroke,
-            coverDefaultColor = CoverConfig.coverDefaultColor,
-            coverDefaultImage = CoverConfig.defaultCover,
-            coverTextColor = CoverConfig.coverTextColor,
-            coverShadowColor = CoverConfig.coverShadowColor,
-            coverShowName = CoverConfig.coverShowName,
-            coverShowAuthor = CoverConfig.coverShowAuthor,
-            coverDefaultImageDark = CoverConfig.defaultCoverDark,
-            coverTextColorN = CoverConfig.coverTextColorN,
-            coverShadowColorN = CoverConfig.coverShadowColorN,
-            coverShowNameN = CoverConfig.coverShowNameN,
-            coverShowAuthorN = CoverConfig.coverShowAuthorN,
-            coverInfoOrientation = CoverConfig.coverInfoOrientation,
-            assets = if (includeEmbeddedAssets) exportAssets() else null
-        )
-    }
+    internal fun withEmbeddedAssets(data: ThemeExportData): ThemeExportData =
+        data.copy(assets = exportAssets(data))
 
     /**
      * 将相关的图片、字体资源转换为Base64
      */
-    private fun exportAssets(): Map<String, String> {
+    private fun exportAssets(data: ThemeExportData): Map<String, String> {
         val assets = mutableMapOf<String, String>()
         val assetPaths = mapOf(
-            "bgImageLight" to ThemeConfig.bgImageLight,
-            "bgImageDark" to ThemeConfig.bgImageDark,
-            "navIconHome" to ThemeConfig.navIconHome,
-            "navIconBookshelf" to ThemeConfig.navIconBookshelf,
-            "navIconExplore" to ThemeConfig.navIconExplore,
-            "navIconRss" to ThemeConfig.navIconRss,
-            "navIconMy" to ThemeConfig.navIconMy,
-            "appFontPath" to ThemeConfig.appFontPath
+            "bgImageLight" to data.bgImageLight,
+            "bgImageDark" to data.bgImageDark,
+            "largeContainerBackgroundImageLight" to data.largeContainerBackgroundImageLight,
+            "largeContainerBackgroundImageDark" to data.largeContainerBackgroundImageDark,
+            "itemBackgroundImageLight" to data.itemBackgroundImageLight,
+            "itemBackgroundImageDark" to data.itemBackgroundImageDark,
+            "navIconHome" to data.navIconHome,
+            "navIconBookshelf" to data.navIconBookshelf,
+            "navIconExplore" to data.navIconExplore,
+            "navIconRss" to data.navIconRss,
+            "navIconMy" to data.navIconMy,
+            "navIconHomeSelected" to data.navIconHomeSelected,
+            "navIconBookshelfSelected" to data.navIconBookshelfSelected,
+            "navIconExploreSelected" to data.navIconExploreSelected,
+            "navIconRssSelected" to data.navIconRssSelected,
+            "navIconMySelected" to data.navIconMySelected,
+            "appFontPath" to data.appFontPath,
         )
 
         assetPaths.forEach { (key, path) ->
@@ -271,8 +65,8 @@ object ThemeImportExport {
         }
 
         // 处理封面图集（可能包含多个逗号分隔的路径）
-        exportCoverAssets(assets, "coverDefaultImage", CoverConfig.defaultCover)
-        exportCoverAssets(assets, "coverDefaultImageDark", CoverConfig.defaultCoverDark)
+        exportCoverAssets(assets, "coverDefaultImage", data.coverDefaultImage)
+        exportCoverAssets(assets, "coverDefaultImageDark", data.coverDefaultImageDark)
 
         return assets
     }
@@ -300,128 +94,76 @@ object ThemeImportExport {
         }
     }
 
-    /**
-     * 将导出数据应用到当前配置
-     */
-    fun applyToThemeConfig(data: ThemeExportData) {
-        // 基础主题设置
-        ThemeConfig.appTheme = data.appTheme
-        ThemeConfig.themeMode = data.themeMode
-        ThemeConfig.isPureBlack = data.isPureBlack
-        ThemeConfig.composeEngine = data.composeEngine
-        ThemeConfig.paletteStyle = data.paletteStyle
-        ThemeConfig.materialVersion = data.materialVersion
-        ThemeConfig.customMode = data.customMode
-        ThemeConfig.customContrast = data.customContrast
-        ThemeConfig.launcherIcon = data.launcherIcon
-        ThemeConfig.isPredictiveBackEnabled = data.isPredictiveBackEnabled
-        ThemeConfig.fontScale = data.fontScale
-
-        // 深度个性化颜色
-        ThemeConfig.enableDeepPersonalization = data.enableDeepPersonalization
-        ThemeConfig.cPrimary = data.cPrimary
-        ThemeConfig.cNPrimary = data.cNPrimary
-        ThemeConfig.themeColor = data.themeColor
-        ThemeConfig.secondaryThemeColor = data.secondaryThemeColor
-        ThemeConfig.primaryTextColor = data.primaryTextColor
-        ThemeConfig.secondaryTextColor = data.secondaryTextColor
-        ThemeConfig.themeBackgroundColor = data.themeBackgroundColor
-        ThemeConfig.labelContainerColor = data.labelContainerColor
-        ThemeConfig.themeColorNight = data.themeColorNight
-        ThemeConfig.secondaryThemeColorNight = data.secondaryThemeColorNight
-        ThemeConfig.primaryTextColorNight = data.primaryTextColorNight
-        ThemeConfig.secondaryTextColorNight = data.secondaryTextColorNight
-        ThemeConfig.themeBackgroundColorNight = data.themeBackgroundColorNight
-        ThemeConfig.labelContainerColorNight = data.labelContainerColorNight
-        ThemeConfig.bookInfoInputColor = data.bookInfoInputColor
-
-        // 容器设置
-        ThemeConfig.containerOpacity = data.containerOpacity
-
-        // 分割线设置
-        ThemeConfig.enableItemDivider = data.enableItemDivider
-        ThemeConfig.itemDividerWidth = data.itemDividerWidth
-        ThemeConfig.itemDividerLength = data.itemDividerLength
-        ThemeConfig.itemDividerColor = data.itemDividerColor
-
-        // 模糊设置
-        ThemeConfig.enableBlur = data.enableBlur
-        ThemeConfig.enableProgressiveBlur = data.enableProgressiveBlur
-        ThemeConfig.topBarBlurRadius = data.topBarBlurRadius
-        ThemeConfig.bottomBarBlurRadius = data.bottomBarBlurRadius
-        ThemeConfig.topBarBlurAlpha = data.topBarBlurAlpha
-        ThemeConfig.bottomBarBlurAlpha = data.bottomBarBlurAlpha
-        ThemeConfig.bottomBarLensRadius = data.bottomBarLensRadius
-
-        // 透明度设置
-        ThemeConfig.topBarOpacity = data.topBarOpacity
-        ThemeConfig.bottomBarOpacity = data.bottomBarOpacity
-
-        // 标签颜色
-        ThemeConfig.enableCustomTagColors = data.enableCustomTagColors
-        ThemeConfig.customTagColorsJson = data.customTagColorsJson
-
-        // 主界面设置
-        ThemeConfig.showHome = data.showHome
-        ThemeConfig.showDiscovery = data.showDiscovery
-        ThemeConfig.showRss = data.showRss
-        ThemeConfig.showStatusBar = data.showStatusBar
-        ThemeConfig.swipeAnimation = data.swipeAnimation
-        ThemeConfig.showBottomView = data.showBottomView
-        ThemeConfig.useFloatingBottomBar = data.useFloatingBottomBar
-        ThemeConfig.useFloatingBottomBarLiquidGlass = data.useFloatingBottomBarLiquidGlass
-        ThemeConfig.tabletInterface = data.tabletInterface
-        ThemeConfig.labelVisibilityMode = data.labelVisibilityMode
-        ThemeConfig.defaultHomePage = data.defaultHomePage
-        ThemeConfig.mainNavigationOrder = data.mainNavigationOrder
-
-        // 导航栏图标
-        ThemeConfig.navIconHome = data.navIconHome
-        ThemeConfig.navIconBookshelf = data.navIconBookshelf
-        ThemeConfig.navIconExplore = data.navIconExplore
-        ThemeConfig.navIconRss = data.navIconRss
-        ThemeConfig.navIconMy = data.navIconMy
-
-        // Miuix 设置
-        ThemeConfig.useMiuixMonet = data.useMiuixMonet
-
-        // 其他
-        ThemeConfig.useFlexibleTopAppBar = data.useFlexibleTopAppBar
-        ThemeConfig.bgImageLight = data.bgImageLight
-        ThemeConfig.bgImageDark = data.bgImageDark
-        ThemeConfig.bgImageBlurring = data.bgImageBlurring
-        ThemeConfig.bgImageNBlurring = data.bgImageNBlurring
-        ThemeConfig.appFontPath = data.appFontPath
-
-        // 封面配置 (CoverConfig)
-        CoverConfig.loadCoverOnlyWifi = data.coverLoadOnlyWifi
-        CoverConfig.useDefaultCover = data.coverUseDefault
-        CoverConfig.coverShowShadow = data.coverShowShadow
-        CoverConfig.coverShowStroke = data.coverShowStroke
-        CoverConfig.coverDefaultColor = data.coverDefaultColor
-        CoverConfig.defaultCover = data.coverDefaultImage
-        CoverConfig.coverTextColor = data.coverTextColor
-        CoverConfig.coverShadowColor = data.coverShadowColor
-        CoverConfig.coverShowName = data.coverShowName
-        CoverConfig.coverShowAuthor = data.coverShowAuthor
-        CoverConfig.defaultCoverDark = data.coverDefaultImageDark
-        CoverConfig.coverTextColorN = data.coverTextColorN
-        CoverConfig.coverShadowColorN = data.coverShadowColorN
-        CoverConfig.coverShowNameN = data.coverShowNameN
-        CoverConfig.coverShowAuthorN = data.coverShowAuthorN
-        CoverConfig.coverInfoOrientation = data.coverInfoOrientation
-
-        // 应用嵌入的资源
-        data.assets?.let { assets ->
-            applyAssets(assets)
-        }
+    internal fun prepareForApply(
+        data: ThemeExportData,
+        applyEmbeddedCoverAssets: Boolean = true,
+    ): PreparedTheme {
+        val embeddedAssets = data.assets?.let { assets ->
+            applyAssets(
+                assets = assets,
+                applyCoverAssets = applyEmbeddedCoverAssets,
+            )
+        } ?: AppliedThemeAssets()
+        val appliedAssets = AppliedThemeAssets(
+            lightCoverPaths = embeddedAssets.lightCoverPaths.ifEmpty {
+                data.coverDefaultImage.toCoverPaths()
+            },
+            darkCoverPaths = embeddedAssets.darkCoverPaths.ifEmpty {
+                data.coverDefaultImageDark.toCoverPaths()
+            },
+            paths = embeddedAssets.paths,
+            createdFiles = embeddedAssets.createdFiles,
+        )
+        return PreparedTheme(
+            data = data.copy(
+                bgImageLight = embeddedAssets.paths["bgImageLight"] ?: data.bgImageLight,
+                bgImageDark = embeddedAssets.paths["bgImageDark"] ?: data.bgImageDark,
+                largeContainerBackgroundImageLight =
+                    embeddedAssets.paths["largeContainerBackgroundImageLight"]
+                        ?: data.largeContainerBackgroundImageLight,
+                largeContainerBackgroundImageDark =
+                    embeddedAssets.paths["largeContainerBackgroundImageDark"]
+                        ?: data.largeContainerBackgroundImageDark,
+                itemBackgroundImageLight = embeddedAssets.paths["itemBackgroundImageLight"]
+                    ?: data.itemBackgroundImageLight,
+                itemBackgroundImageDark = embeddedAssets.paths["itemBackgroundImageDark"]
+                    ?: data.itemBackgroundImageDark,
+                navIconHome = embeddedAssets.paths["navIconHome"] ?: data.navIconHome,
+                navIconBookshelf = embeddedAssets.paths["navIconBookshelf"]
+                    ?: data.navIconBookshelf,
+                navIconExplore = embeddedAssets.paths["navIconExplore"] ?: data.navIconExplore,
+                navIconRss = embeddedAssets.paths["navIconRss"] ?: data.navIconRss,
+                navIconMy = embeddedAssets.paths["navIconMy"] ?: data.navIconMy,
+                navIconHomeSelected = embeddedAssets.paths["navIconHomeSelected"]
+                    ?: data.navIconHomeSelected,
+                navIconBookshelfSelected = embeddedAssets.paths["navIconBookshelfSelected"]
+                    ?: data.navIconBookshelfSelected,
+                navIconExploreSelected = embeddedAssets.paths["navIconExploreSelected"]
+                    ?: data.navIconExploreSelected,
+                navIconRssSelected = embeddedAssets.paths["navIconRssSelected"]
+                    ?: data.navIconRssSelected,
+                navIconMySelected = embeddedAssets.paths["navIconMySelected"]
+                    ?: data.navIconMySelected,
+                appFontPath = embeddedAssets.paths["appFontPath"] ?: data.appFontPath,
+                coverDefaultImage = appliedAssets.lightCoverPaths.joinToString(","),
+                coverDefaultImageDark = appliedAssets.darkCoverPaths.joinToString(","),
+                assets = null,
+            ),
+            appliedAssets = appliedAssets,
+        )
     }
 
-    private fun applyAssets(assets: Map<String, String>) {
+    private fun applyAssets(
+        assets: Map<String, String>,
+        applyCoverAssets: Boolean,
+    ): AppliedThemeAssets {
         val coverPaths = mutableMapOf<String, MutableList<String>>()
+        val paths = mutableMapOf<String, String>()
+        val createdFiles = mutableListOf<File>()
 
         assets.forEach { (key, base64) ->
             if (base64.isBlank()) return@forEach
+            if (!applyCoverAssets && key.startsWith("coverDefaultImage")) return@forEach
             try {
                 val bytes = EncoderUtils.base64DecodeToByteArray(base64)
                 val destFile = when {
@@ -429,44 +171,46 @@ object ThemeImportExport {
                         val baseDir = appCtx.getExternalFilesDir(null) ?: appCtx.filesDir
                         val folder = File(baseDir, key)
                         folder.mkdirs()
-                        File(folder, "theme_asset_${System.currentTimeMillis()}.jpg")
+                        File(folder, "theme_asset_${Uuid.random()}.jpg")
+                    }
+
+                    key.contains("ContainerBackgroundImage") -> {
+                        val baseDir = appCtx.getExternalFilesDir(null) ?: appCtx.filesDir
+                        val folder = File(baseDir, "container_background/$key")
+                        folder.mkdirs()
+                        File(folder, "theme_asset_${Uuid.random()}.png")
                     }
 
                     key.startsWith("navIcon") -> {
                         val folder = File(appCtx.filesDir, "nav_icons")
                         folder.mkdirs()
-                        File(folder, "${key.removePrefix("navIcon").lowercase()}.png")
+                        File(
+                            folder,
+                            "theme_${key.removePrefix("navIcon").lowercase()}_${Uuid.random()}.png",
+                        )
                     }
 
                     key == "appFontPath" -> {
                         val folder = File(appCtx.filesDir, "fonts")
                         folder.mkdirs()
-                        File(folder, "theme_font.ttf")
+                        File(folder, "theme_font_${Uuid.random()}.ttf")
                     }
 
                     key.startsWith("coverDefaultImage") -> {
                         val baseDir = appCtx.getExternalFilesDir(null) ?: appCtx.filesDir
                         val folder = File(baseDir, "covers")
                         folder.mkdirs()
-                        File(folder, "${key}_${System.currentTimeMillis()}.jpg")
+                        File(folder, "${key}_${Uuid.random()}.jpg")
                     }
 
                     else -> null
                 }
 
                 destFile?.let { file ->
+                    createdFiles += file
                     FileOutputStream(file).use { it.write(bytes) }
                     val path = file.absolutePath
-                    when {
-                        key == "bgImageLight" -> ThemeConfig.bgImageLight = path
-                        key == "bgImageDark" -> ThemeConfig.bgImageDark = path
-                        key == "navIconHome" -> ThemeConfig.navIconHome = path
-                        key == "navIconBookshelf" -> ThemeConfig.navIconBookshelf = path
-                        key == "navIconExplore" -> ThemeConfig.navIconExplore = path
-                        key == "navIconRss" -> ThemeConfig.navIconRss = path
-                        key == "navIconMy" -> ThemeConfig.navIconMy = path
-                        key == "appFontPath" -> ThemeConfig.appFontPath = path
-                        key.startsWith("coverDefaultImage") -> {
+                    if (key.startsWith("coverDefaultImage")) {
                             // 判断是日间还是夜间封面
                             val baseKey = if (key.removePrefix("coverDefaultImage").startsWith("Dark")) {
                                 "coverDefaultImageDark"
@@ -474,7 +218,8 @@ object ThemeImportExport {
                                 "coverDefaultImage"
                             }
                             coverPaths.getOrPut(baseKey) { mutableListOf() }.add(path)
-                        }
+                    } else {
+                        paths[key] = path
                     }
                 }
             } catch (e: Exception) {
@@ -482,36 +227,26 @@ object ThemeImportExport {
             }
         }
 
-        // 将收集到的封面路径合并为逗号分隔的字符串
-        coverPaths["coverDefaultImage"]?.let { paths ->
-            CoverConfig.defaultCover = paths.joinToString(",")
-        }
-        coverPaths["coverDefaultImageDark"]?.let { paths ->
-            CoverConfig.defaultCoverDark = paths.joinToString(",")
-        }
+        return AppliedThemeAssets(
+            lightCoverPaths = coverPaths["coverDefaultImage"].orEmpty(),
+            darkCoverPaths = coverPaths["coverDefaultImageDark"].orEmpty(),
+            paths = paths,
+            createdFiles = createdFiles,
+        )
     }
 
-    /**
-     * 导出主题到JSON字符串
-     */
-    fun exportToJson(): String {
-        val data = exportFromCurrent()
-        return EXPORT_GSON.toJson(data)
-    }
-
-    /**
-     * 从JSON字符串导入主题
-     */
-    fun importFromJson(json: String): Boolean {
+    internal fun prepareLegacyJson(json: String): PreparedTheme? {
         return try {
-            val data = parseThemeData(json) ?: return false
-            applyToThemeConfig(data)
-            true
+            val data = parseThemeData(json) ?: return null
+            prepareForApply(data)
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            null
         }
     }
+
+    private fun String.toCoverPaths(): List<String> =
+        split(",").map(String::trim).filter(String::isNotEmpty)
 
     private fun parseThemeData(json: String): ThemeExportData? {
         val root = JsonParser.parseString(json).asJsonObject
@@ -525,6 +260,8 @@ object ThemeImportExport {
             else -> null
         }
     }
+
+    internal fun parseLegacyThemeData(json: String): ThemeExportData? = parseThemeData(json)
 
     /**
      * 兼容曾由 R8 混淆字段名导出的主题配置。
@@ -630,153 +367,7 @@ object ThemeImportExport {
     private fun JsonObject.float(key: String, default: Float = 0f): Float =
         get(key)?.takeUnless { it.isJsonNull }?.asFloat ?: default
 
-    /**
-     * 从文件URI导入主题
-     */
-    fun importFromUri(context: Context, uri: Uri): Boolean {
-        return try {
-            val json = context.contentResolver.openInputStream(uri)?.use {
-                it.bufferedReader().readText()
-            } ?: return false
-            importFromJson(json)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
-
-    /**
-     * 导出主题到文件
-     */
-    fun exportToFile(context: Context, uri: Uri): Boolean {
-        return try {
-            val json = exportToJson()
-            context.contentResolver.openOutputStream(uri)?.use {
-                it.write(json.toByteArray())
-            }
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
-        }
-    }
 }
-
-/**
- * 主题导出数据类
- */
-@Keep
-data class ThemeExportData(
-    // 基础主题设置
-    val appTheme: String = "0",
-    val themeMode: String = "0",
-    val isPureBlack: Boolean = false,
-    val composeEngine: String = "material",
-    val paletteStyle: String = "tonalSpot",
-    val materialVersion: String = "material3",
-    val customMode: String? = "tonalSpot",
-    val customContrast: String = "Default",
-    val launcherIcon: String = "ic_launcher",
-    val isPredictiveBackEnabled: Boolean = true,
-    val fontScale: Int = 10,
-
-    // 深度个性化颜色
-    val enableDeepPersonalization: Boolean = false,
-    val cPrimary: Int = 0,
-    val cNPrimary: Int = 0,
-    val themeColor: Int = 0,
-    val secondaryThemeColor: Int = 0,
-    val primaryTextColor: Int = 0,
-    val secondaryTextColor: Int = 0,
-    val themeBackgroundColor: Int = 0,
-    val labelContainerColor: Int = 0,
-    val themeColorNight: Int = 0,
-    val secondaryThemeColorNight: Int = 0,
-    val primaryTextColorNight: Int = 0,
-    val secondaryTextColorNight: Int = 0,
-    val themeBackgroundColorNight: Int = 0,
-    val labelContainerColorNight: Int = 0,
-    val bookInfoInputColor: Int = 0,
-
-    // 容器设置
-    val containerOpacity: Int = 100,
-
-    // 分割线设置
-    val enableItemDivider: Boolean = false,
-    val itemDividerWidth: Float = 1f,
-    val itemDividerLength: Float = 80f,
-    val itemDividerColor: Int = 0,
-
-    // 模糊设置
-    val enableBlur: Boolean = false,
-    val enableProgressiveBlur: Boolean = false,
-    val topBarBlurRadius: Int = 24,
-    val bottomBarBlurRadius: Int = 8,
-    val topBarBlurAlpha: Int = 73,
-    val bottomBarBlurAlpha: Int = 40,
-    val bottomBarLensRadius: Float = 24f,
-
-    // 透明度设置
-    val topBarOpacity: Int = 100,
-    val bottomBarOpacity: Int = 100,
-
-    // 标签颜色
-    val enableCustomTagColors: Boolean = false,
-    val customTagColorsJson: String? = null,
-
-    // 主界面设置
-    val showHome: Boolean = true,
-    val showDiscovery: Boolean = true,
-    val showRss: Boolean = true,
-    val showStatusBar: Boolean = true,
-    val swipeAnimation: Boolean = true,
-    val showBottomView: Boolean = true,
-    val useFloatingBottomBar: Boolean = false,
-    val useFloatingBottomBarLiquidGlass: Boolean = false,
-    val tabletInterface: String = "auto",
-    val labelVisibilityMode: String = "auto",
-    val defaultHomePage: String = "bookshelf",
-    val mainNavigationOrder: String = "home,bookshelf,explore,rss,my",
-
-    // 导航栏图标
-    val navIconHome: String = "",
-    val navIconBookshelf: String = "",
-    val navIconExplore: String = "",
-    val navIconRss: String = "",
-    val navIconMy: String = "",
-
-    // Miuix 设置
-    val useMiuixMonet: Boolean = false,
-
-    // 其他
-    val useFlexibleTopAppBar: Boolean = true,
-    val bgImageLight: String? = null,
-    val bgImageDark: String? = null,
-    val bgImageBlurring: Int = 0,
-    val bgImageNBlurring: Int = 0,
-    val appFontPath: String? = null,
-
-    // 封面配置 (CoverConfig)
-    val coverLoadOnlyWifi: Boolean = false,
-    val coverUseDefault: Boolean = false,
-    val coverShowShadow: Boolean = false,
-    val coverShowStroke: Boolean = true,
-    val coverDefaultColor: Boolean = true,
-    val coverDefaultImage: String = "",
-    val coverTextColor: Int = -16777216,
-    val coverShadowColor: Int = -16777216,
-    val coverShowName: Boolean = true,
-    val coverShowAuthor: Boolean = true,
-    val coverDefaultImageDark: String = "",
-    val coverTextColorN: Int = -1,
-    val coverShadowColorN: Int = -1,
-    val coverShowNameN: Boolean = true,
-    val coverShowAuthorN: Boolean = true,
-    val coverInfoOrientation: String = "0",
-
-    // 嵌入的二进制资源 (Base64)
-    val assets: Map<String, String>? = null
-)
 
 /**
  * 已保存的主题
@@ -784,5 +375,19 @@ data class ThemeExportData(
 @Keep
 data class SavedTheme(
     val name: String,
-    val data: ThemeExportData
+    val data: ThemeExportData,
+    val packageRootPath: String? = null,
+    val packageManifest: ThemePackageManifest? = null,
+)
+
+internal data class AppliedThemeAssets(
+    val lightCoverPaths: List<String> = emptyList(),
+    val darkCoverPaths: List<String> = emptyList(),
+    val paths: Map<String, String> = emptyMap(),
+    val createdFiles: List<File> = emptyList(),
+)
+
+internal data class PreparedTheme(
+    val data: ThemeExportData,
+    val appliedAssets: AppliedThemeAssets,
 )

@@ -1,7 +1,6 @@
 package io.legado.app.data.entities
 
 import android.os.Parcelable
-import io.legado.app.help.book.applyTagGroupRulesForBook
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Ignore
@@ -15,11 +14,11 @@ import io.legado.app.constant.PageAnim
 import io.legado.app.data.appDb
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
+import io.legado.app.help.book.applyTagGroupRulesForBook
 import io.legado.app.help.book.getFolderNameNoCache
 import io.legado.app.help.book.isEpub
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.simulatedTotalChapterNum
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.model.ReadBook
 import io.legado.app.utils.GSON
@@ -80,6 +79,14 @@ data class Book(
     // 自定义分组索引号
     @ColumnInfo(defaultValue = "0")
     var group: Long = 0,
+    // 单独标记为私密书籍（与所属分组无关；私密判定 = 本标记 ∪ 所属私密分组）
+    //
+    // 关于备份：这个字段会随 bookshelf.json 明文进本地/云备份（Gson 不认 @Transient）。
+    // 这是刻意的——书架备份本来就含书名、作者、简介，私密标记只是书架结构的一部分，
+    // 单独把它剔出去会导致恢复后"哪些书是私密"丢失、反而把内容暴露在公开书架上。
+    // 真正的敏感信息（本地密码及其派生凭据）另有排除规则，见 BackupConfig。
+    @ColumnInfo(defaultValue = "0")
+    var isPrivate: Boolean = false,
     // 最新章节标题
     var latestChapterTitle: String? = null,
     // 最新章节标题更新时间
@@ -122,12 +129,16 @@ data class Book(
     var readConfig: ReadConfig? = null,
     //同步时间
     @ColumnInfo(defaultValue = "0")
-    var syncTime: Long = 0L
+    var syncTime: Long = 0L,
+    // 简介内容(书源列表/发现规则获取), 与详情规则拿到的 intro 是书源作者写的两条规则,
+    // 聚合类书源常把服务状态排版进详情简介, 书架等列表场景优先用这一份
+    var listIntro: String? = null
 ) : Parcelable, BaseBook {
 
     init {
         kind = kind?.take(1000)
         intro = intro?.take(5000)
+        listIntro = listIntro?.take(5000)
         customTag = customTag?.take(1000)
         customIntro = customIntro?.take(5000)
         remark = remark?.take(1000)
@@ -189,6 +200,42 @@ data class Book(
             return readConfig!!
         }
 
+    // 音频片头（秒）的 setter 和 getter
+    fun setOpenCredits(openCredits: Int) {
+        config.openCredits = openCredits
+    }
+
+    fun getOpenCredits(): Int {
+        return config.openCredits
+    }
+
+    // 音频片尾（秒）的 setter 和 getter
+    fun setCloseCredits(closeCredits: Int) {
+        config.closeCredits = closeCredits
+    }
+
+    fun getCloseCredits(): Int {
+        return config.closeCredits
+    }
+
+    // 音频播放模式 的 setter 和 getter
+    fun setPlayMode(playMode: Int) {
+        config.playMode = playMode
+    }
+
+    fun getPlayMode(): Int {
+        return config.playMode
+    }
+
+    // 音频增益（mB） 的 setter 和 getter
+    fun setAudioGain(audioGain: Int) {
+        config.audioGain = audioGain
+    }
+
+    fun getAudioGain(): Int {
+        return config.audioGain
+    }
+
     fun setReverseToc(reverseToc: Boolean) {
         config.reverseToc = reverseToc
     }
@@ -201,7 +248,7 @@ data class Book(
         config.useReplaceRule = useReplaceRule
     }
 
-    fun getUseReplaceRule(): Boolean {
+    fun getUseReplaceRule(defaultReplaceEnabled: Boolean): Boolean {
         val useReplaceRule = config.useReplaceRule
         if (useReplaceRule != null) {
             return useReplaceRule
@@ -210,7 +257,7 @@ data class Book(
         if (isImage || isEpub) {
             return false
         }
-        return AppConfig.replaceEnableDefault
+        return defaultReplaceEnabled
     }
 
     fun setReSegment(reSegment: Boolean) {
@@ -355,12 +402,18 @@ data class Book(
     /**
      * 迁移旧的书籍的一些信息到新的书籍中
      */
-    fun migrateTo(newBook: Book, toc: List<BookChapter>): Book {
+    fun migrateTo(
+        newBook: Book,
+        toc: List<BookChapter>,
+        defaultReplaceEnabled: Boolean,
+        chineseConverterType: Int,
+    ): Book {
         newBook.durChapterIndex = BookHelp
             .getDurChapter(durChapterIndex, durChapterTitle, toc, totalChapterNum)
         newBook.durChapterTitle = toc[newBook.durChapterIndex].getDisplayTitle(
             ContentProcessor.get(newBook.name, newBook.origin).getTitleReplaceRules(),
-            getUseReplaceRule()
+            getUseReplaceRule(defaultReplaceEnabled),
+            chineseConverterType = chineseConverterType,
         )
         newBook.durChapterPos = durChapterPos
         newBook.durChapterTime = durChapterTime
@@ -384,6 +437,8 @@ data class Book(
         return Bookmark(
             bookName = name,
             bookAuthor = author,
+            // 源指纹：创建时的书源，跳转校验用（换源后位置可能偏移）
+            bookUrl = bookUrl,
         )
     }
 
@@ -397,8 +452,8 @@ data class Book(
     }
 
     fun delete() {
-        if (ReadBook.book?.bookUrl == bookUrl) {
-            ReadBook.book = null
+        if (ReadBook.isCurrentBook(bookUrl)) {
+            ReadBook.clearCurrentBook()
         }
         appDb.bookChapterDao.delByBook(bookUrl)
         appDb.bookDao.delete(this)
@@ -436,7 +491,12 @@ data class Book(
 
         var fixedType: Boolean = false, // 固定书籍类型,不随书源更新
 
-        var translationMode: Boolean = false // 是否启用翻译阅读模式
+        var translationMode: Boolean = false, // 是否启用翻译阅读模式
+
+        var openCredits: Int = 0,    // 音频片头（秒）
+        var closeCredits: Int = 0,   // 音频片尾（秒）
+        var playMode: Int = 0,       // 音频播放模式
+        var audioGain: Int = 0       // 音频增益（mB，-6000..6000）
 
     ) : Parcelable
 

@@ -16,7 +16,6 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -34,9 +33,7 @@ import androidx.annotation.ColorRes
 import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.core.content.edit
 import androidx.core.net.toUri
-import androidx.preference.PreferenceManager
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.legado.app.R
 import io.legado.app.constant.AppConst
@@ -44,13 +41,14 @@ import io.legado.app.data.entities.Book
 import io.legado.app.help.IntentHelp
 import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.isImage
-import io.legado.app.help.book.isLocal
-import io.legado.app.help.config.AppConfig
-import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
-import io.legado.app.ui.book.audio.AudioPlayActivity
-import io.legado.app.ui.book.manga.ReadMangaActivity
+import io.legado.app.help.config.AppConfigStore
+import io.legado.app.help.config.SettingsWriter
+import io.legado.app.domain.gateway.BookshelfSettingsGateway
+import io.legado.app.domain.gateway.MangaSettingsGateway
 import io.legado.app.ui.main.MainActivity
 import io.legado.app.ui.main.bookshelf.BookShelfItem
+import kotlinx.coroutines.runBlocking
+import org.koin.core.context.GlobalContext
 import splitties.systemservices.clipboardManager
 import splitties.systemservices.connectivityManager
 import splitties.systemservices.uiModeManager
@@ -65,19 +63,25 @@ inline fun <reified A : Activity> Context.startActivity(configIntent: Intent.() 
     startActivity(intent)
 }
 
+private val mangaSettingsGateway
+    get() = GlobalContext.get().get<MangaSettingsGateway>()
+
+private val bookshelfSettingsGateway
+    get() = GlobalContext.get().get<BookshelfSettingsGateway>()
+
 fun Context.startActivityForBook(
     book: Book,
     configIntent: Intent.() -> Unit = {},
 ) {
     val intent = when {
-        book.isAudio -> Intent(this, AudioPlayActivity::class.java)
-        !book.isLocal && book.isImage && ReadMangaConfig.showMangaUi ->
-            Intent(this, ReadMangaActivity::class.java)
+        book.isAudio -> MainActivity.createAudioPlayIntent(this, book.bookUrl)
+        book.isImage && mangaSettingsGateway.currentSettings.showMangaUi ->
+            MainActivity.createReadMangaIntent(this, book.bookUrl)
 
         else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (book.isAudio || (!book.isLocal && book.isImage && ReadMangaConfig.showMangaUi)) {
+    if (book.isAudio || (book.isImage && mangaSettingsGateway.currentSettings.showMangaUi)) {
         intent.putExtra("bookUrl", book.bookUrl)
     }
     intent.apply(configIntent)
@@ -89,14 +93,14 @@ fun Context.startActivityForBook(
     configIntent: Intent.() -> Unit = {},
 ) {
     val intent = when {
-        book.isAudio -> Intent(this, AudioPlayActivity::class.java)
-        !book.isLocal && book.isImage && ReadMangaConfig.showMangaUi ->
-            Intent(this, ReadMangaActivity::class.java)
+        book.isAudio -> MainActivity.createAudioPlayIntent(this, book.bookUrl)
+        book.isImage && mangaSettingsGateway.currentSettings.showMangaUi ->
+            MainActivity.createReadMangaIntent(this, book.bookUrl)
 
         else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (book.isAudio || (!book.isLocal && book.isImage && ReadMangaConfig.showMangaUi)) {
+    if (book.isAudio || (book.isImage && mangaSettingsGateway.currentSettings.showMangaUi)) {
         intent.putExtra("bookUrl", book.bookUrl)
     }
     intent.apply(configIntent)
@@ -182,66 +186,57 @@ fun Context.startForegroundServiceCompat(intent: Intent) {
     }
 }
 
-val Context.defaultSharedPreferences: SharedPreferences
-    get() = PreferenceManager.getDefaultSharedPreferences(this)
+// getPref*/putPref* 门面：读写统一走 AppConfigStore 内存快照（DataStore 唯一真源），
+// 主线程零 IO。须在 App.onCreate 首行 AppConfigStore.init() 之后使用。
 
-fun Context.getPrefBoolean(key: String, defValue: Boolean = false) =
-    defaultSharedPreferences.getBoolean(key, defValue)
+fun Context.getPrefBoolean(key: String, defValue: Boolean = false): Boolean =
+    AppConfigStore.getBoolean(key) ?: defValue
 
-fun Context.putPrefBoolean(key: String, value: Boolean = false) =
-    defaultSharedPreferences.edit { putBoolean(key, value) }
-
-fun Context.getPrefInt(key: String, defValue: Int = 0) =
-    defaultSharedPreferences.getInt(key, defValue)
-
-fun Context.putPrefInt(key: String, value: Int) =
-    defaultSharedPreferences.edit { putInt(key, value) }
-
-fun Context.getPrefLong(key: String, defValue: Long = 0L): Long {
-    return try {
-        defaultSharedPreferences.getLong(key, defValue)
-    } catch (e: ClassCastException) {
-        val value = defaultSharedPreferences.getInt(key, defValue.toInt()).toLong()
-        defaultSharedPreferences.edit { putLong(key, value) }
-        value
-    }
+fun Context.putPrefBoolean(key: String, value: Boolean = false) {
+    AppConfigStore.putBoolean(key, value)
 }
 
-fun Context.putPrefLong(key: String, value: Long) =
-    defaultSharedPreferences.edit { putLong(key, value) }
+fun Context.getPrefInt(key: String, defValue: Int = 0): Int =
+    AppConfigStore.getInt(key) ?: defValue
 
-fun Context.getPrefFloat(key: String, defValue: Float = 0f): Float {
-    return try {
-        defaultSharedPreferences.getFloat(key, defValue)
-    } catch (e: ClassCastException) {
-        val value = defaultSharedPreferences.getInt(key, defValue.toInt()).toFloat()
-        defaultSharedPreferences.edit { putFloat(key, value) }
-        value
-    }
+fun Context.putPrefInt(key: String, value: Int) {
+    AppConfigStore.putInt(key, value)
 }
 
-fun Context.putPrefFloat(key: String, value: Float) =
-    defaultSharedPreferences.edit { putFloat(key, value) }
+fun Context.getPrefLong(key: String, defValue: Long = 0L): Long =
+    AppConfigStore.getLong(key) ?: defValue
 
-fun Context.getPrefString(key: String, defValue: String? = null) =
-    defaultSharedPreferences.getString(key, defValue)
+fun Context.putPrefLong(key: String, value: Long) {
+    AppConfigStore.putLong(key, value)
+}
 
-fun Context.putPrefString(key: String, value: String?) =
-    defaultSharedPreferences.edit { putString(key, value) }
+fun Context.getPrefFloat(key: String, defValue: Float = 0f): Float =
+    AppConfigStore.getFloat(key) ?: defValue
 
-fun Context.putPrefStringSync(key: String, value: String?) =
-    defaultSharedPreferences.edit(commit = true) { putString(key, value) }
+fun Context.putPrefFloat(key: String, value: Float) {
+    AppConfigStore.putFloat(key, value)
+}
+
+fun Context.getPrefString(key: String, defValue: String? = null): String? =
+    AppConfigStore.getString(key) ?: defValue
+
+fun Context.putPrefString(key: String, value: String?) {
+    AppConfigStore.putString(key, value)
+}
 
 fun Context.getPrefStringSet(
     key: String,
     defValue: MutableSet<String>? = null,
-): MutableSet<String>? = defaultSharedPreferences.getStringSet(key, defValue)
+): MutableSet<String>? =
+    AppConfigStore.getStringSet(key)?.toMutableSet() ?: defValue
 
-fun Context.putPrefStringSet(key: String, value: MutableSet<String>) =
-    defaultSharedPreferences.edit { putStringSet(key, value) }
+fun Context.putPrefStringSet(key: String, value: MutableSet<String>) {
+    AppConfigStore.putStringSet(key, value.toSet())
+}
 
-fun Context.removePref(key: String) =
-    defaultSharedPreferences.edit { remove(key) }
+fun Context.removePref(key: String) {
+    AppConfigStore.remove(key)
+}
 
 
 fun Context.getCompatColor(@ColorRes id: Int): Int = ContextCompat.getColor(this, id)
@@ -262,6 +257,9 @@ fun Context.restart() {
                     or Intent.FLAG_ACTIVITY_CLEAR_TASK
                     or Intent.FLAG_ACTIVITY_CLEAR_TOP
         )
+        runBlocking {
+            SettingsWriter.awaitPendingWrites()
+        }
         startActivity(intent)
         //杀掉以前进程
         Process.killProcess(Process.myPid())
@@ -466,16 +464,16 @@ val Context.isDebuggable: Boolean
 
 val Context.bookshelfLayoutMode: Int
     get() = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-        AppConfig.bookshelfLayoutModeLandscape
+        bookshelfSettingsGateway.currentSettings.bookshelfLayoutModeLandscape
     } else {
-        AppConfig.bookshelfLayoutModePortrait
+        bookshelfSettingsGateway.currentSettings.bookshelfLayoutModePortrait
     }
 
 val Context.bookshelfLayoutGrid: Int
     get() = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-        AppConfig.bookshelfLayoutGridLandscape
+        bookshelfSettingsGateway.currentSettings.bookshelfLayoutGridLandscape
     } else {
-        AppConfig.bookshelfLayoutGridPortrait
+        bookshelfSettingsGateway.currentSettings.bookshelfLayoutGridPortrait
     }
 
 fun Context.themeColor(attr: Int): Int {

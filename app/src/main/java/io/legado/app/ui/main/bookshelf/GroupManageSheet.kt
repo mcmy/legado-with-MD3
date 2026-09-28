@@ -2,18 +2,27 @@ package io.legado.app.ui.main.bookshelf
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridItemScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -23,29 +32,46 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import io.legado.app.R
 import io.legado.app.data.entities.BookGroup
 import io.legado.app.ui.book.group.GroupDeleteAction
 import io.legado.app.ui.book.group.GroupEditContent
 import io.legado.app.ui.book.group.GroupResetCoverAction
 import io.legado.app.ui.book.group.GroupViewModel
+import io.legado.app.ui.main.bookshelf.autoGroup.AiAutoGroupSheet
 import io.legado.app.ui.tagGroupRule.TagGroupRuleEditSheet
 import io.legado.app.ui.tagGroupRule.TagGroupRuleIntent
 import io.legado.app.ui.tagGroupRule.TagGroupRuleViewModel
 import io.legado.app.ui.theme.LegadoTheme
-import io.legado.app.ui.widget.components.button.series.SmallPlainButton
-import io.legado.app.ui.widget.components.card.ReorderableSelectionItem
+import io.legado.app.ui.widget.components.TinySwitch
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
+import io.legado.app.ui.widget.components.card.GlassCard
+import io.legado.app.ui.widget.components.icon.AppIcon
+import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
+import io.legado.app.ui.widget.components.reorderAccessibility
+import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.move
 import org.koin.androidx.compose.koinViewModel
-import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.ReorderableLazyGridState
+import sh.calvin.reorderable.rememberReorderableLazyGridState
+
+/** 分组卡片最小宽度，常规手机为两列，更宽的屏幕按可用宽度自动增加列数。 */
+private val GroupCardMinWidth = 160.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +91,8 @@ fun GroupManageSheet(
 
     var editingTagRule by remember { mutableStateOf<io.legado.app.data.entities.TagGroupRule?>(null) }
     var showTagRuleEdit by remember { mutableStateOf(false) }
+    var showAiAutoGroup by remember { mutableStateOf(false) }
+    var aiAutoGroupSessionKey by rememberSaveable { mutableStateOf(0L) }
 
     var editingGroupTagRule by remember { mutableStateOf<io.legado.app.data.entities.TagGroupRule?>(null) }
 
@@ -75,8 +103,8 @@ fun GroupManageSheet(
     }
 
     var listData by remember { mutableStateOf(groups) }
-    val listState = rememberLazyListState()
-    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+    val gridState = rememberLazyGridState()
+    val reorderableState = rememberReorderableLazyGridState(gridState) { from, to ->
         listData = listData.toMutableList().apply {
             move(from.index, to.index)
         }
@@ -119,9 +147,10 @@ fun GroupManageSheet(
             if (!isEditing) {
                 Box {
                     var showMenu by remember { mutableStateOf(false) }
-                    SmallPlainButton(
+                    MediumTonalButton(
                         onClick = { showMenu = true },
-                        icon = Icons.Default.Add
+                        icon = Icons.Default.Add,
+                        contentDescription = stringResource(R.string.add),
                     )
                     RoundDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         RoundDropdownMenuItem(
@@ -132,6 +161,15 @@ fun GroupManageSheet(
                                 editingGroup = null
                                 coverPath = null
                                 isEditing = true
+                            }
+                        )
+                        RoundDropdownMenuItem(
+                            text = stringResource(R.string.ai_auto_group),
+                            leadingIcon = { Icon(Icons.Default.AutoAwesome, null) },
+                            onClick = {
+                                showMenu = false
+                                aiAutoGroupSessionKey += 1L
+                                showAiAutoGroup = true
                             }
                         )
                         RoundDropdownMenuItem(
@@ -182,20 +220,30 @@ fun GroupManageSheet(
                     viewModel = viewModel
                 )
             } else {
-                LazyColumn(
-                    state = listState,
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Adaptive(GroupCardMinWidth),
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(listData, key = { it.groupId }) { group ->
+                    itemsIndexed(listData, key = { _, group -> group.groupId }) { index, group ->
                         val manageNameInfo = remember(group) { group.getManageName(context) }
-                        ReorderableSelectionItem(
+                        GroupManageGridItem(
                             state = reorderableState,
                             key = group.groupId,
+                            reorderIndex = index,
+                            reorderItemCount = listData.size,
+                            onMoveItem = { from, to ->
+                                listData = listData.toMutableList().apply { move(from, to) }
+                                val updatedGroups = listData.mapIndexed { i, item ->
+                                    item.copy(order = i)
+                                }
+                                viewModel.upGroup(*updatedGroups.toTypedArray())
+                            },
                             title = group.groupName.ifBlank { manageNameInfo.suffix.orEmpty() },
                             subtitle = if (group.groupName.isNotBlank()) manageNameInfo.suffix else null,
                             isEnabled = group.show,
-                            containerColor = LegadoTheme.colorScheme.onSheetContent,
                             onEnabledChange = { isChecked ->
                                 viewModel.upGroup(group.copy(show = isChecked))
                             },
@@ -230,5 +278,100 @@ fun GroupManageSheet(
             },
             onPaste = { tagGroupRuleViewModel.pasteRule() }
         )
+
+        AiAutoGroupSheet(
+            show = showAiAutoGroup,
+            sessionKey = aiAutoGroupSessionKey,
+            onDismissRequest = { showAiAutoGroup = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LazyGridItemScope.GroupManageGridItem(
+    state: ReorderableLazyGridState,
+    key: Any,
+    title: String,
+    subtitle: String?,
+    isEnabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onClickEdit: () -> Unit,
+    reorderIndex: Int,
+    reorderItemCount: Int,
+    onMoveItem: (from: Int, to: Int) -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    ReorderableItem(state = state, key = key) { isDragging ->
+        val elevation by animateDpAsState(
+            targetValue = if (isDragging) 8.dp else 0.dp,
+            label = "DragElevation"
+        )
+        GlassCard(
+            cornerRadius = 12.dp,
+            containerColor = LegadoTheme.colorScheme.onSheetContent,
+            elevation = elevation,
+            modifier = Modifier
+                .reorderAccessibility(
+                    index = reorderIndex,
+                    itemCount = reorderItemCount,
+                    onMove = onMoveItem
+                )
+                .zIndex(if (isDragging) 1f else 0f)
+                .longPressDraggableHandle(
+                    onDragStarted = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                    },
+                    onDragStopped = {
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                    }
+                )
+                .animateItem()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column() {
+                    Row(
+                        modifier = Modifier.clickable(
+                            onClick = onClickEdit
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        AppText(
+                            text = title,
+                            style = LegadoTheme.typography.titleSmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        AppIcon(
+                            modifier = Modifier
+                                .size(12.dp),
+                            imageVector = AppIcons.Edit,
+                            contentDescription = stringResource(R.string.edit)
+                        )
+                    }
+                    if (!subtitle.isNullOrBlank()) {
+                        AppText(
+                            text = subtitle,
+                            style = LegadoTheme.typography.bodySmall,
+                            color = LegadoTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                TinySwitch(
+                    checked = isEnabled,
+                    onCheckedChange = onEnabledChange
+                )
+            }
+
+        }
     }
 }

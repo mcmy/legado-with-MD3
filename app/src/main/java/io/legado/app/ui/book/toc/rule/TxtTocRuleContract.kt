@@ -52,9 +52,12 @@ sealed interface TxtTocRuleIntent {
     data class ToggleImportAll(val isSelected: Boolean) : TxtTocRuleIntent
     data class UpdateImportItem(val index: Int, val rule: TxtTocRule) : TxtTocRuleIntent
     data object SaveImportedRules : TxtTocRuleIntent
+    data object ImportBuiltInRules : TxtTocRuleIntent
 }
 
-sealed interface TxtTocRuleEffect
+sealed interface TxtTocRuleEffect {
+    data class ShowMessage(val message: String) : TxtTocRuleEffect
+}
 
 data class TxtTocRuleRenderState(
     val uiState: TxtTocRuleUiState,

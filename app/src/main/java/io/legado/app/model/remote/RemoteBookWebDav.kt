@@ -1,11 +1,11 @@
 package io.legado.app.model.remote
 
-import io.legado.app.ui.config.otherConfig.OtherConfig
 import android.net.Uri
 import io.legado.app.constant.AppPattern.archiveFileRegex
 import io.legado.app.constant.AppPattern.bookFileRegex
 import io.legado.app.constant.BookType
 import io.legado.app.data.entities.Book
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.book.update
 import io.legado.app.lib.webdav.Authorization
@@ -16,12 +16,15 @@ import io.legado.app.model.localBook.LocalBook
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.isContentScheme
 import kotlinx.coroutines.runBlocking
+import org.koin.core.context.GlobalContext
 
 class RemoteBookWebDav(
     val rootBookUrl: String,
     val authorization: Authorization,
     val serverID: Long? = null
 ) : RemoteBookManager() {
+
+    private val otherSettingsGateway get() = GlobalContext.get().get<OtherSettingsGateway>()
 
     init {
         runBlocking {
@@ -57,7 +60,7 @@ class RemoteBookWebDav(
     }
 
     override suspend fun downloadRemoteBook(remoteBook: RemoteBook): Uri {
-        OtherConfig.defaultBookTreeUri
+        otherSettingsGateway.currentSettings.defaultBookTreeUri
             ?: throw NoStackTraceException("没有设置书籍保存位置!")
         if (!NetworkUtils.isAvailable()) throw NoStackTraceException("网络不可用")
         val webdav = WebDav(remoteBook.path, authorization)

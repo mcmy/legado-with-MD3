@@ -8,7 +8,7 @@ import android.webkit.WebView
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.AppConst.imagePathKey
 import io.legado.app.constant.SourceType
-import io.legado.app.data.appDb
+import io.legado.app.data.repository.BookSourceRepository
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.http.newCallResponseBody
 import io.legado.app.help.http.okHttpClient
@@ -21,7 +21,10 @@ import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.toastOnUi
 import org.apache.commons.text.StringEscapeUtils
 
-class WebViewModel(application: Application) : BaseViewModel(application) {
+class WebViewModel(
+    application: Application,
+    private val bookSourceRepository: BookSourceRepository,
+) : BaseViewModel(application) {
     var intent: Intent? = null
     var baseUrl: String = ""
     var html: String? = null
@@ -45,11 +48,12 @@ class WebViewModel(application: Application) : BaseViewModel(application) {
             sourceType = intent.getIntExtra("sourceType", SourceType.book)
             sourceVerificationEnable = intent.getBooleanExtra("sourceVerificationEnable", false)
             refetchAfterSuccess = intent.getBooleanExtra("refetchAfterSuccess", true)
+            html = intent.getStringExtra("html")
             val source = SourceHelp.getSource(sourceOrigin, sourceType)
             val analyzeUrl = AnalyzeUrl(url, source = source, coroutineContext = coroutineContext)
             baseUrl = analyzeUrl.url
             headerMap.putAll(analyzeUrl.headerMap)
-            if (analyzeUrl.isPost()) {
+            if (html.isNullOrEmpty() && analyzeUrl.isPost()) {
                 html = analyzeUrl.getStrResponseAwait(useWebView = false).body
             }
         }.onSuccess {
@@ -97,7 +101,7 @@ class WebViewModel(application: Application) : BaseViewModel(application) {
         if (refetchAfterSuccess) {
             execute {
                 val url = intent!!.getStringExtra("url")!!
-                val source = appDb.bookSourceDao.getBookSource(sourceOrigin)
+                val source = bookSourceRepository.getBookSource(sourceOrigin)
                 html = AnalyzeUrl(
                     url,
                     headerMapF = headerMap,

@@ -7,25 +7,32 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
-import io.legado.app.data.dao.BookChapterDao
-import io.legado.app.data.dao.BookDao
-import io.legado.app.data.dao.BookGroupDao
-import io.legado.app.data.dao.BookSourceDao
-import io.legado.app.data.dao.BookmarkDao
 import io.legado.app.data.dao.AiArtifactDao
 import io.legado.app.data.dao.AiChatDao
 import io.legado.app.data.dao.AiMemoryDao
 import io.legado.app.data.dao.AiProfileDao
+import io.legado.app.data.dao.AiPromptPresetDao
+import io.legado.app.data.dao.BookChapterDao
+import io.legado.app.data.dao.BookContentProcessDao
+import io.legado.app.data.dao.BookDao
+import io.legado.app.data.dao.BookGroupDao
+import io.legado.app.data.dao.BookKnowledgeDao
+import io.legado.app.data.dao.BookMarkingDao
+import io.legado.app.data.dao.BookSourceDao
+import io.legado.app.data.dao.BookmarkDao
 import io.legado.app.data.dao.CacheDao
+import io.legado.app.data.dao.ChapterSpeechDao
+import io.legado.app.data.dao.CloudTtsEngineDao
 import io.legado.app.data.dao.CookieDao
 import io.legado.app.data.dao.DictRuleDao
+import io.legado.app.data.dao.ExactChapterPageCountDao
 import io.legado.app.data.dao.HighlightRuleDao
 import io.legado.app.data.dao.HighlightTagRuleDao
-import io.legado.app.data.dao.TagGroupRuleDao
 import io.legado.app.data.dao.HomepageCustomSetDao
 import io.legado.app.data.dao.HomepageModuleDao
 import io.legado.app.data.dao.HttpTTSDao
 import io.legado.app.data.dao.KeyboardAssistsDao
+import io.legado.app.data.dao.ReadAloudVoiceDao
 import io.legado.app.data.dao.ReadRecordDao
 import io.legado.app.data.dao.ReplaceRuleDao
 import io.legado.app.data.dao.RssArticleDao
@@ -37,30 +44,44 @@ import io.legado.app.data.dao.SearchBookDao
 import io.legado.app.data.dao.SearchContentHistoryDao
 import io.legado.app.data.dao.SearchKeywordDao
 import io.legado.app.data.dao.ServerDao
+import io.legado.app.data.dao.TagGroupRuleDao
 import io.legado.app.data.dao.TxtTocRuleDao
-import io.legado.app.data.entities.Book
-import io.legado.app.data.entities.BookChapter
-import io.legado.app.data.entities.BookGroup
-import io.legado.app.data.entities.BookSource
-import io.legado.app.data.entities.BookSourcePart
-import io.legado.app.data.entities.Bookmark
 import io.legado.app.data.entities.AiArtifact
 import io.legado.app.data.entities.AiChatConversation
 import io.legado.app.data.entities.AiChatMessage
 import io.legado.app.data.entities.AiMemory
 import io.legado.app.data.entities.AiModelProfile
+import io.legado.app.data.entities.AiPromptPreset
 import io.legado.app.data.entities.AiProviderProfile
 import io.legado.app.data.entities.AiTaskPreset
+import io.legado.app.data.entities.Book
+import io.legado.app.data.entities.BookChapter
+import io.legado.app.data.entities.BookCharacterEvent
+import io.legado.app.data.entities.BookCharacterProfile
+import io.legado.app.data.entities.BookCharacterRelation
+import io.legado.app.data.entities.BookContentProcess
+import io.legado.app.data.entities.BookGroup
+import io.legado.app.data.entities.BookKnowledgeEntry
+import io.legado.app.data.entities.BookMarking
+import io.legado.app.data.entities.BookOutlineNode
+import io.legado.app.data.entities.BookSource
+import io.legado.app.data.entities.BookSourcePart
+import io.legado.app.data.entities.BookVoiceBindingEntity
+import io.legado.app.data.entities.Bookmark
 import io.legado.app.data.entities.Cache
+import io.legado.app.data.entities.ChapterSpeechAnalysisEntity
+import io.legado.app.data.entities.ChapterSpeechSegmentEntity
+import io.legado.app.data.entities.CloudTtsEngineEntity
 import io.legado.app.data.entities.Cookie
 import io.legado.app.data.entities.DictRule
+import io.legado.app.data.entities.ExactChapterPageCountEntity
 import io.legado.app.data.entities.HighlightRule
 import io.legado.app.data.entities.HighlightTagRule
-import io.legado.app.data.entities.TagGroupRule
 import io.legado.app.data.entities.HomepageCustomSet
 import io.legado.app.data.entities.HomepageModule
 import io.legado.app.data.entities.HttpTTS
 import io.legado.app.data.entities.KeyboardAssist
+import io.legado.app.data.entities.ReadAloudVoiceEntity
 import io.legado.app.data.entities.ReplaceRule
 import io.legado.app.data.entities.RssArticle
 import io.legado.app.data.entities.RssReadRecord
@@ -71,6 +92,7 @@ import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.SearchContentHistory
 import io.legado.app.data.entities.SearchKeyword
 import io.legado.app.data.entities.Server
+import io.legado.app.data.entities.TagGroupRule
 import io.legado.app.data.entities.TxtTocRule
 import io.legado.app.data.entities.readRecord.ReadRecord
 import io.legado.app.data.entities.readRecord.ReadRecordDetail
@@ -90,7 +112,7 @@ val appDb by lazy {
 }
 
 @Database(
-    version = 93,
+    version = 107,
     exportSchema = true,
     entities = [Book::class, BookGroup::class, BookSource::class, BookChapter::class,
         ReplaceRule::class, SearchBook::class, SearchKeyword::class, Cookie::class,
@@ -101,7 +123,13 @@ val appDb by lazy {
         SearchContentHistory::class, HomepageModule::class, HomepageCustomSet::class,
         HighlightRule::class, AiProviderProfile::class, AiModelProfile::class,
         AiTaskPreset::class, AiArtifact::class, AiChatConversation::class,
-        AiChatMessage::class, AiMemory::class, HighlightTagRule::class, TagGroupRule::class],
+        AiChatMessage::class, AiMemory::class, HighlightTagRule::class, TagGroupRule::class,
+        BookContentProcess::class, AiPromptPreset::class, BookCharacterProfile::class,
+        BookCharacterEvent::class, BookCharacterRelation::class, BookKnowledgeEntry::class,
+        BookOutlineNode::class, ReadAloudVoiceEntity::class, BookVoiceBindingEntity::class,
+        ChapterSpeechAnalysisEntity::class, ChapterSpeechSegmentEntity::class,
+        CloudTtsEngineEntity::class, ExactChapterPageCountEntity::class,
+        BookMarking::class],
     views = [BookSourcePart::class],
     autoMigrations = [
         AutoMigration(from = 43, to = 44),
@@ -153,7 +181,22 @@ val appDb by lazy {
         AutoMigration(from = 89, to = 90),
         AutoMigration(from = 90, to = 91),
         AutoMigration(from = 91, to = 92),
-        AutoMigration(from = 92, to = 93)
+        AutoMigration(from = 92, to = 93),
+        AutoMigration(from = 93, to = 94),
+        AutoMigration(from = 94, to = 95),
+        AutoMigration(from = 95, to = 96),
+        AutoMigration(from = 96, to = 97),
+        AutoMigration(from = 97, to = 98),
+        AutoMigration(from = 100, to = 101, spec = DatabaseMigrations.Migration_100_101::class),
+        // book_marks 新表：Room AutoMigration 支持新增表，自动 CREATE TABLE
+        AutoMigration(from = 101, to = 102),
+        // httpTTS 新增可空列 speed（源级语速）
+        AutoMigration(from = 103, to = 104),
+        AutoMigration(from = 104, to = 105),
+        // readRecordSession 新增 bookUrl 归属列：同名作者作品共存时按书籍副本分别计时
+        AutoMigration(from = 105, to = 106),
+        // books 新增 isPrivate 列：单本私密标记，与所属私密分组共同决定书籍是否私密
+        AutoMigration(from = 106, to = 107)
     ]
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -162,11 +205,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract val bookGroupDao: BookGroupDao
     abstract val bookSourceDao: BookSourceDao
     abstract val bookChapterDao: BookChapterDao
+    abstract val bookContentProcessDao: BookContentProcessDao
+    abstract val bookKnowledgeDao: BookKnowledgeDao
+    abstract val readAloudVoiceDao: ReadAloudVoiceDao
+    abstract val chapterSpeechDao: ChapterSpeechDao
+    abstract val cloudTtsEngineDao: CloudTtsEngineDao
     abstract val replaceRuleDao: ReplaceRuleDao
     abstract val searchBookDao: SearchBookDao
     abstract val searchKeywordDao: SearchKeywordDao
     abstract val rssSourceDao: RssSourceDao
     abstract val bookmarkDao: BookmarkDao
+    abstract val bookMarkingDao: BookMarkingDao
     abstract val rssArticleDao: RssArticleDao
     abstract val rssStarDao: RssStarDao
     abstract val rssReadRecordDao: RssReadRecordDao
@@ -177,6 +226,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract val cacheDao: CacheDao
     abstract val ruleSubDao: RuleSubDao
     abstract val dictRuleDao: DictRuleDao
+    abstract val exactChapterPageCountDao: ExactChapterPageCountDao
     abstract val keyboardAssistsDao: KeyboardAssistsDao
     abstract val serverDao: ServerDao
     abstract val searchContentHistoryDao: SearchContentHistoryDao
@@ -189,6 +239,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract val aiArtifactDao: AiArtifactDao
     abstract val aiChatDao: AiChatDao
     abstract val aiMemoryDao: AiMemoryDao
+    abstract val aiPromptPresetDao: AiPromptPresetDao
 
     companion object {
 
@@ -205,6 +256,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
 
             override fun onOpen(db: SupportSQLiteDatabase) {
+                // 伴生分组默认隐藏，仅「全部」默认显示；已有数据库不受影响，用户仍可在分组管理中手动开启
                 @Language("sql")
                 val insertBookGroupAllSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
@@ -215,70 +267,70 @@ abstract class AppDatabase : RoomDatabase() {
                 @Language("sql")
                 val insertBookGroupLocalSql = """
                     insert into book_groups(groupId, groupName, 'order', enableRefresh, show) 
-                    select ${BookGroup.IdLocal}, '本地', -9, 0, 1
+                    select ${BookGroup.IdLocal}, '本地', -9, 0, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdLocal})
                 """.trimIndent()
                 db.execSQL(insertBookGroupLocalSql)
                 @Language("sql")
                 val insertBookGroupTextSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdText}, '小说', -26, 1
+                    select ${BookGroup.IdText}, '小说', -26, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdText})
                 """.trimIndent()
                 db.execSQL(insertBookGroupTextSql)
                 @Language("sql")
                 val insertBookGroupMangaSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdManga}, '漫画', -25, 1
+                    select ${BookGroup.IdManga}, '漫画', -25, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdManga})
                 """.trimIndent()
                 db.execSQL(insertBookGroupMangaSql)
                 @Language("sql")
                 val insertBookGroupMusicSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdAudio}, '音频', -8, 1
+                    select ${BookGroup.IdAudio}, '音频', -8, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdAudio})
                 """.trimIndent()
                 db.execSQL(insertBookGroupMusicSql)
                 Language("sql")
                 val insertGroupReading = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdReading}, '在读', -30, 1
+                    select ${BookGroup.IdReading}, '在读', -30, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdReading})
                 """.trimIndent()
                 db.execSQL(insertGroupReading)
                 @Language("sql")
                 val insertGroupUnread = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdUnread}, '未读', -29, 1
+                    select ${BookGroup.IdUnread}, '未读', -29, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdUnread})
                 """.trimIndent()
                 db.execSQL(insertGroupUnread)
                 @Language("sql")
                 val insertGroupReadFinished = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdReadFinished}, '已读', -28, 1
+                    select ${BookGroup.IdReadFinished}, '已读', -28, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdReadFinished})
                 """.trimIndent()
                 db.execSQL(insertGroupReadFinished)
                 @Language("sql")
                 val insertGroupReadFinishedUpdate = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdReadFinishedUpdate}, '连载已读', -27, 1
+                    select ${BookGroup.IdReadFinishedUpdate}, '连载已读', -27, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdReadFinishedUpdate})
                 """.trimIndent()
                 db.execSQL(insertGroupReadFinishedUpdate)
                 @Language("sql")
                 val insertGroupReadFinishedComplete = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdReadFinishedComplete}, '完本已读', -26, 1
+                    select ${BookGroup.IdReadFinishedComplete}, '完本已读', -26, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdReadFinishedComplete})
                 """.trimIndent()
                 db.execSQL(insertGroupReadFinishedComplete)
                 @Language("sql")
                 val insertBookGroupNetNoneGroupSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdNetNone}, '网络未分组', -7, 1
+                    select ${BookGroup.IdNetNone}, '网络未分组', -7, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdNetNone})
                 """.trimIndent()
                 db.execSQL(insertBookGroupNetNoneGroupSql)
@@ -292,7 +344,7 @@ abstract class AppDatabase : RoomDatabase() {
                 @Language("sql")
                 val insertBookGroupErrorSql = """
                     insert into book_groups(groupId, groupName, 'order', show) 
-                    select ${BookGroup.IdError}, '更新失败', -1, 1
+                    select ${BookGroup.IdError}, '更新失败', -1, 0
                     where not exists (select * from book_groups where groupId = ${BookGroup.IdError})
                 """.trimIndent()
                 db.execSQL(insertBookGroupErrorSql)

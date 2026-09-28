@@ -1,6 +1,5 @@
 package io.legado.app.ui.book.info
 
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,14 +23,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PauseCircleOutline
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.FolderZip
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,17 +36,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.flow.flowOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.data.entities.Book
@@ -61,33 +52,18 @@ import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
 import io.legado.app.ui.book.changecover.ChangeCoverViewModel
-import io.legado.app.ui.book.changesource.ChangeBookSourceComposeViewModel
-import io.legado.app.ui.book.changesource.ChangeSourceConfig
-import io.legado.app.ui.book.changesource.ChangeSourceMigrationOptionsSheet
 import io.legado.app.ui.book.group.GroupEditSheet
-import io.legado.app.ui.book.search.ScopeSelectSheet
-import io.legado.app.ui.book.source.edit.BookSourceEditActivity
-import io.legado.app.ui.book.source.manage.BookSourceActivity
 import io.legado.app.ui.theme.LegadoTheme
-import io.legado.app.ui.widget.components.AppTextField
-import io.legado.app.ui.widget.components.EmptyMessage
-import io.legado.app.ui.widget.components.alert.AppAlertDialog
-import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.SelectionItemCard
 import io.legado.app.ui.widget.components.changeSource.ChangeSourceSheet
 import io.legado.app.ui.widget.components.checkBox.AppCheckbox
 import io.legado.app.ui.widget.components.image.cover.CoilBookCover
-import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
-import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
-import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.progressIndicator.AppLinearProgressIndicator
 import io.legado.app.ui.widget.components.text.AppText
-import io.legado.app.utils.StartActivityContract
-import io.legado.app.utils.startActivity
-import io.legado.app.utils.toastOnUi
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -146,15 +122,17 @@ fun GroupSelectSheet(
         onDismissRequest = onDismissRequest,
         title = stringResource(R.string.group_select),
         startAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = { showAddGroup = true },
-                icon = Icons.Default.Add
+                icon = Icons.Default.Add,
+                contentDescription = stringResource(R.string.group_add)
             )
         },
         endAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = { onConfirm(selectedGroupId) },
-                icon = Icons.Default.Check
+                icon = Icons.Default.Check,
+                contentDescription = stringResource(R.string.confirm)
             )
         }
     ) {
@@ -190,7 +168,8 @@ fun GroupSelectSheet(
                         trailingAction = {
                             SmallPlainButton(
                                 onClick = { editingGroup = group },
-                                icon = Icons.Default.Edit
+                                icon = Icons.Default.Edit,
+                                contentDescription = stringResource(R.string.edit)
                             )
                         },
                         containerColor = LegadoTheme.colorScheme.surfaceContainerLow
@@ -220,7 +199,16 @@ fun ChangeCoverSheet(
     onSelect: (String) -> Unit,
     viewModel: ChangeCoverViewModel = koinViewModel(key = "cover-$name-$author"),
 ) {
-    val items by viewModel.dataFlow.collectAsStateWithLifecycle(initialValue = emptyList<SearchBook>())
+    val items by remember(show) {
+        // dataFlow 若无条件 collectAsStateWithLifecycle 收集会带来副作用：
+        // ChangeCoverSheet 在编辑页（BookInfoEditContent）里是 show=false 也照样组合的，
+        // callbackFlow 收集体立即执行：查库后若结果 ≤ 1 条就 startSearch() → 用全部启用
+        // 书源并发搜书（每源执行搜索规则/登录检测脚本），这就是“每次点开编辑页都弹某书源
+        // 未登录提示”的根源。
+        // 这里只有用户真正打开换封面面板（show=true）才开始收集/自动搜索；
+        // 隐藏时收集一个空的已完成 Flow，不触发任何网络与脚本。
+        if (show) viewModel.dataFlow else flowOf(emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList<SearchBook>())
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
 
     LaunchedEffect(name, author) {
@@ -237,9 +225,12 @@ fun ChangeCoverSheet(
         onDismissRequest = onDismissRequest,
         title = stringResource(R.string.change_cover_source),
         endAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = { viewModel.startOrStopSearch() },
-                icon = if (isSearching) Icons.Default.MoreVert else Icons.Default.Refresh
+                icon = if (isSearching) Icons.Default.MoreVert else Icons.Default.Refresh,
+                contentDescription = stringResource(
+                    if (isSearching) R.string.more_menu else R.string.refresh
+                )
             )
         }
     ) {

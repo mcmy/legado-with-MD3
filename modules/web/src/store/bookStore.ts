@@ -10,15 +10,6 @@ import type {
 import type { webReadConfig } from '@/web'
 import { ElMessage } from 'element-plus/es'
 
-type PartialWebReadConfig = Partial<
-  Omit<webReadConfig, 'customTheme' | 'spacing'>
-> & {
-  customTheme?: Partial<webReadConfig['customTheme']>
-  spacing?: Partial<webReadConfig['spacing']>
-}
-
-export type ReadConfigSyncChoice = 'browser' | 'server'
-
 const default_config: webReadConfig = {
   theme: 0,
   font: 0,
@@ -27,59 +18,14 @@ const default_config: webReadConfig = {
   infiniteLoading: false,
   customFontName: '',
   jumpDuration: 1000,
-  customTheme: {
-    enabled: false,
-    textColor: '#666666',
-    bodyBgColor: '#0f0f0f',
-    contentBgColor: '#000000',
-    popupBgColor: '#111111',
-  },
+  autoPage: false,
+  autoPageSpeed: 10,
   spacing: {
     paragraph: 1,
     line: 0.8,
     letter: 0,
   },
 }
-
-const webReadConfigLocalStorageKey = 'legado_web_read_config'
-const webReadConfigSyncStorageKey = 'legado_web_read_config_sync'
-
-const normalizeReadConfig = (config?: PartialWebReadConfig): webReadConfig => ({
-  ...default_config,
-  ...config,
-  customTheme: {
-    ...default_config.customTheme,
-    ...config?.customTheme,
-  },
-  spacing: {
-    ...default_config.spacing,
-    ...config?.spacing,
-  },
-})
-
-const cloneReadConfig = (config: webReadConfig): webReadConfig =>
-  JSON.parse(JSON.stringify(config)) as webReadConfig
-
-const readLocalWebConfig = (): PartialWebReadConfig | undefined => {
-  const rawConfig = localStorage.getItem(webReadConfigLocalStorageKey)
-  if (rawConfig == null) return
-  try {
-    return JSON.parse(rawConfig) as PartialWebReadConfig
-  } catch {
-    localStorage.removeItem(webReadConfigLocalStorageKey)
-  }
-}
-
-const isReadConfigSyncEnabled = () =>
-  localStorage.getItem(webReadConfigSyncStorageKey) === 'true'
-
-const isSameReadConfig = (
-  browserConfig: PartialWebReadConfig,
-  serverConfig: PartialWebReadConfig,
-) =>
-  JSON.stringify(normalizeReadConfig(browserConfig)) ===
-  JSON.stringify(normalizeReadConfig(serverConfig))
-
 let webReadConfigLoadedDate: Date | undefined
 
 export const useBookStore = defineStore('book', {
@@ -96,8 +42,7 @@ export const useBookStore = defineStore('book', {
       popCataVisible: false,
       contentLoading: true,
       showContent: false,
-      config: cloneReadConfig(default_config),
-      readConfigSyncEnabled: isReadConfigSyncEnabled(),
+      config: default_config,
       miniInterface: false,
       readSettingsVisible: false,
     }
@@ -200,88 +145,16 @@ export const useBookStore = defineStore('book', {
     setReadingBook(readingBook: typeof this.readingBook) {
       this.readingBook = readingBook
     },
-    /** 只加载一次web阅读配置: 默认使用浏览器本地配置, 开启同步后使用服务器配置 */
+    /** 只从从后端加载一次web阅读配置 */
     async loadWebConfig() {
       if (webReadConfigLoadedDate === undefined) {
-        const localConfig = readLocalWebConfig()
-        this.setConfig(localConfig)
-        if (this.readConfigSyncEnabled) {
-          try {
-            const serverConfig = await API.getReadConfig()
-            this.setConfig(serverConfig)
-            this.saveLocalReadConfig()
-          } catch {
-            this.setReadConfigSyncEnabled(false)
-            ElMessage.warning('同步配置加载失败，已暂时使用浏览器本地配置')
-          }
-        }
+        const _config = await API.getReadConfig()
         webReadConfigLoadedDate = new Date()
-        console.log(
-          `${this.$id}.loadWebConfig: ${webReadConfigLoadedDate.toLocaleString()}成功加载阅读配置`,
-        )
-        return
+        return this.setConfig(_config)
       }
     },
-    setConfig(config?: PartialWebReadConfig) {
-      this.config = normalizeReadConfig({
-        ...this.config,
-        ...config,
-        customTheme: {
-          ...this.config.customTheme,
-          ...config?.customTheme,
-        },
-        spacing: {
-          ...this.config.spacing,
-          ...config?.spacing,
-        },
-      })
-    },
-    saveLocalReadConfig() {
-      localStorage.setItem(
-        webReadConfigLocalStorageKey,
-        JSON.stringify(normalizeReadConfig(this.config)),
-      )
-    },
-    async saveReadConfig() {
-      this.saveLocalReadConfig()
-      if (this.readConfigSyncEnabled) {
-        await API.saveReadConfig(normalizeReadConfig(this.config))
-      }
-    },
-    setReadConfigSyncEnabled(enabled: boolean) {
-      this.readConfigSyncEnabled = enabled
-      localStorage.setItem(webReadConfigSyncStorageKey, String(enabled))
-      this.saveLocalReadConfig()
-    },
-    async enableReadConfigSync(
-      choice?: ReadConfigSyncChoice,
-      knownServerConfig?: webReadConfig,
-    ): Promise<{ status: 'enabled' | 'conflict'; serverConfig?: webReadConfig }> {
-      this.saveLocalReadConfig()
-      const browserConfig = normalizeReadConfig(this.config)
-      const serverConfig = knownServerConfig ?? (await API.getReadConfig())
-      if (
-        serverConfig !== undefined &&
-        choice === undefined &&
-        !isSameReadConfig(browserConfig, serverConfig)
-      ) {
-        return {
-          status: 'conflict',
-          serverConfig,
-        }
-      }
-
-      this.setReadConfigSyncEnabled(true)
-      if (choice === 'server' && serverConfig !== undefined) {
-        this.setConfig(serverConfig)
-        this.saveLocalReadConfig()
-      } else if (serverConfig === undefined || choice === 'browser') {
-        await API.saveReadConfig(normalizeReadConfig(this.config))
-      } else {
-        this.setConfig(serverConfig)
-        this.saveLocalReadConfig()
-      }
-      return { status: 'enabled' }
+    setConfig(config?: webReadConfig) {
+      this.config = Object.assign({}, this.config, config)
     },
     setReadSettingsVisible(visible: boolean) {
       this.readSettingsVisible = visible

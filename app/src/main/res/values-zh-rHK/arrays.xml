@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="click_image_way_title">
+        <item>新版行為</item>
+        <item>預覽圖片</item>
+        <item>經典</item>
+        <item>停用點擊</item>
+        <item>雙擊</item>
+    </string-array>
 
     <string-array name="book_type">
         <item>文本</item>
@@ -66,6 +73,9 @@
         <item>時間同埋電量</item>
         <item>時間同埋電量經典</item>
         <item>時間同埋電量%</item>
+        <item>全書頁數</item>
+        <item>全書頁數及進度</item>
+        <item>自訂</item>
     </string-array>
 
     <string-array name="text_font_weight">

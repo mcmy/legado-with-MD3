@@ -3,9 +3,6 @@ package io.legado.app.ui.widget.components
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -13,11 +10,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
-import io.legado.app.ui.widget.components.button.series.SmallPlainButton
+import io.legado.app.R
+import io.legado.app.ui.theme.ProvideAppDensity
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.utils.FileDoc
+import io.legado.app.utils.isContentScheme
+import java.io.File
 
 @Composable
 fun FontSelectSheet(
@@ -39,7 +43,12 @@ fun FontSelectSheet(
     val selectedFontName = remember(selectedFontPath) {
         selectedFontPath?.let {
             runCatching {
-                DocumentFile.fromSingleUri(context, it.toUri())?.name
+                val uri = it.toUri()
+                if (uri.isContentScheme()) {
+                    DocumentFile.fromSingleUri(context, uri)?.name
+                } else {
+                    File(uri.path ?: it).name
+                }
             }.getOrNull()
         }
     }
@@ -52,32 +61,36 @@ fun FontSelectSheet(
         startAction = {
             startAction?.invoke()
             if (systemTypefaces != null && onSelectSystemTypeface != null) {
-                DropdownMenu(
+                RoundDropdownMenu(
                     expanded = showTypefaceMenu,
                     onDismissRequest = { showTypefaceMenu = false },
                 ) {
-                    systemTypefaces.forEachIndexed { index, name ->
-                        DropdownMenuItem(
-                            text = { Text(name) },
-                            onClick = {
-                                onSelectSystemTypeface(index)
-                                showTypefaceMenu = false
-                                onDismissRequest()
-                            },
-                        )
+                    ProvideAppDensity {
+                        systemTypefaces.forEachIndexed { index, name ->
+                            RoundDropdownMenuItem(
+                                text = name,
+                                onClick = {
+                                    onSelectSystemTypeface(index)
+                                    showTypefaceMenu = false
+                                    onDismissRequest()
+                                },
+                            )
+                        }
                     }
                 }
-                SmallPlainButton(
+                MediumTonalButton(
                     onClick = { showTypefaceMenu = true },
                     icon = Icons.Default.TextFields,
+                    contentDescription = stringResource(R.string.select_font),
                 )
             }
         },
         endAction = {
-            SmallPlainButton(
+            MediumTonalButton(
                 onClick = onOpenFolderPicker,
                 icon = folderIcon,
-                contentDescription = folderContentDescription,
+                contentDescription = folderContentDescription
+                    ?: stringResource(R.string.select_folder),
             )
         },
     ) {

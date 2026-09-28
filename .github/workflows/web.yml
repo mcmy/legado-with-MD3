@@ -3,7 +3,8 @@ name: Build Web
 on:
   push:
     branches:
-      - master
+      # 本仓库默认分支是 main；原写 master 导致下面的「自动提交产物」步骤从未触发过。
+      - main
     paths:
       - '**/modules/web/**'
   pull_request:
@@ -11,8 +12,11 @@ on:
       - '**/modules/web/**'
   workflow_dispatch:
 
-env:
-  UPSTREAM_REPOSITORY: HapeLee/legado-with-MD3
+# git-auto-commit-action 要往 main 提交 app/src/main/assets/web/vue/**，需要写权限；
+# 缺这段时 GITHUB_TOKEN 默认只读，push changes 会 403（与 auto-release.yml 的写法一致）。
+permissions:
+  contents: write
+
 
 jobs:
   build:
@@ -57,7 +61,7 @@ jobs:
           echo "APP_VER=$version" >> $GITHUB_ENV
 
       - name: push changes
-        if: ${{ github.event_name != 'pull_request' && github.repository == env.UPSTREAM_REPOSITORY }}
+        if: ${{ github.event_name != 'pull_request' }}
         uses: stefanzweifel/git-auto-commit-action@v6.0.1
         with:
           commit_message: Bump web ${{ env.APP_VER}}

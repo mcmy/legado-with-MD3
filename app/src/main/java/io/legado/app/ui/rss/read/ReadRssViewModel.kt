@@ -7,22 +7,30 @@ import android.webkit.URLUtil
 import androidx.lifecycle.viewModelScope
 import com.script.rhino.runScriptWithContext
 import io.legado.app.base.BaseViewModel
-import io.legado.app.data.appDb
 import io.legado.app.data.entities.RssArticle
 import io.legado.app.data.entities.RssSource
 import io.legado.app.data.entities.RssStar
+import io.legado.app.data.repository.RssArticleRepository
+import io.legado.app.data.repository.RssFavoriteRepository
+import io.legado.app.data.repository.RssRepository
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.TTS
 import io.legado.app.help.http.newCallResponseBody
 import io.legado.app.help.http.okHttpClient
+import io.legado.app.help.webView.WebJsExtensions
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.rss.Rss
 import io.legado.app.utils.ImageSaveUtils
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import splitties.init.appCtx
 import kotlin.coroutines.coroutineContext
 
@@ -30,14 +38,43 @@ data class ReadRssArgs(
     val title: String? = null,
     val origin: String,
     val link: String? = null,
-    val openUrl: String? = null
+    val openUrl: String? = null,
+    val startPage: Boolean = false
 )
 
-class ReadRssViewModel(application: Application) : BaseViewModel(application) {
+internal fun shouldPreserveRssArticleOnRefresh(
+    ruleDescription: String?,
+    ruleContent: String?,
+) = ruleContent.isNullOrBlank() || !ruleDescription.isNullOrBlank()
+
+data class ReadRssSettings(
+    val showStatusBar: Boolean = true,
+    val userAgent: String = "",
+)
+
+class ReadRssViewModel(
+    application: Application,
+    appShellSettingsGateway: AppShellSettingsGateway,
+    private val downloadCacheSettingsGateway: DownloadCacheSettingsGateway,
+    private val rssRepository: RssRepository,
+    private val articleRepository: RssArticleRepository,
+    private val favoriteRepository: RssFavoriteRepository,
+) : BaseViewModel(application) {
+    val settings = combine(
+        appShellSettingsGateway.settings,
+        downloadCacheSettingsGateway.settings,
+    ) { appShell, download ->
+        ReadRssSettings(
+            showStatusBar = appShell.showStatusBar,
+            userAgent = download.userAgent,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReadRssSettings())
     var rssSource: RssSource? = null
     var rssArticle: RssArticle? = null
     var tts: TTS? = null
+    var hasPreloadJs = false
     var headerMap: Map<String, String> = emptyMap()
+    private var isStartPage = false
 
     private val _contentState = MutableStateFlow<String?>(null)
     val contentState: StateFlow<String?> = _contentState.asStateFlow()
@@ -65,15 +102,23 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
 
     fun initData(args: ReadRssArgs) {
         execute {
-            rssSource = appDb.rssSourceDao.getByKey(args.origin)
+            rssSource = rssRepository.getByKey(args.origin)
+            hasPreloadJs = !rssSource?.preloadJs.isNullOrBlank()
             headerMap = runScriptWithContext {
-                rssSource?.getHeaderMap() ?: emptyMap()
+                rssSource?.getHeaderMap(downloadCacheSettingsGateway.currentSettings.userAgent)
+                    ?: emptyMap()
+            }
+            isStartPage = args.startPage
+            if (isStartPage) {
+                _contentState.value = resolveStartHtml()
+                return@execute
             }
 
             val link = args.link
             if (!link.isNullOrBlank()) {
-                _rssStarState.value = appDb.rssStarDao.get(args.origin, link)
-                rssArticle = _rssStarState.value?.toRssArticle() ?: appDb.rssArticleDao.getByLink(args.origin, link)
+                _rssStarState.value = favoriteRepository.find(args.origin, link)
+                rssArticle = _rssStarState.value?.toRssArticle()
+                    ?: articleRepository.findByLink(args.origin, link)
                 val article = rssArticle ?: return@execute
                 if (!article.description.isNullOrBlank()) {
                     _contentState.value = article.description!!
@@ -122,15 +167,33 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
         _urlState.value = analyzeUrl
     }
 
+    private suspend fun resolveStartHtml(): String {
+        val source = rssSource ?: return ""
+        val startHtml = source.startHtml ?: return ""
+        return when {
+            startHtml.startsWith("@js:") -> runScriptWithContext {
+                source.evalJS(startHtml.substring(4))?.toString().orEmpty()
+            }
+
+            startHtml.startsWith("<js>") -> runScriptWithContext {
+                source.evalJS(startHtml.substring(4, startHtml.lastIndexOf("<")))
+                    ?.toString()
+                    .orEmpty()
+            }
+
+            else -> startHtml
+        }
+    }
+
     private fun loadContent(rssArticle: RssArticle, ruleContent: String) {
         val source = rssSource ?: return
         Rss.getContent(viewModelScope, rssArticle, ruleContent, source)
             .onSuccess(IO) { body ->
                 rssArticle.description = body
-                appDb.rssArticleDao.insert(rssArticle)
+                articleRepository.insert(rssArticle)
                 _rssStarState.value?.let {
                     it.description = body
-                    appDb.rssStarDao.insert(it)
+                    favoriteRepository.insert(it)
                 }
                 _contentState.value = body
             }.onError {
@@ -139,16 +202,24 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
     }
 
     fun refresh(finish: () -> Unit) {
+        val source = rssSource ?: run {
+            appCtx.toastOnUi("订阅源不存在")
+            finish.invoke()
+            return
+        }
+        if (source.singleUrl == true) {
+            finish.invoke()
+            return
+        }
         rssArticle?.let { article ->
-            rssSource?.let {
-                val ruleContent = it.ruleContent
+            val ruleContent = source.ruleContent
+            if (shouldPreserveRssArticleOnRefresh(source.ruleDescription, ruleContent)) {
                 if (!ruleContent.isNullOrBlank()) {
                     loadContent(article, ruleContent)
                 } else {
                     finish.invoke()
                 }
-            } ?: let {
-                appCtx.toastOnUi("订阅源不存在")
+            } else {
                 finish.invoke()
             }
         } ?: finish.invoke()
@@ -157,7 +228,7 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
     fun addFavorite() {
         execute {
             _rssStarState.value ?: rssArticle?.toStar()?.let {
-                appDb.rssStarDao.insert(it)
+                favoriteRepository.insert(it)
                 _rssStarState.value = it
             }
         }
@@ -174,7 +245,7 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
         }
         execute {
             rssArticle?.toStar()?.let {
-                appDb.rssStarDao.update(it)
+                favoriteRepository.update(it)
                 _rssStarState.value = it
             }
         }
@@ -183,7 +254,7 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
     fun delFavorite() {
         execute {
             _rssStarState.value?.let {
-                appDb.rssStarDao.delete(it.origin, it.link)
+                favoriteRepository.delete(it)
                 _rssStarState.value = null
             }
         }
@@ -217,18 +288,56 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
     }
 
     fun clHtml(content: String): String {
+        val contentWithPreloadJs = if (
+            isStartPage &&
+            !rssSource?.preloadJs.isNullOrBlank() &&
+            !content.contains(WebJsExtensions.JS_URL)
+        ) {
+            val headIndex = content.indexOf("<head>")
+            if (headIndex >= 0) {
+                buildString(content.length + WebJsExtensions.JS_URL.length) {
+                    append(content, 0, headIndex + 6)
+                    append(WebJsExtensions.JS_URL)
+                    append(content, headIndex + 6, content.length)
+                }
+            } else {
+                "<head>${WebJsExtensions.JS_URL}</head>$content"
+            }
+        } else {
+            content
+        }
+        val contentWithStartJs = if (isStartPage && !rssSource?.startJs.isNullOrBlank()) {
+            val startJs = rssSource?.startJs.orEmpty()
+            val bodyEndIndex = contentWithPreloadJs.indexOf("</body>")
+            if (bodyEndIndex >= 0) {
+                buildString(contentWithPreloadJs.length + startJs.length + 20) {
+                    append(contentWithPreloadJs, 0, bodyEndIndex)
+                    append("<script>$startJs</script>")
+                    append(contentWithPreloadJs, bodyEndIndex, contentWithPreloadJs.length)
+                }
+            } else {
+                "$contentWithPreloadJs<script>$startJs</script>"
+            }
+        } else {
+            contentWithPreloadJs
+        }
+        val style = if (isStartPage) {
+            rssSource?.startStyle ?: rssSource?.style
+        } else {
+            rssSource?.style
+        }
         return when {
-            !rssSource?.style.isNullOrEmpty() -> {
+            !style.isNullOrEmpty() -> {
                 """
                     <style>
-                        ${rssSource?.style}
+                        $style
                     </style>
-                    $content
+                    $contentWithStartJs
                 """.trimIndent()
             }
 
-            content.contains("<style>".toRegex()) -> {
-                content
+            contentWithStartJs.contains("<style>".toRegex()) -> {
+                contentWithStartJs
             }
 
             else -> {
@@ -238,7 +347,7 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
                         video{object-fit:fill; max-width:100% !important; width:auto; height:auto;}
                         body{word-wrap:break-word; height:auto;max-width: 100%; width:auto;}
                     </style>
-                    $content
+                    $contentWithStartJs
                 """.trimIndent()
             }
         }
@@ -269,7 +378,7 @@ class ReadRssViewModel(application: Application) : BaseViewModel(application) {
 
     fun updateRssSourceRedirectPolicy(sourceUrl: String, redirectPolicy: String) {
         execute {
-            appDb.rssSourceDao.updateRedirectPolicy(sourceUrl, redirectPolicy)
+            rssRepository.updateRedirectPolicy(sourceUrl, redirectPolicy)
             rssSource?.redirectPolicy = redirectPolicy
         }.onError {
             appCtx.toastOnUi("保存失败: ${it.localizedMessage}")

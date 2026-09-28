@@ -2,12 +2,15 @@ package io.legado.app.constant
 
 import android.util.Log
 import io.legado.app.BuildConfig
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.toastOnUi
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 
 object AppLog {
+
+    private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
 
     private val mLogs = arrayListOf<Triple<Long, String, Throwable?>>()
 
@@ -56,7 +59,7 @@ object AppLog {
     }
 
     fun putDebug(message: String?, throwable: Throwable? = null) {
-        if (AppConfig.recordLog) {
+        if (otherGateway.currentSettings.recordLog) {
             put(message, throwable)
         }
     }

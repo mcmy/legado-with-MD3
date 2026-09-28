@@ -17,12 +17,15 @@ import io.legado.app.data.repository.ReadPreferences
 import io.legado.app.data.repository.ReadSettingsRepository
 import io.legado.app.ui.book.read.ConfigUpdate
 import io.legado.app.ui.book.read.ReadBookIntent
+import io.legado.app.ui.book.read.ReadBookSheet
 import io.legado.app.ui.widget.components.SectionTitle
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.settingItem.TinyClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.TinyDropdownSettingItem
+import io.legado.app.ui.widget.components.settingItem.TinySliderSettingItem
 import io.legado.app.ui.widget.components.settingItem.TinySwitchSettingItem
 import org.koin.compose.koinInject
+import kotlin.math.roundToInt
 
 @Composable
 fun MoreConfigSheet(
@@ -31,7 +34,9 @@ fun MoreConfigSheet(
     onIntent: (ReadBookIntent) -> Unit,
     onOpenClickRegionalConfig: () -> Unit,
     onOpenPageKeyConfig: () -> Unit,
-    onOpenTextSelectMenuFilterConfig: () -> Unit,
+    onOpenTextSelectMenuConfig: () -> Unit,
+    onPickBookmarkBadgeImage: () -> Unit,
+    onResetBookmarkBadge: () -> Unit,
 ) {
     val readSettingsRepository: ReadSettingsRepository = koinInject()
     val preferences by readSettingsRepository.preferences.collectAsStateWithLifecycle(
@@ -71,21 +76,15 @@ fun MoreConfigSheet(
                 onReadBodyToLhChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ReadBodyToLh(it)))
                 },
-                onTextFullJustifyChange = {
-                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.TextFullJustify(it)))
-                },
-                onTextBottomJustifyChange = {
-                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.TextBottomJustify(it)))
-                },
                 onAdaptSpecialStyleChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.AdaptSpecialStyle(it)))
                 },
                 onUseZhLayoutChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.UseZhLayout(it)))
                 },
-                onUseUnderlineChange = {
-                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.UseUnderlineGlobal(it)))
-                },
+                onOpenEyeProtectionConfig = {
+                    onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.EyeProtection))
+                }
             )
 
             // Page control
@@ -110,6 +109,14 @@ fun MoreConfigSheet(
                 onKeyPageOnLongPressChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.KeyPageOnLongPress(it)))
                 },
+                onSwipeToAddBookmarkChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.SwipeToAddBookmark(it)))
+                },
+                onPickBookmarkBadgeImage = onPickBookmarkBadgeImage,
+                onResetBookmarkBadge = onResetBookmarkBadge,
+                onBookmarkBadgeSizeChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.BookmarkBadgeSize(it)))
+                },
             )
 
             // Other
@@ -119,14 +126,29 @@ fun MoreConfigSheet(
                 onSliderVibratorChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.SliderVibrator(it)))
                 },
+                onUseNewTocSheetChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.UseNewTocSheet(it)))
+                },
+                onMaxLengthWithNoTocChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.MaxLengthWithNoToc(it)))
+                },
                 onSelectVibratorChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.SelectVibrator(it)))
                 },
                 onAutoChangeSourceChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.AutoChangeSource(it)))
                 },
+                onDefaultSourceChangeAllChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.DefaultSourceChangeAll(it)))
+                },
                 onAutoSuggestDayNightChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.AutoSuggestDayNight(it)))
+                },
+                onReadingAnchorEnabledChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ReadingAnchorEnabled(it)))
+                },
+                onReadAloudDetachReminderEnabledChange = {
+                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ReadAloudDetachReminderEnabled(it)))
                 },
                 onSelectTextChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.SelectText(it)))
@@ -142,15 +164,9 @@ fun MoreConfigSheet(
                 },
                 onOpenClickRegionalConfig = onOpenClickRegionalConfig,
                 onOpenPageKeyConfig = onOpenPageKeyConfig,
-                onOpenTextSelectMenuFilterConfig = onOpenTextSelectMenuFilterConfig,
+                onOpenTextSelectMenuConfig = onOpenTextSelectMenuConfig,
                 onDisableReturnKeyChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.DisableReturnKey(it)))
-                },
-                onExpandTextMenuChange = {
-                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ExpandTextMenu(it)))
-                },
-                onShowSelectMenuIconChange = {
-                    onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ShowSelectMenuIcon(it)))
                 },
                 onShowReadTitleAdditionChange = {
                     onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.ShowReadTitleAddition(it)))
@@ -172,11 +188,9 @@ private fun ScreenSettings(
     onHideNavigationBarChange: (Boolean) -> Unit,
     onPaddingDisplayCutoutsChange: (Boolean) -> Unit,
     onReadBodyToLhChange: (Boolean) -> Unit,
-    onTextFullJustifyChange: (Boolean) -> Unit,
-    onTextBottomJustifyChange: (Boolean) -> Unit,
     onAdaptSpecialStyleChange: (Boolean) -> Unit,
     onUseZhLayoutChange: (Boolean) -> Unit,
-    onUseUnderlineChange: (Boolean) -> Unit,
+    onOpenEyeProtectionConfig:() -> Unit,
 ) {
     val screenDirectionEntries = stringArrayResource(R.array.screen_direction_title)
     val screenDirectionValues = stringArrayResource(R.array.screen_direction_value)
@@ -218,16 +232,6 @@ private fun ScreenSettings(
         onCheckedChange = onReadBodyToLhChange,
     )
     TinySwitchSettingItem(
-        title = stringResource(R.string.text_full_justify),
-        checked = preferences.textFullJustify,
-        onCheckedChange = onTextFullJustifyChange,
-    )
-    TinySwitchSettingItem(
-        title = stringResource(R.string.text_bottom_justify),
-        checked = preferences.textBottomJustify,
-        onCheckedChange = onTextBottomJustifyChange,
-    )
-    TinySwitchSettingItem(
         title = stringResource(R.string.adapt_special_style),
         checked = preferences.adaptSpecialStyle,
         onCheckedChange = onAdaptSpecialStyleChange,
@@ -237,10 +241,9 @@ private fun ScreenSettings(
         checked = preferences.useZhLayout,
         onCheckedChange = onUseZhLayoutChange,
     )
-    TinySwitchSettingItem(
-        title = stringResource(R.string.use_underline),
-        checked = preferences.useUnderline,
-        onCheckedChange = onUseUnderlineChange,
+    TinyClickableSettingItem(
+        title = stringResource(R.string.eye_protection),
+        onClick = onOpenEyeProtectionConfig,
     )
 }
 
@@ -253,6 +256,10 @@ private fun PageControlSettings(
     onVolumeKeyPageChange: (Boolean) -> Unit,
     onVolumeKeyPageOnPlayChange: (Boolean) -> Unit,
     onKeyPageOnLongPressChange: (Boolean) -> Unit,
+    onSwipeToAddBookmarkChange: (Boolean) -> Unit,
+    onPickBookmarkBadgeImage: () -> Unit,
+    onResetBookmarkBadge: () -> Unit,
+    onBookmarkBadgeSizeChange: (Int) -> Unit,
 ) {
     val doublePageEntries = stringArrayResource(R.array.double_page_title)
     val doublePageValues = stringArrayResource(R.array.double_page_value)
@@ -293,15 +300,47 @@ private fun PageControlSettings(
         checked = preferences.keyPageOnLongPress,
         onCheckedChange = onKeyPageOnLongPressChange,
     )
+    TinySwitchSettingItem(
+        title = stringResource(R.string.swipe_to_add_bookmark),
+        checked = preferences.swipeToAddBookmark,
+        onCheckedChange = onSwipeToAddBookmarkChange,
+    )
+    TinyClickableSettingItem(
+        title = stringResource(R.string.bookmark_badge),
+        description = if (preferences.bookmarkBadgeImage.isBlank()) {
+            stringResource(R.string.bookmark_badge_default)
+        } else {
+            stringResource(R.string.bookmark_badge_custom)
+        },
+        onClick = onPickBookmarkBadgeImage,
+    )
+    if (preferences.bookmarkBadgeImage.isNotBlank()) {
+        TinyClickableSettingItem(
+            title = stringResource(R.string.bookmark_badge_reset),
+            onClick = onResetBookmarkBadge,
+        )
+    }
+    TinySliderSettingItem(
+        title = stringResource(R.string.bookmark_badge_size),
+        value = preferences.bookmarkBadgeSize.toFloat(),
+        valueRange = 0f..50f,
+        valueFormat = { "${it.roundToInt()}dp" },
+        onValueChange = { onBookmarkBadgeSizeChange(it.roundToInt()) },
+    )
 }
 
 @Composable
 private fun OtherSettings(
     preferences: ReadPreferences,
     onSliderVibratorChange: (Boolean) -> Unit,
+    onUseNewTocSheetChange: (Boolean) -> Unit,
+    onMaxLengthWithNoTocChange: (Int) -> Unit,
     onSelectVibratorChange: (Boolean) -> Unit,
     onAutoChangeSourceChange: (Boolean) -> Unit,
+    onDefaultSourceChangeAllChange: (Boolean) -> Unit,
     onAutoSuggestDayNightChange: (Boolean) -> Unit,
+    onReadingAnchorEnabledChange: (Boolean) -> Unit,
+    onReadAloudDetachReminderEnabledChange: (Boolean) -> Unit,
     onSelectTextChange: (Boolean) -> Unit,
     onNoAnimScrollPageChange: (Boolean) -> Unit,
     onOptimizeRenderChange: (Boolean) -> Unit,
@@ -309,9 +348,7 @@ private fun OtherSettings(
     onOpenClickRegionalConfig: () -> Unit,
     onDisableReturnKeyChange: (Boolean) -> Unit,
     onOpenPageKeyConfig: () -> Unit,
-    onOpenTextSelectMenuFilterConfig: () -> Unit,
-    onExpandTextMenuChange: (Boolean) -> Unit,
-    onShowSelectMenuIconChange: (Boolean) -> Unit,
+    onOpenTextSelectMenuConfig: () -> Unit,
     onShowReadTitleAdditionChange: (Boolean) -> Unit,
     onShowMenuIconChange: (Boolean) -> Unit,
 ) {
@@ -323,6 +360,26 @@ private fun OtherSettings(
         checked = preferences.sliderVibrator,
         onCheckedChange = onSliderVibratorChange,
     )
+
+    TinySwitchSettingItem(
+        title = stringResource(R.string.use_new_toc_sheet),
+        checked = preferences.useNewTocSheet,
+        onCheckedChange = onUseNewTocSheetChange,
+    )
+
+    TinySliderSettingItem(
+        title = stringResource(R.string.no_toc_split_length_title),
+        description = stringResource(
+            R.string.no_toc_split_length_summary,
+            preferences.maxLengthWithNoToc
+        ),
+        value = preferences.maxLengthWithNoToc.toFloat(),
+        valueRange = 3000f..100000f,
+        stepSize = 100f,
+        valueFormat = { it.roundToInt().toString() },
+        onValueChange = { onMaxLengthWithNoTocChange(it.roundToInt()) },
+    )
+
     TinySwitchSettingItem(
         title = stringResource(R.string.enable_select_vibrator),
         checked = preferences.selectVibrator,
@@ -334,10 +391,28 @@ private fun OtherSettings(
         onCheckedChange = onAutoChangeSourceChange,
     )
     TinySwitchSettingItem(
+        title = stringResource(R.string.read_change_all),
+        description = stringResource(R.string.read_change_all_s),
+        checked = preferences.defaultSourceChangeAll,
+        onCheckedChange = onDefaultSourceChangeAllChange,
+    )
+    TinySwitchSettingItem(
         title = stringResource(R.string.auto_switch_theme_reminder_title),
         description = stringResource(R.string.auto_switch_theme_reminder_desc),
         checked = preferences.autoSuggestDayNight,
         onCheckedChange = onAutoSuggestDayNightChange,
+    )
+    TinySwitchSettingItem(
+        title = stringResource(R.string.reading_anchor),
+        description = stringResource(R.string.reading_anchor_summary),
+        checked = preferences.readingAnchorEnabled,
+        onCheckedChange = onReadingAnchorEnabledChange,
+    )
+    TinySwitchSettingItem(
+        title = stringResource(R.string.read_aloud_detach_reminder),
+        description = stringResource(R.string.read_aloud_detach_reminder_summary),
+        checked = preferences.readAloudDetachReminderEnabled,
+        onCheckedChange = onReadAloudDetachReminderEnabledChange,
     )
     TinySwitchSettingItem(
         title = stringResource(R.string.selectText),
@@ -375,18 +450,8 @@ private fun OtherSettings(
         onClick = onOpenPageKeyConfig,
     )
     TinyClickableSettingItem(
-        title = stringResource(R.string.text_select_menu_filter),
-        onClick = onOpenTextSelectMenuFilterConfig,
-    )
-    TinySwitchSettingItem(
-        title = stringResource(R.string.expand_text_menu),
-        checked = preferences.expandTextMenu,
-        onCheckedChange = onExpandTextMenuChange,
-    )
-    TinySwitchSettingItem(
-        title = stringResource(R.string.show_select_menu_icon),
-        checked = preferences.showSelectMenuIcon,
-        onCheckedChange = onShowSelectMenuIconChange,
+        title = stringResource(R.string.edit_select_menu),
+        onClick = onOpenTextSelectMenuConfig,
     )
     TinySwitchSettingItem(
         title = stringResource(R.string.show_read_title_addition),

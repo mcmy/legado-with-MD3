@@ -9,8 +9,9 @@ import android.webkit.WebSettings
 import io.legado.app.BuildConfig
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.AppLog
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.help.globalExecutor
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,6 +26,9 @@ import kotlin.time.Duration.Companion.days
 object LogUtils {
     const val TIME_PATTERN = "yy-MM-dd HH:mm:ss.SSS"
     val logTimeFormat by lazy { SimpleDateFormat(TIME_PATTERN) }
+
+    private val otherSettingsGateway
+        get() = GlobalContext.get().get<OtherSettingsGateway>()
 
     fun init(context: Context) {
         fileHandler = createFileHandler(context)?.also {
@@ -75,7 +79,7 @@ object LogUtils {
                         return getCurrentDateStr(TIME_PATTERN) + ": " + record.message + "\n"
                     }
                 }
-                level = if (AppConfig.recordLog) {
+                level = if (otherSettingsGateway.currentSettings.recordLog) {
                     Level.INFO
                 } else {
                     Level.OFF
@@ -89,7 +93,7 @@ object LogUtils {
     }
 
     fun upLevel() {
-        val level = if (AppConfig.recordLog) {
+        val level = if (otherSettingsGateway.currentSettings.recordLog) {
             Level.INFO
         } else {
             Level.OFF

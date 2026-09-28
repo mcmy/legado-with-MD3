@@ -8,7 +8,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,27 +33,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -76,29 +69,28 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
+import android.content.ClipData
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
-import io.legado.app.domain.model.AiMessagePart
 import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiReasoningLevel
+import io.legado.app.ui.ai.AiReasoningModeButton
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
+import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.NormalCard
-import io.legado.app.ui.widget.components.image.cover.CoilBookCover
-import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.text.AppText
-import io.legado.app.ui.widget.components.text.MarkdownBlock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -136,13 +128,16 @@ fun AiChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val clipboardManager = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     var topOverlayHeightPx by remember { mutableIntStateOf(0) }
     var bottomOverlayHeightPx by remember { mutableIntStateOf(0) }
     var initiallyPositionedConversationId by remember { mutableStateOf<String?>(null) }
+    var errorDialogMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val snackbarActionLabel = stringResource(R.string.details)
+    val errorDialogTitle = stringResource(R.string.error_details)
     val currentConversation = state.conversations.firstOrNull {
         it.id == state.currentConversationId
     } ?: state.conversations.firstOrNull { it.isSelected }
@@ -186,7 +181,15 @@ fun AiChatScreen(
     LaunchedEffect(Unit) {
         effects.collectLatest { effect ->
             when (effect) {
-                is AiChatEffect.ShowMessage -> snackbarHostState.showSnackbar(effect.message)
+                is AiChatEffect.ShowMessage -> {
+                    val result = snackbarHostState.showSnackbar(
+                        message = effect.message,
+                        actionLabel = snackbarActionLabel
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        errorDialogMessage = effect.message
+                    }
+                }
             }
         }
     }
@@ -203,6 +206,9 @@ fun AiChatScreen(
                 onSelectConversation = {
                     onIntent(AiChatIntent.SelectConversation(it))
                     scope.launch { drawerState.close() }
+                },
+                onDeleteConversation = {
+                    onIntent(AiChatIntent.DeleteConversation(it))
                 }
             )
         }
@@ -324,7 +330,11 @@ fun AiChatScreen(
                             assistantLabel = assistantLabel,
                             onOpenBookInfo = onOpenBookInfo,
                             onCopy = {
-                                clipboardManager.setText(AnnotatedString(message.content))
+                                scope.launch {
+                                    clipboard.setClipEntry(
+                                        ClipEntry(ClipData.newPlainText("content", message.content))
+                                    )
+                                }
                             },
                             onRegenerate = if (message.role == AiMessageRole.ASSISTANT && message.parentMessageId != null) {
                                 { onIntent(AiChatIntent.RegenerateMessage(message.id)) }
@@ -557,6 +567,15 @@ fun AiChatScreen(
             }
         }
     }
+
+    AppAlertDialog(
+        show = errorDialogMessage != null,
+        onDismissRequest = { errorDialogMessage = null },
+        title = errorDialogTitle,
+        text = errorDialogMessage,
+        confirmText = stringResource(R.string.ok),
+        onConfirm = { errorDialogMessage = null }
+    )
 }
 
 @Composable
@@ -612,10 +631,12 @@ private fun PendingToolConfirmationCard(
 private fun RecentChatsDrawer(
     conversations: List<AiChatConversationUi>,
     onNewChat: () -> Unit,
-    onSelectConversation: (String) -> Unit
+    onSelectConversation: (String) -> Unit,
+    onDeleteConversation: (String) -> Unit
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var showSearch by rememberSaveable { mutableStateOf(false) }
+    var conversationToDelete by remember { mutableStateOf<AiChatConversationUi?>(null) }
     val searchFocusRequester = remember { FocusRequester() }
     val filteredConversations = remember(conversations, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -692,6 +713,7 @@ private fun RecentChatsDrawer(
                 NormalCard(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { onSelectConversation(conversation.id) },
+                    onLongClick = { conversationToDelete = conversation },
                     containerColor = if (isSelected) {
                         LegadoTheme.colorScheme.primaryContainer
                     } else {
@@ -724,6 +746,20 @@ private fun RecentChatsDrawer(
             }
         }
     }
+
+    AppAlertDialog(
+        show = conversationToDelete != null,
+        onDismissRequest = { conversationToDelete = null },
+        title = stringResource(R.string.delete),
+        text = stringResource(R.string.sure_del),
+        confirmText = stringResource(R.string.delete),
+        onConfirm = {
+            conversationToDelete?.let { onDeleteConversation(it.id) }
+            conversationToDelete = null
+        },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = { conversationToDelete = null }
+    )
 }
 
 private fun formatRelativeTime(timestamp: Long): String {
@@ -767,7 +803,7 @@ private fun ChatMessageItem(
                 containerColor = LegadoTheme.colorScheme.secondaryContainer,
                 modifier = Modifier.fillMaxWidth(0.86f)
             ) {
-                ChatMessageContent(
+                AiGeneratedMessageContent(
                     isUser = true,
                     isAssistant = false,
                     isStreaming = isStreaming,
@@ -780,7 +816,7 @@ private fun ChatMessageItem(
                 )
             }
         } else {
-            ChatMessageContent(
+            AiGeneratedMessageContent(
                 isUser = false,
                 isAssistant = isAssistant,
                 isStreaming = isStreaming,
@@ -799,360 +835,6 @@ private fun ChatMessageItem(
 }
 
 @Composable
-private fun ChatMessageContent(
-    isUser: Boolean,
-    isAssistant: Boolean,
-    isStreaming: Boolean,
-    message: AiChatMessageUi,
-    assistantLabel: String = "",
-    onOpenBookInfo: (AiChatBookResultUi) -> Unit,
-    onCopy: () -> Unit,
-    onRegenerate: (() -> Unit)?,
-    onSwitchBranch: ((direction: Int) -> Unit)?,
-    modifier: Modifier = Modifier
-) {
-    // Group parts into thinking blocks and content blocks
-    val groupedParts = remember(message.parts, message.thinkingDuration) {
-        message.parts.groupMessageParts(message.thinkingDuration)
-    }
-    val reasoningSteps = groupedParts
-        .filterIsInstance<AiMessagePartBlock.ThinkingBlock>()
-        .flatMap { block -> block.steps.filterIsInstance<AiThinkingStep.ReasoningStep>() }
-    val toolSteps = groupedParts
-        .filterIsInstance<AiMessagePartBlock.ThinkingBlock>()
-        .flatMap { block -> block.steps.filterIsInstance<AiThinkingStep.ToolStep>() }
-    val contentBlocks = groupedParts.filterIsInstance<AiMessagePartBlock.ContentBlock>()
-
-    Column(modifier = modifier) {
-        AppText(
-            text = if (isUser) {
-                stringResource(R.string.ai_you)
-            } else {
-                assistantLabel.ifBlank { stringResource(R.string.ai_assistant) }
-            },
-            style = LegadoTheme.typography.labelMedium,
-            color = LegadoTheme.colorScheme.outline
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Presentation order is stable regardless of persistence order:
-        // reasoning, tool calls, then the assistant response.
-        if (reasoningSteps.isNotEmpty()) {
-            AiThinkingCard(
-                steps = reasoningSteps,
-                isStreaming = isStreaming,
-                durationSeconds = message.thinkingDuration,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
-        if (toolSteps.isNotEmpty()) {
-            AiThinkingCard(
-                steps = toolSteps,
-                isStreaming = isStreaming,
-                durationSeconds = message.thinkingDuration,
-                autoExpandWhileStreaming = false,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
-        contentBlocks.forEach { block ->
-            when (val part = block.part) {
-                is AiMessagePart.Text -> {
-                    MessageTextContent(
-                        text = part.text,
-                        isUser = isUser,
-                        isStreaming = isStreaming,
-                    )
-                }
-                is AiMessagePart.BookResult -> {
-                    BookResultsList(
-                        books = listOf(
-                            AiChatBookResultUi(
-                                bookUrl = part.bookUrl,
-                                name = part.name,
-                                author = part.author,
-                                origin = part.origin,
-                                coverPath = part.coverPath,
-                                latestChapterTitle = part.latestChapterTitle,
-                                currentChapterTitle = part.currentChapterTitle,
-                                intro = part.intro
-                            )
-                        ),
-                        onOpenBookInfo = onOpenBookInfo
-                    )
-                }
-                else -> { /* skip */ }
-            }
-        }
-
-        // Legacy fallback keeps the same reasoning -> tools -> content order.
-        if (groupedParts.isEmpty()) {
-            val displayReasoning = message.parts.filterIsInstance<AiMessagePart.Reasoning>()
-                .joinToString("\n\n") { it.text }.trim()
-                .takeIf { it.isNotBlank() } ?: message.reasoning
-            if (!displayReasoning.isNullOrBlank()) {
-                AiThinkingCard(
-                    steps = listOf(AiThinkingStep.ReasoningStep(displayReasoning)),
-                    isStreaming = isStreaming,
-                    durationSeconds = message.thinkingDuration,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-            val displayToolTrace = message.parts.filterIsInstance<AiMessagePart.Tool>()
-                .joinToString("\n\n") { tool ->
-                    buildString {
-                        append("Tool: "); append(tool.toolName); append('\n')
-                        append("ID: "); append(tool.toolCallId)
-                        tool.input.takeIf { it.isNotBlank() }?.let { append('\n'); append(it) }
-                        tool.output.takeIf { it.isNotBlank() }?.let { append('\n'); append("Result: "); append(it) }
-                    }
-                }.takeIf { it.isNotBlank() } ?: message.toolTrace
-            if (!displayToolTrace.isNullOrBlank()) {
-                TracePanel(
-                    title = stringResource(R.string.ai_tool_trace),
-                    content = displayToolTrace
-                )
-            }
-            val displayContent = message.parts.filterIsInstance<AiMessagePart.Text>()
-                .joinToString("\n\n") { it.text }.trim()
-                .ifBlank { message.content }
-            if (displayContent.isNotBlank()) {
-                MessageTextContent(
-                    text = displayContent,
-                    isUser = isUser,
-                    isStreaming = isStreaming,
-                )
-            }
-            if (message.bookResults.isNotEmpty()) {
-                BookResultsList(books = message.bookResults, onOpenBookInfo = onOpenBookInfo)
-            }
-        }
-
-        // Action bar for assistant messages
-        if (isAssistant && !isStreaming) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onSwitchBranch != null && message.totalBranches > 1) {
-                    SmallPlainButton(
-                        onClick = { onSwitchBranch(-1) },
-                        icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                        contentDescription = "Previous branch",
-                        modifier = Modifier.size(28.dp)
-                    )
-                    AppText(
-                        text = "${message.branchIndex + 1}/${message.totalBranches}",
-                        style = LegadoTheme.typography.labelSmall,
-                        color = LegadoTheme.colorScheme.outline
-                    )
-                    SmallPlainButton(
-                        onClick = { onSwitchBranch(1) },
-                        icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                        contentDescription = "Next branch",
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                if (onRegenerate != null) {
-                    SmallPlainButton(
-                        onClick = onRegenerate,
-                        icon = Icons.Default.Refresh,
-                        contentDescription = stringResource(R.string.ai_regenerate),
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                SmallPlainButton(
-                    onClick = onCopy,
-                    icon = Icons.Default.ContentCopy,
-                    contentDescription = stringResource(R.string.copy_text),
-                    modifier = Modifier.size(32.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MessageTextContent(
-    text: String,
-    isUser: Boolean,
-    isStreaming: Boolean,
-) {
-    SelectionContainer {
-        if (isUser) {
-            AppText(
-                text = text,
-                style = LegadoTheme.typography.bodyLarge
-            )
-        } else if (text.isNotBlank()) {
-            MarkdownBlock(
-                content = text,
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else if (isStreaming) {
-            StreamingDots()
-        }
-    }
-}
-
-@Composable
-private fun BookResultsList(
-    books: List<AiChatBookResultUi>,
-    onOpenBookInfo: (AiChatBookResultUi) -> Unit
-) {
-    if (books.isEmpty()) return
-    Spacer(modifier = Modifier.height(10.dp))
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        AppText(
-            text = stringResource(R.string.ai_book_results),
-            style = LegadoTheme.typography.labelMedium,
-            color = LegadoTheme.colorScheme.outline
-        )
-        books.take(8).forEach { book ->
-            ChatBookResultItem(
-                book = book,
-                onClick = { onOpenBookInfo(book) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChatBookResultItem(
-    book: AiChatBookResultUi,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(LegadoTheme.colorScheme.surfaceContainerLow)
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        CoilBookCover(
-            name = book.name,
-            author = book.author,
-            path = book.coverPath,
-            sourceOrigin = book.origin,
-            modifier = Modifier
-                .width(48.dp)
-                .height(68.dp)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            AppText(
-                text = book.name.ifBlank { book.bookUrl },
-                style = LegadoTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (book.author.isNotBlank()) {
-                AppText(
-                    text = book.author,
-                    style = LegadoTheme.typography.bodySmall,
-                    color = LegadoTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            val chapter = book.currentChapterTitle ?: book.latestChapterTitle
-            if (!chapter.isNullOrBlank()) {
-                AppText(
-                    text = chapter,
-                    style = LegadoTheme.typography.labelSmall,
-                    color = LegadoTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (!book.intro.isNullOrBlank()) {
-                AppText(
-                    text = book.intro,
-                    style = LegadoTheme.typography.labelSmall,
-                    color = LegadoTheme.colorScheme.outline,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun StreamingDots() {
-    val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "dots")
-    val dotCount by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 4f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "dotCount"
-    )
-    val dots = ".".repeat(dotCount.toInt().coerceIn(1, 3))
-    AppText(
-        text = dots,
-        color = LegadoTheme.colorScheme.outline,
-        style = LegadoTheme.typography.bodyLarge
-    )
-}
-
-/**
- * Simple collapsible trace panel for legacy tool trace fallback.
- */
-@Composable
-private fun TracePanel(
-    title: String,
-    content: String,
-) {
-    var expanded by rememberSaveable(title) { mutableStateOf(false) }
-
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            AppText(
-                text = title,
-                style = LegadoTheme.typography.labelMedium,
-                color = LegadoTheme.colorScheme.outline
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = LegadoTheme.colorScheme.outline
-            )
-        }
-        AnimatedVisibility(visible = expanded) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 8.dp, end = 8.dp, bottom = 6.dp)
-            ) {
-                AppText(
-                    text = content,
-                    style = LegadoTheme.typography.bodySmall,
-                    color = LegadoTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun ChatInputBar(
     value: String,
     isSending: Boolean,
@@ -1162,16 +844,6 @@ private fun ChatInputBar(
     onStop: () -> Unit,
     onUpdateReasoningLevel: (AiReasoningLevel) -> Unit
 ) {
-    var showThinkingSheet by rememberSaveable { mutableStateOf(false) }
-    val thinkingLabel = when (reasoningLevel) {
-        AiReasoningLevel.OFF -> stringResource(R.string.ai_thinking_off)
-        AiReasoningLevel.AUTO -> "Auto"
-        AiReasoningLevel.LOW -> "Low"
-        AiReasoningLevel.MEDIUM -> "Med"
-        AiReasoningLevel.HIGH -> "High"
-        AiReasoningLevel.XHIGH -> "Max"
-    }
-    val isThinkingOn = reasoningLevel != AiReasoningLevel.OFF
     val isKeyboardVisible =
         WindowInsets.ime.asPaddingValues().calculateBottomPadding() > 0.dp
     val horizontalPadding by animateDpAsState(
@@ -1184,63 +856,6 @@ private fun ChatInputBar(
         animationSpec = tween(durationMillis = 250),
         label = "AiChatInputBottomPadding"
     )
-
-    // Thinking mode bottom sheet
-    AppModalBottomSheet(
-        show = showThinkingSheet,
-        onDismissRequest = { showThinkingSheet = false },
-        title = stringResource(R.string.ai_thinking_mode)
-    ) {
-        AiReasoningLevel.entries.forEach { level ->
-            val isSelected = level == reasoningLevel
-            val label = when (level) {
-                AiReasoningLevel.OFF -> stringResource(R.string.ai_thinking_off)
-                AiReasoningLevel.AUTO -> "Auto"
-                AiReasoningLevel.LOW -> "Low"
-                AiReasoningLevel.MEDIUM -> "Med"
-                AiReasoningLevel.HIGH -> "High"
-                AiReasoningLevel.XHIGH -> "Max"
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable {
-                        onUpdateReasoningLevel(level)
-                        showThinkingSheet = false
-                    }
-                    .background(
-                        if (isSelected) LegadoTheme.colorScheme.primaryContainer
-                        else LegadoTheme.colorScheme.surface
-                    )
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    AppText(
-                        text = label,
-                        style = LegadoTheme.typography.bodyLarge,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (isSelected) LegadoTheme.colorScheme.onPrimaryContainer
-                        else LegadoTheme.colorScheme.onSurface
-                    )
-                }
-                if (isSelected) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = LegadoTheme.colorScheme.primary
-                    )
-                }
-            }
-            if (level != AiReasoningLevel.entries.last()) {
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-    }
 
     // Floating capsule input bar
     Surface(
@@ -1262,11 +877,10 @@ private fun ChatInputBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // Thinking mode button
-            MediumTonalButton(
-                onClick = { showThinkingSheet = true },
-                icon = Icons.Default.Lightbulb,
-                selected = isThinkingOn,
-                contentDescription = stringResource(R.string.ai_thinking_mode)
+            AiReasoningModeButton(
+                level = reasoningLevel,
+                enabled = !isSending,
+                onLevelChange = onUpdateReasoningLevel,
             )
 
             // Text field

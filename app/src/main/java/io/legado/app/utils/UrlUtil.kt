@@ -3,14 +3,18 @@ package io.legado.app.utils
 import io.legado.app.BuildConfig
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern.semicolonRegex
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.analyzeRule.CustomUrl
+import org.koin.core.context.GlobalContext
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 
 object UrlUtil {
+
+    private val otherSettingsGateway
+        get() = GlobalContext.get().get<OtherSettingsGateway>()
 
     // 有时候文件名在query里，截取path会截到其他内容
     // https://www.example.com/download.php?filename=文件.txt
@@ -78,7 +82,7 @@ object UrlUtil {
         conn.instanceFollowRedirects = false
         conn.connect()
 
-        if (AppConfig.recordLog || BuildConfig.DEBUG) {
+        if (otherSettingsGateway.currentSettings.recordLog || BuildConfig.DEBUG) {
             val headers = conn.headerFields
             val headersString = buildString {
                 headers.forEach { (key, value) ->

@@ -1,6 +1,12 @@
 package io.legado.app.ui.widget.components.settingItem
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.legado.app.ui.theme.LegadoTheme
@@ -29,6 +35,7 @@ fun SwitchSettingItem(
             summary = description,
             checked = checked,
             onCheckedChange = onCheckedChange,
+            modifier = Modifier,
             enabled = enabled,
         )
     } else {
@@ -37,12 +44,17 @@ fun SwitchSettingItem(
             description = description,
             imageVector = imageVector,
             color = color,
+            enabled = enabled,
+            semanticRole = Role.Switch,
+            semanticToggleState = checked,
             onClick = { if (enabled) onCheckedChange(!checked) },
             trailingContent = {
                 AdaptiveSwitch(
+                    modifier = Modifier.clearAndSetSemantics { },
                     checked = checked,
                     onCheckedChange = onCheckedChange,
-                    enabled = enabled
+                    enabled = enabled,
+                    includeStateSemantics = false
                 )
             }
         )

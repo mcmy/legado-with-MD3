@@ -1,5 +1,6 @@
 package io.legado.app.ui.main
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -8,6 +9,8 @@ import android.text.format.DateUtils
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.activity.compose.BackHandler
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
@@ -18,12 +21,18 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavKey
@@ -35,31 +44,42 @@ import io.legado.app.BuildConfig
 import io.legado.app.R
 import io.legado.app.base.BaseComposeActivity
 import io.legado.app.constant.AppConst.appInfo
+import io.legado.app.data.repository.ReadAloudSettingsRepository
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.gateway.MangaSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.help.book.BookHelp
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.update.AppUpdateGitHub
 import io.legado.app.lib.dialogs.alert
+import io.legado.app.model.AudioPlay
 import io.legado.app.service.WebService
-import io.legado.app.ui.about.CrashLogsDialog
+import io.legado.app.ui.about.MarkdownSheet
 import io.legado.app.ui.about.UpdateDialog
+import io.legado.app.ui.book.audio.AudioPlayViewModel
 import io.legado.app.ui.book.read.ReadBookInputHandler
+import io.legado.app.ui.book.read.ReadBookRouteHost
 import io.legado.app.ui.book.read.page.entities.PageDirection
-import io.legado.app.ui.config.otherConfig.OtherConfig
-import io.legado.app.ui.config.themeConfig.ThemeConfig
+import io.legado.app.ui.book.readaloud.ReadAloudShellHost
+import io.legado.app.ui.book.readaloud.player.ReadAloudPlayerViewModel
+import io.legado.app.ui.theme.LocalAppUiConfiguration
 import io.legado.app.ui.welcome.WelcomeActivity
-import io.legado.app.ui.widget.dialog.TextDialog
-import io.legado.app.ui.widget.dialog.VariableDialog
+import io.legado.app.ui.widget.components.privacy.PrivateAppStartGate
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.startActivity
+import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.koin.android.ext.android.inject
 import org.koin.androidx.viewmodel.ext.android.viewModel
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -67,7 +87,22 @@ import kotlin.coroutines.suspendCoroutine
 /**
  * 主界面
  */
-open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
+open class MainActivity : BaseComposeActivity(), AudioPlay.CallBack {
+
+    private data class RouteEvent(
+        val route: NavKey,
+        val resetToHome: Boolean,
+    )
+
+    /** 当前激活的有声书播放器 ViewModel（由有声书路由在生命周期内设置/清理） */
+    internal var activeAudioPlayViewModel: AudioPlayViewModel? = null
+
+    /** 全局 Compose 文本弹层状态，供遗留命令式路径展示 Markdown/文本内容 */
+    private val textSheetFlow = MutableStateFlow<TextSheetData?>(null)
+
+    fun showTextSheet(title: String, content: String, onDismiss: (() -> Unit)? = null) {
+        textSheetFlow.value = TextSheetData(title, content, onDismiss)
+    }
 
     companion object {
         private const val KEY_RESTORE_READ_ROUTE = "restoreReadRoute"
@@ -75,14 +110,60 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         private const val KEY_RESTORE_READ_ALOUD = "restoreReadAloud"
         private const val KEY_RESTORE_READ_IN_BOOKSHELF = "restoreReadInBookshelf"
         private const val KEY_RESTORE_READ_CHAPTER_CHANGED = "restoreReadChapterChanged"
+        private val startupUpdateCheckGate = ProcessStartupUpdateCheckGate()
 
         @Volatile
         var hasActiveReadBookRoute: Boolean = false
+
+        @Volatile
+        var hasActiveAudioPlayRoute: Boolean = false
+
+        @Volatile
+        var hasActiveSourceLoginRoute: Boolean = false
 
         fun createLauncherIntent(context: Context): Intent =
             MainIntent.createLauncherIntent(context)
 
         fun createHomeIntent(context: Context): Intent = MainIntent.createHomeIntent(context)
+        fun createSourceLoginIntent(
+            context: Context,
+            type: io.legado.app.ui.login.SourceLoginType,
+            sourceKey: String? = null,
+            bookUrl: String? = null,
+        ): Intent = MainIntent.createSourceLoginIntent(context, type, sourceKey, bookUrl)
+
+        fun createWebViewIntent(
+            context: Context,
+            title: String? = null,
+            url: String,
+            sourceOrigin: String? = null,
+            sourceName: String? = null,
+            sourceType: Int? = null,
+            sourceVerificationEnable: Boolean = false,
+            refetchAfterSuccess: Boolean = true,
+            html: String? = null,
+        ): Intent = MainIntent.createWebViewIntent(
+            context, title, url, sourceOrigin, sourceName, sourceType,
+            sourceVerificationEnable, refetchAfterSuccess, html,
+        )
+
+        fun createBookSourceManageIntent(context: Context, importSource: String? = null) =
+            MainIntent.createBookSourceManageIntent(context, importSource)
+
+        fun createBookSourceEditIntent(context: Context, sourceUrl: String? = null) =
+            MainIntent.createBookSourceEditIntent(context, sourceUrl)
+
+        fun createRssSourceManageIntent(context: Context) =
+            MainIntent.createRssSourceManageIntent(context)
+
+        fun createRssSourceEditIntent(context: Context, sourceUrl: String? = null) =
+            MainIntent.createRssSourceEditIntent(context, sourceUrl)
+
+        fun createBookSourceDebugIntent(context: Context, sourceUrl: String?) =
+            MainIntent.createBookSourceDebugIntent(context, sourceUrl)
+
+        fun createRssSourceDebugIntent(context: Context, sourceUrl: String?) =
+            MainIntent.createRssSourceDebugIntent(context, sourceUrl)
         fun createIntent(context: Context, configTag: String? = null): Intent =
             MainIntent.createIntent(context, configTag)
 
@@ -124,6 +205,31 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
             chapterChanged = chapterChanged,
         )
 
+        fun createReadBookMediaControlIntent(context: Context): Intent =
+            MainIntent.createReadBookMediaControlIntent(context)
+
+        fun createReadMangaIntent(
+            context: Context,
+            bookUrl: String? = null,
+            inBookshelf: Boolean = true,
+            chapterChanged: Boolean = false,
+        ): Intent = MainIntent.createReadMangaIntent(
+            context = context,
+            bookUrl = bookUrl,
+            inBookshelf = inBookshelf,
+            chapterChanged = chapterChanged,
+        )
+
+        fun createAudioPlayIntent(
+            context: Context,
+            bookUrl: String? = null,
+            inBookshelf: Boolean = true,
+        ): Intent = MainIntent.createAudioPlayIntent(
+            context = context,
+            bookUrl = bookUrl,
+            inBookshelf = inBookshelf,
+        )
+
         fun createSearchIntent(
             context: Context,
             key: String? = null,
@@ -140,6 +246,44 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         ): Intent =
             MainIntent.createBookInfoIntent(context, name, author, bookUrl, origin, coverPath)
 
+        fun createBookCharacterDetailIntent(
+            context: Context,
+            bookUrl: String,
+            characterId: String? = null,
+        ): Intent = MainIntent.createBookCharacterDetailIntent(context, bookUrl, characterId)
+
+        fun createBookCharacterNetworkIntent(
+            context: Context,
+            bookUrl: String,
+        ): Intent = MainIntent.createBookCharacterNetworkIntent(context, bookUrl)
+
+        fun createBookKnowledgeListIntent(
+            context: Context,
+            bookUrl: String,
+        ): Intent = MainIntent.createBookKnowledgeListIntent(context, bookUrl)
+
+        fun createBookCharacterListIntent(
+            context: Context,
+            bookUrl: String,
+        ): Intent = MainIntent.createBookCharacterListIntent(context, bookUrl)
+
+        fun createBookKnowledgeDetailIntent(
+            context: Context,
+            bookUrl: String,
+            entryId: String? = null,
+        ): Intent = MainIntent.createBookKnowledgeDetailIntent(context, bookUrl, entryId)
+
+        fun createBookEventListIntent(
+            context: Context,
+            bookUrl: String,
+        ): Intent = MainIntent.createBookEventListIntent(context, bookUrl)
+
+        fun createBookEventDetailIntent(
+            context: Context,
+            bookUrl: String,
+            eventId: String? = null,
+        ): Intent = MainIntent.createBookEventDetailIntent(context, bookUrl, eventId)
+
         fun createExploreShowIntent(
             context: Context,
             exploreName: String? = null,
@@ -149,13 +293,26 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
     }
 
     private val viewModel by viewModel<MainViewModel>()
-    private val routeEvents = MutableSharedFlow<NavKey>(extraBufferCapacity = 1)
-    private var bookInfoVariableSetter: ((String, String?) -> Unit)? = null
+    private val otherSettingsGateway by inject<OtherSettingsGateway>()
+    private val mangaSettingsGateway by inject<MangaSettingsGateway>()
+    private val backupSettingsGateway by inject<BackupSettingsGateway>()
+    private val readAloudSettingsRepository by inject<ReadAloudSettingsRepository>()
+    private val navRouteTracker by inject<MainNavRouteTracker>()
+    private val routeEvents = MutableSharedFlow<RouteEvent>(extraBufferCapacity = 1)
+    private val localNetworkPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            WebService.startForeground(this)
+        } else {
+            toastOnUi(R.string.web_service_local_network_permission_denied)
+        }
+    }
     private var shouldApplyDefaultToRead = true
     private var restoredReadBookRoute: MainRouteReadBook? = null
-    private var latestBackStack: List<NavKey> = emptyList()
     internal var activeReadBookInputHandler: ReadBookInputHandler? = null
     internal var activeReadBookRoute: MainRouteReadBook? = null
+    internal var activeMangaKeyHandler: ((Int) -> Boolean)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -164,33 +321,60 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         super.onCreate(savedInstanceState)
 
         if (checkStartupRoute()) return
+        val shouldAutoCheckUpdate = startupUpdateCheckGate.consume(
+            otherSettingsGateway.currentSettings.autoCheckUpdateOnStart
+        )
 
-        // 智能自启：如果上次是手动开启状态（web_service_auto 为 true），则自启
-        if (AppConfig.webServiceAutoStart) {
-            WebService.startForeground(this)
+        // 智能自启：如果上次是手动开启状态（web_service_auto 为 true），则自启；
+        // 本地网络权限缺失时先申请，磁贴等入口也通过该 extra 转发到这里。
+        val requestWebService = otherSettingsGateway.currentSettings.webServiceAutoStart ||
+                intent?.getBooleanExtra(MainIntent.EXTRA_WEB_SERVICE_LOCAL_NETWORK, false) == true
+        if (requestWebService) {
+            startWebServiceWithLocalNetworkPermission()
         }
 
         lifecycleScope.launch {
             //版本更新
             upVersion()
-            //设置本地密码
-            notifyAppCrash()
             //备份同步
             backupSync()
             //自动更新书籍
             val isAutoRefreshedBook = savedInstanceState?.getBoolean("isAutoRefreshedBook") ?: false
-            if (AppConfig.autoRefreshBook && !isAutoRefreshedBook) {
+            if (otherSettingsGateway.currentSettings.autoRefresh && !isAutoRefreshedBook) {
                 viewModel.upAllBookToc()
             }
-            viewModel.postLoad()
+            if (shouldAutoCheckUpdate) {
+                checkUpdateOnStart()
+            }
+        }
+    }
+
+    /**
+     * Android 17 (API 37) 起 Web 服务需要本地网络权限才能接受局域网入站连接。
+     * 已授予直接启动；未授予先申请，授予后由 launcher 回调补启。
+     */
+    private fun startWebServiceWithLocalNetworkPermission() {
+        if (WebService.hasLocalNetworkPermission(this)) {
+            WebService.startForeground(this)
+        } else {
+            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra(MainIntent.EXTRA_WEB_SERVICE_LOCAL_NETWORK, false)) {
+            startWebServiceWithLocalNetworkPermission()
+            return
+        }
         if (!intent.hasExplicitStartRoute()) return
-        routeEvents.tryEmit(MainNavigator.resolveStartRoute(intent))
+        routeEvents.tryEmit(
+            RouteEvent(
+                route = MainNavigator.resolveStartRoute(intent),
+                resetToHome = MainIntent.shouldOpenRouteWithHomeParent(intent),
+            )
+        )
     }
 
     @OptIn(ExperimentalSharedTransitionApi::class)
@@ -198,7 +382,19 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
     override fun Content() {
         val orientation = resources.configuration.orientation
         val smallestWidthDp = resources.configuration.smallestScreenWidthDp
-        val tabletInterface = ThemeConfig.tabletInterface
+        val configuration = LocalAppUiConfiguration.current
+        val tabletInterface = configuration.appShell.tabletInterface
+        val defaultToReadFlow = remember(otherSettingsGateway) {
+            otherSettingsGateway.settings
+                .map { it.defaultToRead }
+                .distinctUntilChanged()
+        }
+        val defaultToRead by defaultToReadFlow.collectAsStateWithLifecycle(
+            otherSettingsGateway.currentSettings.defaultToRead,
+        )
+        val mangaSettings by mangaSettingsGateway.settings.collectAsStateWithLifecycle(
+            mangaSettingsGateway.currentSettings,
+        )
 
         val useRail = when (tabletInterface) {
             "always" -> true
@@ -208,110 +404,211 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
             else -> false
         }
 
-        val startRoutes = remember {
+        val startRoutes = remember(defaultToRead) {
             val resolved = MainNavigator.resolveStartRoute(intent)
             val hasExplicitStartRoute = intent?.hasExplicitStartRoute() == true
             when {
+                MainIntent.shouldOpenRouteWithHomeParent(intent) -> {
+                    if (resolved == MainRouteHome) {
+                        arrayOf(MainRouteHome)
+                    } else {
+                        arrayOf(MainRouteHome, resolved)
+                    }
+                }
                 !hasExplicitStartRoute && restoredReadBookRoute != null -> {
                     arrayOf(MainRouteHome, restoredReadBookRoute!!)
                 }
-                shouldApplyDefaultToRead && OtherConfig.defaultToRead && resolved == MainRouteHome -> {
+                shouldApplyDefaultToRead &&
+                        defaultToRead &&
+                        resolved == MainRouteHome -> {
                     arrayOf(MainRouteHome, MainRouteReadBook())
+                }
+                resolved is MainRouteSourceLogin -> {
+                    arrayOf(MainRouteHome, resolved)
                 }
                 else -> {
                     arrayOf(resolved)
                 }
             }
         }
-        latestBackStack = startRoutes.toList()
         val backStack = rememberNavBackStack(*startRoutes)
+        SideEffect { navRouteTracker.onBackStackChanged(backStack) }
+
+        // 悬浮胶囊是全局叠层：数据来自全局朗读会话与设置，不依赖阅读器是否在栈上。
+        val pageShellPlayerViewModel: ReadAloudPlayerViewModel =
+            org.koin.compose.koinInject()
+        val pageShellPlayerState by pageShellPlayerViewModel.uiState.collectAsStateWithLifecycle()
+        val pageShellAloudSettings by pageShellPlayerViewModel.readAloudSettings
+            .collectAsStateWithLifecycle()
+        val pageShellShowCapsule = pageShellAloudSettings.showReadAloudCapsule
+        val pageShellCapsuleScope = rememberCoroutineScope()
 
         SideEffect {
             shouldApplyDefaultToRead = false
         }
 
         LaunchedEffect(backStack) {
-            routeEvents.collect { route ->
-                MainNavigator.navigateToRoute(backStack, route)
+            routeEvents.collect { event ->
+                MainNavigator.navigateToRoute(
+                    backStack = backStack,
+                    route = event.route,
+                    tracker = navRouteTracker,
+                    resetToHome = event.resetToHome,
+                )
             }
         }
 
         LaunchedEffect(backStack) {
             snapshotFlow { backStack.toList() }
                 .collect {
-                    latestBackStack = it
+                    // 兜底同步：预测性返回、系统返回手势等不经过 navigateToRoute/navigateBack 的路径
+                    navRouteTracker.onBackStackChanged(it)
                     MainNavigator.onBackStackChanged()
                 }
         }
+        // 全局朗读胶囊据此判断听书页是否在最上层
+        val navBackStack by navRouteTracker.backStack.collectAsStateWithLifecycle()
+        val currentRoute = navBackStack.lastOrNull()
 
         SharedTransitionLayout {
-            NavDisplay(
-                backStack = backStack,
-                entryDecorators = listOf(
-                    rememberSaveableStateHolderNavEntryDecorator(),
-                    rememberViewModelStoreNavEntryDecorator(),
-                ),
-                sceneStrategies = listOf(SinglePaneSceneStrategy()),
-                transitionSpec = {
-                    (slideIntoContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
-                        initialOffset = { fullWidth -> fullWidth }
-                    ) + fadeIn(
-                        animationSpec = tween(
-                            durationMillis = 360,
-                            easing = LinearOutSlowInEasing
+            // 启动验证做成单独的 screen：门槛未过时完全不组合应用界面，
+            // 因此验证页背后看不到书架/阅读界面，也没有可交互的入口
+            PrivateAppStartGate {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    NavDisplay(
+                        backStack = backStack,
+                        entryDecorators = listOf(
+                            rememberSaveableStateHolderNavEntryDecorator(),
+                            rememberViewModelStoreNavEntryDecorator(),
+                        ),
+                        sceneStrategies = listOf(
+                            ModalOverlaySceneStrategy(),
+                            SinglePaneSceneStrategy(),
+                        ),
+                        transitionSpec = {
+                            (slideIntoContainer(
+                                towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                                animationSpec = tween(
+                                    durationMillis = 480,
+                                    easing = FastOutSlowInEasing
+                                ),
+                                initialOffset = { fullWidth -> fullWidth }
+                            ) + fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = 360,
+                                    easing = LinearOutSlowInEasing
+                                )
+                            )) togetherWith (slideOutOfContainer(
+                                towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                                animationSpec = tween(
+                                    durationMillis = 480,
+                                    easing = FastOutSlowInEasing
+                                ),
+                                targetOffset = { fullWidth -> fullWidth / 4 }
+                            ) + fadeOut(
+                                animationSpec = tween(
+                                    durationMillis = 360,
+                                    easing = LinearOutSlowInEasing
+                                )
+                            ))
+                        },
+                        popTransitionSpec = {
+                            (slideIntoContainer(
+                                towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                                animationSpec = tween(
+                                    durationMillis = 480,
+                                    easing = FastOutSlowInEasing
+                                ),
+                                initialOffset = { fullWidth -> -fullWidth / 4 }
+                            ) + fadeIn(
+                                animationSpec = tween(
+                                    durationMillis = 360,
+                                    easing = LinearOutSlowInEasing
+                                )
+                            )) togetherWith (scaleOut(
+                                targetScale = 0.8f,
+                                animationSpec = tween(
+                                    durationMillis = 480,
+                                    easing = FastOutSlowInEasing
+                                )
+                            ) + fadeOut(animationSpec = tween(durationMillis = 360)))
+                        },
+                        predictivePopTransitionSpec = { _ ->
+                            (slideIntoContainer(
+                                towards = AnimatedContentTransitionScope.SlideDirection.Start,
+                                animationSpec = tween(easing = FastOutSlowInEasing),
+                                initialOffset = { fullWidth -> -fullWidth / 4 }
+                            ) + fadeIn(animationSpec = tween(easing = LinearOutSlowInEasing))) togetherWith (scaleOut(
+                                targetScale = 0.8f,
+                                animationSpec = tween(easing = FastOutSlowInEasing)
+                            ) + fadeOut(animationSpec = tween()))
+                        },
+                        onBack = { MainNavigator.navigateBack(this@MainActivity, backStack) },
+                        entryProvider = mainEntryProvider(
+                            backStack = backStack,
+                            configuration = configuration,
+                            showMangaUi = mangaSettings.showMangaUi,
+                            useRail = useRail,
+                            sharedTransitionScope = this@SharedTransitionLayout,
+                            onNavigateToRoute = { route ->
+                                MainNavigator.navigateToRoute(
+                                    backStack,
+                                    route,
+                                    navRouteTracker,
+                                )
+                            },
+                            onNavigateBack = {
+                                MainNavigator.navigateBack(
+                                    this@MainActivity,
+                                    backStack,
+                                    navRouteTracker
+                                )
+                            },
                         )
-                    )) togetherWith (slideOutOfContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
-                        targetOffset = { fullWidth -> fullWidth / 4 }
-                    ) + fadeOut(
-                        animationSpec = tween(
-                            durationMillis = 360,
-                            easing = LinearOutSlowInEasing
-                        )
-                    ))
+                    )
+                    // 朗读悬浮胶囊叠在整个导航之上：阅读器只是其中一个目的地，
+                    // 挂在阅读器里会导致离开阅读界面后胶囊消失。
+                    ReadAloudShellHost(
+                        playerState = pageShellPlayerState,
+                        showCapsule = pageShellShowCapsule,
+                        hidden = currentRoute is MainRouteReadAloudPlayer,
+                        onIntent = pageShellPlayerViewModel::onIntent,
+                        onCapsulePositionChanged = { x, y ->
+                            pageShellCapsuleScope.launch {
+                                readAloudSettingsRepository.putCapsulePosition(x, y)
+                            }
+                        },
+                        onOpenPlayer = {
+                            MainNavigator.navigateToRoute(
+                                backStack,
+                                MainRouteReadAloudPlayer,
+                                navRouteTracker
+                            )
+                        },
+                    )
+                }
+                BackHandler(
+                    enabled = !configuration.appShell.predictiveBackEnabled
+                ) {
+                    MainNavigator.navigateBack(this@MainActivity, backStack)
+                }
+            }
+        }
+        TextSheetHost()
+    }
+
+    @Composable
+    private fun TextSheetHost() {
+        val sheet by textSheetFlow.collectAsStateWithLifecycle()
+        sheet?.let { data ->
+            MarkdownSheet(
+                show = true,
+                title = data.title,
+                content = data.content,
+                onDismissRequest = {
+                    textSheetFlow.value = null
+                    data.onDismiss?.invoke()
                 },
-                popTransitionSpec = {
-                    (slideIntoContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
-                        initialOffset = { fullWidth -> -fullWidth / 4 }
-                    ) + fadeIn(
-                        animationSpec = tween(
-                            durationMillis = 360,
-                            easing = LinearOutSlowInEasing
-                        )
-                    )) togetherWith (scaleOut(
-                        targetScale = 0.8f,
-                        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(durationMillis = 360)))
-                },
-                predictivePopTransitionSpec = { _ ->
-                    (slideIntoContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(easing = FastOutSlowInEasing),
-                        initialOffset = { fullWidth -> -fullWidth / 4 }
-                    ) + fadeIn(animationSpec = tween(easing = LinearOutSlowInEasing))) togetherWith (scaleOut(
-                        targetScale = 0.8f,
-                        animationSpec = tween(easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween()))
-                },
-                onBack = { MainNavigator.navigateBack(this@MainActivity, backStack) },
-                entryProvider = mainEntryProvider(
-                    backStack = backStack,
-                    useRail = useRail,
-                    sharedTransitionScope = this@SharedTransitionLayout,
-                    onNavigateToRoute = { route ->
-                        MainNavigator.navigateToRoute(
-                            backStack,
-                            route
-                        )
-                    },
-                    onNavigateBack = { MainNavigator.navigateBack(this@MainActivity, backStack) },
-                    onRegisterVariableSetter = { setter -> bookInfoVariableSetter = setter }
-                )
             )
         }
     }
@@ -327,6 +624,13 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         }
     }
 
+    private fun checkUpdateOnStart() {
+        AppUpdateGitHub.check(lifecycleScope)
+            .onSuccess { updateInfo ->
+                showDialogFragment(UpdateDialog(updateInfo))
+            }
+    }
+
     /**
      * 版本更新日志
      */
@@ -336,13 +640,6 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
             return@suspendCoroutine
         }
         LocalConfig.versionCode = appInfo.versionCode
-        if (LocalConfig.isFirstOpenApp) {
-            val help = String(assets.open("web/help/md/appHelp.md").readBytes())
-            val dialog = TextDialog(getString(R.string.help), help, TextDialog.Mode.MD)
-            dialog.setOnDismissListener { block.resume(null) }
-            showDialogFragment(dialog)
-            return@suspendCoroutine
-        }
         if (!BuildConfig.DEBUG) {
             lifecycleScope.launch {
                 try {
@@ -352,17 +649,11 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
                         dialog.setOnDismissListener { block.resume(null) }
                         showDialogFragment(dialog)
                     } else {
-                        val fallback = String(assets.open("updateLog.md").readBytes())
-                        val dialog = TextDialog(getString(R.string.update_log), fallback, TextDialog.Mode.MD)
-                        dialog.setOnDismissListener { block.resume(null) }
-                        showDialogFragment(dialog)
+                        block.resume(null)
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
-                    val fallback = String(assets.open("updateLog.md").readBytes())
-                    val dialog = TextDialog(getString(R.string.update_log), fallback, TextDialog.Mode.MD)
-                    dialog.setOnDismissListener { block.resume(null) }
-                    showDialogFragment(dialog)
+                    block.resume(null)
                 }
             }
         } else {
@@ -370,24 +661,11 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         }
     }
 
-    private fun notifyAppCrash() {
-        if (!LocalConfig.appCrash || BuildConfig.DEBUG) {
-            return
-        }
-        LocalConfig.appCrash = false
-        alert(getString(R.string.draw), "检测到阅读发生了崩溃，是否打开崩溃日志以便报告问题？") {
-            yesButton {
-                showDialogFragment<CrashLogsDialog>()
-            }
-            noButton()
-        }
-    }
-
     /**
      * 备份同步
      */
     private fun backupSync() {
-        if (!AppConfig.autoCheckNewBackup) {
+        if (!backupSettingsGateway.currentSettings.autoCheckNewBackup) {
             return
         }
         lifecycleScope.launch {
@@ -412,10 +690,10 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        if (AppConfig.autoRefreshBook) {
+        if (otherSettingsGateway.currentSettings.autoRefresh) {
             outState.putBoolean("isAutoRefreshedBook", true)
         }
-        val readRoute = latestBackStack.lastOrNull() as? MainRouteReadBook
+        val readRoute = navRouteTracker.backStack.value.lastOrNull() as? MainRouteReadBook
             ?: activeReadBookRoute
         if (readRoute != null) {
             outState.putBoolean(KEY_RESTORE_READ_ROUTE, true)
@@ -477,6 +755,7 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (activeMangaKeyHandler?.invoke(keyCode) == true) return true
         if (activeReadBookInputHandler?.onKeyDown(keyCode, event) == true) return true
         return super.onKeyDown(keyCode, event)
     }
@@ -484,6 +763,15 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (activeReadBookInputHandler?.onKeyUp(keyCode, event) == true) return true
         return super.onKeyUp(keyCode, event)
+    }
+
+    override fun setupSystemBar() {
+        val host = activeReadBookInputHandler as? ReadBookRouteHost
+        if (host != null) {
+            host.upSystemUiVisibility()
+        } else {
+            super.setupSystemBar()
+        }
     }
 
     override fun onDestroy() {
@@ -496,11 +784,27 @@ open class MainActivity : BaseComposeActivity(), VariableDialog.Callback {
         }
     }
 
-    override fun setVariable(key: String, variable: String?) {
-        bookInfoVariableSetter?.invoke(key, variable)
+    // ===== AudioPlay.CallBack（有声书播放器路由注册，转发加载状态给当前播放器）=====
+
+    override fun upLoading(loading: Boolean) {
+        activeAudioPlayViewModel?.onLoadingChanged(loading)
+    }
+
+    override fun upLyric(lyric: String?) {
+        activeAudioPlayViewModel?.onLyricChanged()
+    }
+
+    override fun upLyricP(position: Int) {
+        // 歌词暂不在界面展示
     }
 
 }
+
+data class TextSheetData(
+    val title: String,
+    val content: String,
+    val onDismiss: (() -> Unit)? = null,
+)
 
 class LauncherW : MainActivity()
 class Launcher1 : MainActivity()

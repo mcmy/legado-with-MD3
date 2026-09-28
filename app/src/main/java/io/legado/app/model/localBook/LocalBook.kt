@@ -18,6 +18,9 @@ import io.legado.app.exception.EmptyFileException
 import io.legado.app.exception.NoBooksDirException
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.exception.TocEmptyException
+import io.legado.app.domain.gateway.ImportBookSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
@@ -36,12 +39,10 @@ import io.legado.app.help.book.isUmd
 import io.legado.app.help.book.removeLocalUriCache
 import io.legado.app.help.book.simulatedTotalChapterNum
 import io.legado.app.help.book.upKind
-import io.legado.app.help.config.AppConfig
 import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.analyzeRule.CustomUrl
-import io.legado.app.ui.config.otherConfig.OtherConfig
 import io.legado.app.utils.ArchiveUtils
 import io.legado.app.utils.FileDoc
 import io.legado.app.utils.FileUtils
@@ -58,6 +59,7 @@ import io.legado.app.utils.printOnDebug
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.text.StringEscapeUtils
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -65,7 +67,6 @@ import java.io.FileInputStream
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.util.regex.Pattern
 
 /**
  * 书籍文件导入 目录正文解析
@@ -73,11 +74,15 @@ import java.util.regex.Pattern
  */
 object LocalBook {
 
+    private val otherSettingsGateway get() = GlobalContext.get().get<OtherSettingsGateway>()
+    private val readSettingsGateway get() = GlobalContext.get().get<ReadSettingsGateway>()
+    private val importBookSettingsGateway get() = GlobalContext.get().get<ImportBookSettingsGateway>()
+
     private val nameAuthorPatterns = arrayOf(
-        Pattern.compile("(.*?)《([^《》]+)》.*?作者：(.*)"),
-        Pattern.compile("(.*?)《([^《》]+)》(.*)"),
-        Pattern.compile("(^)(.+) 作者：(.+)$"),
-        Pattern.compile("(^)(.+) by (.+)$")
+        Regex("(.*?)《([^《》]+)》.*?作者：(.*)"),
+        Regex("(.*?)《([^《》]+)》(.*)"),
+        Regex("(^)(.+) 作者：(.+)$"),
+        Regex("(^)(.+) by (.+)$")
     )
 
     @Throws(FileNotFoundException::class, SecurityException::class)
@@ -156,10 +161,18 @@ object LocalBook {
         }
         val replaceRules = ContentProcessor.get(book).getTitleReplaceRules()
         book.durChapterTitle = list.getOrElse(book.durChapterIndex) { list.last() }
-            .getDisplayTitle(replaceRules, book.getUseReplaceRule())
+            .getDisplayTitle(
+                replaceRules,
+                book.getUseReplaceRule(otherSettingsGateway.currentSettings.replaceEnableDefault),
+                chineseConverterType = readSettingsGateway.currentSettings.chineseConverterType,
+            )
         book.latestChapterTitle =
             list.getOrElse(book.simulatedTotalChapterNum() - 1) { list.last() }
-                .getDisplayTitle(replaceRules, book.getUseReplaceRule())
+                .getDisplayTitle(
+                    replaceRules,
+                    book.getUseReplaceRule(otherSettingsGateway.currentSettings.replaceEnableDefault),
+                    chineseConverterType = readSettingsGateway.currentSettings.chineseConverterType,
+                )
         book.totalChapterNum = list.size
         book.latestChapterTime = System.currentTimeMillis()
         return list
@@ -233,6 +246,8 @@ object LocalBook {
      * 导入本地文件
      */
     fun importFile(uri: Uri): Book {
+        val input = FileDoc.fromUri(uri, false)
+        if (input.isDir) return importMangaDirectory(input)
         val bookUrl: String
         //updateTime变量不要修改,否则会导致读取不到缓存
         val (fileName, _, _, updateTime, _) = FileDoc.fromUri(uri, false).apply {
@@ -262,6 +277,32 @@ object LocalBook {
             // 触发 isLocalModified
             book.latestChapterTime = 0
             //已有书籍说明是更新,删除原有目录
+            appDb.bookChapterDao.delByBook(bookUrl)
+            appDb.bookDao.update(book)
+        }
+        return book
+    }
+
+    fun importMangaDirectory(directory: FileDoc): Book {
+        require(directory.isDir) { "Expected a directory" }
+        val bookUrl = directory.toString()
+        val existing = appDb.bookDao.getBook(bookUrl)
+        val book = existing ?: Book(
+            type = BookType.local or BookType.image,
+            bookUrl = bookUrl,
+            name = directory.name,
+            author = "",
+            originName = directory.name,
+            origin = BookType.localTag,
+            latestChapterTime = directory.lastModified,
+            order = appDb.bookDao.minOrder - 1,
+        )
+        book.type = BookType.local or BookType.image
+        book.origin = BookType.localTag
+        book.originName = directory.name
+        book.latestChapterTime = directory.lastModified
+        book.upKind()
+        if (existing == null) appDb.bookDao.insert(book) else {
             appDb.bookChapterDao.delByBook(bookUrl)
             appDb.bookDao.update(book)
         }
@@ -306,11 +347,21 @@ object LocalBook {
         val books = mutableListOf<Book>()
         val fileDoc = FileDoc.fromUri(uri, false)
         if (ArchiveUtils.isArchive(fileDoc.name)) {
-            books.addAll(
-                importArchiveFile(uri) {
-                    it.matches(AppPattern.bookFileRegex)
+            val entries = ArchiveUtils.getArchiveFilesName(fileDoc)
+            val isComicArchive = entries.any { entry ->
+                entry.substringAfterLast('.', "").lowercase() in
+                        setOf("jpg", "jpeg", "png", "webp", "gif", "avif", "bmp")
+            }
+            if (isComicArchive) {
+                books += importFile(uri).apply {
+                    type = BookType.local or BookType.image or BookType.archive
+                    origin = BookType.localTag
+                    upKind()
+                    save()
                 }
-            )
+            } else {
+                books.addAll(importArchiveFile(uri) { it.matches(AppPattern.bookFileRegex) })
+            }
         } else {
             books.add(importFile(uri))
         }
@@ -322,13 +373,7 @@ object LocalBook {
         uris.forEach { uri ->
             val fileDoc = FileDoc.fromUri(uri, false)
             kotlin.runCatching {
-                if (ArchiveUtils.isArchive(fileDoc.name)) {
-                    importArchiveFile(uri) {
-                        it.matches(AppPattern.bookFileRegex)
-                    }
-                } else {
-                    importFile(uri)
-                }
+                importFiles(uri)
             }.onFailure {
                 AppLog.put("ImportFile Error:\nFile $fileDoc\n${it.localizedMessage}", it)
                 errorCount += 1
@@ -346,11 +391,11 @@ object LocalBook {
         val tempFileName = fileName.substringBeforeLast(".")
         var name = ""
         var author = ""
-        if (!AppConfig.bookImportFileName.isNullOrBlank()) {
+        if (!importBookSettingsGateway.currentSettings.bookImportFileName.isNullOrBlank()) {
             try {
                 //在用户脚本后添加捕获author、name的代码，只要脚本中author、name有值就会被捕获
                 val js =
-                    AppConfig.bookImportFileName + "\nJSON.stringify({author:author,name:name})"
+                    importBookSettingsGateway.currentSettings.bookImportFileName + "\nJSON.stringify({author:author,name:name})"
                 //在脚本中定义如何分解文件名成书名、作者名
                 val jsonStr = RhinoScriptEngine.run {
                     val bindings = ScriptBindings()
@@ -367,10 +412,10 @@ object LocalBook {
         }
         if (name.isBlank()) {
             for (pattern in nameAuthorPatterns) {
-                pattern.matcher(tempFileName).takeIf { it.find() }?.run {
-                    name = group(2)!!
-                    val group1 = group(1) ?: ""
-                    val group3 = group(3) ?: ""
+                pattern.find(tempFileName)?.let { m ->
+                    name = m.groupValues[2]
+                    val group1 = m.groupValues[1]
+                    val group3 = m.groupValues[3]
                     author = BookHelp.formatBookAuthor(group1 + group3)
                     return Pair(name, author)
                 }
@@ -407,7 +452,7 @@ object LocalBook {
         fileName: String,
         source: BaseSource? = null,
     ): Uri {
-        OtherConfig.defaultBookTreeUri
+        otherSettingsGateway.currentSettings.defaultBookTreeUri
             ?: throw NoBooksDirException()
         val inputStream = when {
             str.isAbsUrl() -> AnalyzeUrl(
@@ -433,7 +478,7 @@ object LocalBook {
         fileName: String
     ): Uri {
         inputStream.use {
-            val defaultBookTreeUri = OtherConfig.defaultBookTreeUri
+            val defaultBookTreeUri = otherSettingsGateway.currentSettings.defaultBookTreeUri
             if (defaultBookTreeUri.isNullOrBlank()) throw NoBooksDirException()
             val treeUri = defaultBookTreeUri.toUri()
             return if (treeUri.isContentScheme()) {
@@ -487,7 +532,7 @@ object LocalBook {
         val webDavUrl = localBook.getRemoteUrl()
         if (webDavUrl.isNullOrBlank()) throw NoStackTraceException("Book file is not webDav File")
         try {
-            OtherConfig.defaultBookTreeUri
+            otherSettingsGateway.currentSettings.defaultBookTreeUri
                 ?: throw NoBooksDirException()
             // 兼容旧版链接
             val webdav: WebDav = kotlin.runCatching {

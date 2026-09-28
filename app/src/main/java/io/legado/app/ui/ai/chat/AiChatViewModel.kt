@@ -373,7 +373,7 @@ class AiChatViewModel(
                                 reasoning = fullReasoning.toString(),
                                 toolTrace = toolTrace
                             ),
-                            parentMessageId = message.parentMessageId!!,
+                            parentMessageId = message.parentMessageId,
                             thinkingDuration = duration
                         )
                     }
@@ -482,7 +482,7 @@ class AiChatViewModel(
                         )
                     }
                     // Generate AI title for first conversation
-                    if (conversationIdForMsg != null && historySnapshot.none { it.role == AiMessageRole.ASSISTANT }) {
+                    if (historySnapshot.none { it.role == AiMessageRole.ASSISTANT }) {
                         generateConversationTitle(conversationIdForMsg, content, assistantContent)
                     }
                 }

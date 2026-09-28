@@ -3,7 +3,6 @@ package io.legado.app.data.repository.ai
 import androidx.annotation.Keep
 import io.legado.app.domain.gateway.AiStreamEvent
 import io.legado.app.domain.model.AiAvailableModel
-import io.legado.app.domain.model.AiCapability
 import io.legado.app.domain.model.AiGenerateRequest
 import io.legado.app.domain.model.AiGenerateResponse
 import io.legado.app.domain.model.AiMessage
@@ -11,10 +10,8 @@ import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiProtocol
 import io.legado.app.domain.model.AiProviderConfig
 import io.legado.app.domain.model.AiReasoningLevel
-import io.legado.app.domain.model.AiToolCall
 import io.legado.app.domain.model.AiToolDefinition
 import io.legado.app.help.http.addHeaders
-import io.legado.app.help.http.await
 import io.legado.app.help.http.newCallResponse
 import io.legado.app.help.http.newCallStrResponse
 import io.legado.app.help.http.okHttpClient
@@ -22,7 +19,6 @@ import io.legado.app.help.http.postJson
 import io.legado.app.utils.GSON
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Response
 
 class OpenAiChatHandler : AiProtocolHandler {
 
@@ -60,12 +56,15 @@ class OpenAiChatHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities) && params.reasoningLevel != AiReasoningLevel.AUTO) {
-            body["reasoning_effort"] = params.reasoningLevel.toOpenAiEffort()
+        if (hasReasoningCapability(request.model.capabilities)) {
+            params.reasoningLevel.effortFor(provider)?.let {
+                body["reasoning_effort"] = it
+            }
         }
+        body.applyZhipuThinking(provider, request.model.modelId, params.reasoningLevel)
 
         return retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            val response = okHttpClient.newCallStrResponse {
+            val response = aiOkHttpClient.newCallStrResponse {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
@@ -79,8 +78,12 @@ class OpenAiChatHandler : AiProtocolHandler {
                 throw Exception("HTTP ${response.code()}: ${response.message()}")
             }
             val json = GSON.fromJson(response.body, OpenAiChatResponse::class.java)
-            val text = json?.choices?.firstOrNull()?.message?.content
+            val message = json?.choices?.firstOrNull()?.message
+            val text = message?.content
             if (text.isNullOrBlank()) {
+                if (!message?.reasoningContent.isNullOrBlank()) {
+                    throw Exception("AI response contains only reasoning content; disable thinking for this model")
+                }
                 throw Exception("Empty AI response")
             } else {
                 AiGenerateResponse(text = text, rawBody = response.body)
@@ -107,14 +110,17 @@ class OpenAiChatHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities) && params.reasoningLevel != AiReasoningLevel.AUTO) {
-            body["reasoning_effort"] = params.reasoningLevel.toOpenAiEffort()
+        if (hasReasoningCapability(request.model.capabilities)) {
+            params.reasoningLevel.effortFor(provider)?.let {
+                body["reasoning_effort"] = it
+            }
         }
+        body.applyZhipuThinking(provider, request.model.modelId, params.reasoningLevel)
 
         // For streaming, we retry before establishing the SSE connection.
         // Once streaming starts, errors are not retried (partial output would be confusing).
         val response = retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            okHttpClient.newCallResponse {
+            aiOkHttpClient.newCallResponse {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
@@ -190,6 +196,34 @@ class OpenAiChatHandler : AiProtocolHandler {
         }
     }
 }
+
+/**
+ * GLM models on Zhipu's Chat Completions API enable thinking by default.
+ * Send the documented object form even when the model was added manually and
+ * therefore has no reasoning capability metadata.
+ */
+internal fun MutableMap<String, Any?>.applyZhipuThinking(
+    provider: AiProviderConfig,
+    modelId: String,
+    reasoningLevel: AiReasoningLevel
+) {
+    val identity = "${provider.id} ${provider.name} ${provider.baseUrl}".lowercase()
+    val isZhipuProvider = "zhipu" in identity || "bigmodel" in identity
+    val isGlmModel = modelId.lowercase().startsWith("glm-")
+    if (!isZhipuProvider && !isGlmModel) return
+    // GLM-5.3 系列官方标注为强制思考，thinking.type=disabled 会被拒绝；想关只能不发这个参数。
+    if (reasoningLevel == AiReasoningLevel.OFF && isAlwaysThinkingGlm(modelId)) return
+    this["thinking"] = mapOf(
+        "type" to if (reasoningLevel == AiReasoningLevel.OFF) "disabled" else "enabled"
+    )
+}
+
+/**
+ * GLM-5.3 / GLM-5.3-Flash 强制思考，无法通过 thinking.type 关闭（z.ai 文档），
+ * 对这些模型发 disabled 只会换回一个错误响应。
+ */
+internal fun isAlwaysThinkingGlm(modelId: String): Boolean =
+    modelId.lowercase().startsWith("glm-5.3")
 
 // ---- Message & tool format converters ----
 
@@ -274,8 +308,13 @@ internal data class OpenAiChatChoice(
 
 @Keep
 internal data class OpenAiChatMessage(
-    val content: String?
-)
+    val content: String?,
+    val reasoning_content: String?,
+    val reasoning: String?
+) {
+    val reasoningContent: String?
+        get() = reasoning_content ?: reasoning
+}
 
 @Keep
 internal data class OpenAiModelsResponse(

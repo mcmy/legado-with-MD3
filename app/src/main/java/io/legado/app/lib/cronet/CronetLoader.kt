@@ -132,7 +132,7 @@ object CronetLoader : CronetEngine.Builder.LibraryLoader(), Cronet.LoaderInterfa
         } catch (e: Throwable) {
             //如果找不到，则从远程下载
             //删除历史文件
-            deleteHistoryFile(Objects.requireNonNull(soFile.parentFile), soFile)
+            deleteHistoryFile(soFile.parentFile!!, soFile)
             //md5 = getUrlMd5(md5Url)
             DebugLog.d(javaClass.simpleName, "soMD5:$md5")
             if (md5.length != 32 || soUrl.isEmpty()) {

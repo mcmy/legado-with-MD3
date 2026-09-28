@@ -8,12 +8,13 @@ import io.legado.app.R
 import io.legado.app.constant.AppLog.putDebug
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.isEpub
 import io.legado.app.help.book.isMobi
 import io.legado.app.help.book.isPdf
-import io.legado.app.help.config.AppConfig
 import io.legado.app.model.localBook.EpubFile
 import io.legado.app.model.localBook.MobiFile
 import io.legado.app.model.localBook.PdfFile
@@ -23,6 +24,7 @@ import io.legado.app.utils.SvgUtils
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.withContext
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.File
 import java.io.FileOutputStream
@@ -30,9 +32,15 @@ import kotlin.math.min
 
 object ImageProvider {
 
+    private val cacheSettingsGateway get() = GlobalContext.get().get<DownloadCacheSettingsGateway>()
+    private val otherSettingsGateway get() = GlobalContext.get().get<OtherSettingsGateway>()
+
     private val errorBitmap: Bitmap by lazy {
         BitmapFactory.decodeResource(appCtx.resources, R.drawable.image_loading_error)
     }
+
+    /** Lets renderers keep the last good frame when a refreshed file cannot be decoded. */
+    fun isErrorBitmap(bitmap: Bitmap): Boolean = bitmap === errorBitmap
 
     /**
      * 缓存bitmap LruCache实现
@@ -41,10 +49,9 @@ object ImageProvider {
     private const val M = 1024 * 1024
     val cacheSize: Int
         get() {
-            if (AppConfig.bitmapCacheSize !in 1..<2048) {
-                AppConfig.bitmapCacheSize = 50
-            }
-            return AppConfig.bitmapCacheSize * M
+            return cacheSettingsGateway.currentSettings.bitmapCacheSize.takeIf { it in 1..<2048 }
+                ?.times(M)
+                ?: (50 * M)
         }
 
     val bitmapLruCache = BitmapLruCache()
@@ -185,7 +192,7 @@ object ImageProvider {
         height: Int? = null
     ): Bitmap {
         //src为空白时 可能被净化替换掉了 或者规则失效
-        if (book.getUseReplaceRule() && src.isBlank()) {
+        if (book.getUseReplaceRule(otherSettingsGateway.currentSettings.replaceEnableDefault) && src.isBlank()) {
             book.setUseReplaceRule(false)
             appCtx.toastOnUi(R.string.error_image_url_empty)
         }

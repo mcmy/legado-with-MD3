@@ -31,7 +31,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.net.toUri
 import androidx.core.view.size
 import androidx.fragment.app.FragmentManager
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import io.legado.app.R
@@ -41,9 +43,11 @@ import io.legado.app.constant.AppLog
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.databinding.DialogWebViewBinding
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.AppUiConfigurationGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.WebCacheManager
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.http.newCallResponse
 import io.legado.app.help.http.newCallResponseBody
@@ -60,23 +64,29 @@ import io.legado.app.lib.dialogs.SelectItem
 import io.legado.app.lib.dialogs.selector
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.ui.association.OnLineImportActivity
-import io.legado.app.ui.file.HandleFileContract
+import androidx.activity.result.contract.ActivityResultContracts
 import io.legado.app.utils.ACache
 import io.legado.app.utils.GSON
+import io.legado.app.utils.applyDayNight
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.invisible
+import io.legado.app.utils.isNightMode
 import io.legado.app.utils.longSnackbar
 import io.legado.app.utils.openUrl
 import io.legado.app.utils.setLayout
 import io.legado.app.utils.startActivity
+import io.legado.app.utils.sysConfiguration
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.viewbindingdelegate.viewBinding
 import io.legado.app.utils.visible
 import io.legado.app.utils.writeBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Dispatchers.IO
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.koin.android.ext.android.inject
 import java.io.ByteArrayInputStream
 import java.lang.ref.WeakReference
 import java.util.Date
@@ -116,12 +126,25 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
         }
     }
     private val displayMetrics by lazy { resources.displayMetrics }
-    private val selectImageDir = registerForActivityResult(HandleFileContract()) {
-        it.uri?.let { uri ->
-            ACache.get().put(imagePathKey, uri.toString())
-            saveImage(it.value, uri)
+    private val appUiConfigurationGateway by inject<AppUiConfigurationGateway>()
+    private val otherSettingsGateway by inject<OtherSettingsGateway>()
+    private val appShellSettingsGateway by inject<AppShellSettingsGateway>()
+    private val isNightTheme: Boolean
+        get() = when (appShellSettingsGateway.currentSettings.themeMode) {
+            "1" -> false
+            "2" -> true
+            else -> sysConfiguration.isNightMode
         }
-    }
+    private var appliedDarkTheme: Boolean? = null
+    private val selectImageDir =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri != null) {
+                ACache.get().put(imagePathKey, uri.toString())
+                saveImage(pendingSaveImage, uri)
+            }
+        }
+
+    private var pendingSaveImage: String? = null
 
     private lateinit var currentWebView: WebView
     private var source: BaseSource? = null
@@ -373,6 +396,7 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
         super.onViewCreated(view, savedInstanceState)
         view.setBackgroundColor(0)
         binding.webViewContainer.addView(currentWebView)
+        observeAppTheme()
         lifecycleScope.launch(IO) {
             val args = arguments
             if (args == null) {
@@ -502,6 +526,23 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
         currentWebView.loadDataWithBaseURL(url, html, "text/html", "utf-8", url)
     }
 
+    private fun observeAppTheme() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                appUiConfigurationGateway.configuration
+                    .map { it.isDarkTheme }
+                    .distinctUntilChanged()
+                    .collect(::applyWebViewTheme)
+            }
+        }
+    }
+
+    private fun applyWebViewTheme(isDark: Boolean, force: Boolean = false) {
+        if (!force && appliedDarkTheme == isDark) return
+        appliedDarkTheme = isDark
+        currentWebView.applyDayNight(isDark)
+    }
+
     private fun buildSpliceHtml(originalHtml: String): String {
         if (preloadJs.isNullOrEmpty()) return originalHtml
         val headIndex = originalHtml.indexOf("<head", ignoreCase = true)
@@ -544,14 +585,18 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
     }
 
     private fun selectSaveFolder(webPic: String?) {
-        val default = arrayListOf<SelectItem<Int>>()
-        val path = ACache.get().getAsString(imagePathKey)
-        if (!path.isNullOrEmpty()) {
-            default.add(SelectItem(path, -1))
+        val lastPath = ACache.get().getAsString(imagePathKey)
+        val options = buildList {
+            if (!lastPath.isNullOrEmpty()) add(lastPath)
+            add(getString(R.string.sys_folder_picker))
         }
-        selectImageDir.launch {
-            otherActions = default
-            value = webPic
+        requireContext().selector(R.string.select_folder, options) { _, index ->
+            if (!lastPath.isNullOrEmpty() && index == 0) {
+                saveImage(webPic, lastPath.toUri())
+            } else {
+                pendingSaveImage = webPic
+                selectImageDir.launch(null)
+            }
         }
     }
 
@@ -604,7 +649,7 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
         }
     }
 
-    override fun onNavigateToArticles(sortUrl: String?) {
+    override fun onNavigateToArticles(sortUrl: String?, origin: String?) {
     }
 
     @Suppress("unused")
@@ -700,7 +745,7 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
         }
 
         override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
-            if (!AppConfig.recordLog) return false
+            if (!otherSettingsGateway.currentSettings.recordLog) return false
             val source = source ?: return false
             val messageLevel = consoleMessage.messageLevel().name
             val message = consoleMessage.message()
@@ -734,6 +779,11 @@ class BottomWebViewDialog() : BottomSheetDialogFragment(R.layout.dialog_web_view
                 view.evaluateJavascript(basicJs, null)
                 isBasicJsInjected = true
             }
+        }
+
+        override fun onPageFinished(view: WebView?, url: String?) {
+            super.onPageFinished(view, url)
+            applyWebViewTheme(appliedDarkTheme ?: isNightTheme, force = true)
         }
 
         private fun shouldOverrideUrlLoading(url: Uri): Boolean {

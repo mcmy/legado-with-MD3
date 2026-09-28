@@ -104,6 +104,9 @@
         <item>时间及电量</item>
         <item>经典电量及时间</item>
         <item>时间及电量%</item>
+        <item>全文页数</item>
+        <item>全文页数及进度</item>
+        <item>自定义</item>
     </string-array>
 
     <string-array name="text_font_weight">
@@ -210,6 +213,30 @@
     <string-array name="read_slider_mode">
         <item>常驻</item>
         <item>不显示</item>
+    </string-array>
+
+    <string-array name="click_image_way_title">
+        <item>新版行为</item>
+        <item>预览图片</item>
+        <item>经典</item>
+        <item>禁用点击</item>
+        <item>双击</item>
+    </string-array>
+
+    <string-array name="top_bar_button_style">
+        <item>普通</item>
+        <item>填充</item>
+        <item>描边</item>
+        <item>半透明</item>
+        <item>液态玻璃</item>
+    </string-array>
+
+    <string-array name="top_bar_button_style_value">
+        <item>plain</item>
+        <item>tonal</item>
+        <item>outlined</item>
+        <item>glass</item>
+        <item>liquid</item>
     </string-array>
 
     <string-array name="title_bar_mode">

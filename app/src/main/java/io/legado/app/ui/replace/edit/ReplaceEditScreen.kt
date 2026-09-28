@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AssistChip
@@ -35,6 +34,7 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -45,13 +45,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
+import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppFloatingActionButton
 import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
@@ -59,6 +64,7 @@ import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.ToggleChip
 import io.legado.app.ui.widget.components.button.series.MediumPlainButton
 import io.legado.app.ui.widget.components.checkBox.CheckboxItem
+import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.text.AppText
@@ -66,8 +72,7 @@ import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarActionButton
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.Flow
+import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.flow.collectLatest
 import org.koin.androidx.compose.koinViewModel
 
@@ -85,11 +90,13 @@ fun ReplaceEditRouteScreen(
     onSaveSuccess: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
             when (effect) {
                 ReplaceEditEffect.NavigateBack -> onSaveSuccess()
+                is ReplaceEditEffect.ShowMessage -> context.toastOnUi(effect.message)
             }
         }
     }
@@ -112,8 +119,16 @@ fun ReplaceEditScreen(
     var showMenu by remember { mutableStateOf(false) }
     val isKeyboardVisible by keyboardAsState()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    DisposableEffect(Unit) {
+        onDispose {
+            focusManager.clearFocus(force = true)
+            keyboardController?.hide()
+        }
+    }
     val onSave = {
         focusManager.clearFocus(force = true)
+        keyboardController?.hide()
         onIntent(ReplaceEditIntent.Save)
     }
 
@@ -124,7 +139,13 @@ fun ReplaceEditScreen(
             GlassMediumFlexibleTopAppBar(
                 title = stringResource(if (state.id > 0) R.string.edit_replace_rule else R.string.add_replace_rule),
                 navigationIcon = {
-                    TopBarNavigationButton(onClick = onBack)
+                    TopBarNavigationButton(
+                        onClick = {
+                            focusManager.clearFocus(force = true)
+                            keyboardController?.hide()
+                            onBack()
+                        }
+                    )
                 },
                 actions = {
                     AnimatedVisibility(
@@ -140,7 +161,7 @@ fun ReplaceEditScreen(
                     }
                     TopBarActionButton(
                         onClick = { showMenu = true },
-                        imageVector = Icons.Default.MoreVert,
+                        imageVector = AppIcons.MoreVert,
                         contentDescription = stringResource(R.string.more_actions)
                     )
                     RoundDropdownMenu(
@@ -213,6 +234,7 @@ fun ReplaceEditScreen(
                     value = state.name,
                     onValueChange = { onIntent(ReplaceEditIntent.OnNameChange(it)) },
                     label = stringResource(R.string.rule_name),
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
@@ -225,7 +247,8 @@ fun ReplaceEditScreen(
                     currentGroup = state.group,
                     allGroups = state.allGroups,
                     onGroupChange = { onIntent(ReplaceEditIntent.OnGroupChange(it)) },
-                    onManageClick = { onIntent(ReplaceEditIntent.ToggleGroupDialog(true)) }
+                    onManageClick = { onIntent(ReplaceEditIntent.ToggleGroupDialog(true)) },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                 )
 
                 AppTextField(
@@ -233,6 +256,7 @@ fun ReplaceEditScreen(
                     onValueChange = { onIntent(ReplaceEditIntent.OnPatternChange(it)) },
                     label = stringResource(R.string.match_pattern),
                     placeholder = { AppText(stringResource(R.string.input_regex_or_keyword)) },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
@@ -245,6 +269,7 @@ fun ReplaceEditScreen(
                     onValueChange = { onIntent(ReplaceEditIntent.OnReplacementChange(it)) },
                     label = stringResource(R.string.replace_with),
                     placeholder = { AppText(stringResource(R.string.input_replacement_or_group)) },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
@@ -289,6 +314,7 @@ fun ReplaceEditScreen(
                     onValueChange = { onIntent(ReplaceEditIntent.OnScopeChange(it)) },
                     label = stringResource(R.string.specific_scope),
                     placeholder = { AppText(stringResource(R.string.scope_hint)) },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
@@ -301,6 +327,7 @@ fun ReplaceEditScreen(
                     onValueChange = { onIntent(ReplaceEditIntent.OnExcludeScopeChange(it)) },
                     label = stringResource(R.string.exclude_scope),
                     placeholder = { AppText(stringResource(R.string.exclude_scope_hint)) },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged {
@@ -313,6 +340,7 @@ fun ReplaceEditScreen(
                     onValueChange = { onIntent(ReplaceEditIntent.OnTimeoutChange(it)) },
                     label = stringResource(R.string.timeout_ms),
                     placeholder = { AppText("3000") },
+                    backgroundColor = LegadoTheme.colorScheme.surfaceInput,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -337,7 +365,8 @@ fun GroupSelector(
     currentGroup: String,
     allGroups: List<String>,
     onGroupChange: (String) -> Unit,
-    onManageClick: () -> Unit
+    onManageClick: () -> Unit,
+    backgroundColor: Color = Color.Unspecified,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -351,6 +380,7 @@ fun GroupSelector(
                 value = currentGroup,
                 onValueChange = onGroupChange,
                 label = stringResource(R.string.group),
+                backgroundColor = backgroundColor,
                 placeholder = { AppText("默认") },
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 modifier = Modifier
@@ -377,7 +407,8 @@ fun GroupSelector(
         }
         MediumPlainButton(
             onClick = onManageClick,
-            icon = Icons.Default.Settings
+            icon = Icons.Default.Settings,
+            contentDescription = stringResource(R.string.group_management)
         )
     }
 }
@@ -400,7 +431,7 @@ fun ManageGroupDialog(
                 AppText(stringResource(R.string.no_other_groups))
             } else {
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     groups.forEach { group ->
                         val isSelected = selectedGroups.contains(group)

@@ -5,22 +5,28 @@ import androidx.lifecycle.viewModelScope
 import io.legado.app.data.entities.BookSourcePart
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.local.preferences.LocalPreferencesKeys
-import io.legado.app.data.local.preferences.LocalPreferencesRepository
 import io.legado.app.data.repository.SearchRepository
+import io.legado.app.data.repository.SettingsRepository
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
 import io.legado.app.domain.model.BookSearchScope
+import io.legado.app.domain.model.ContentQualityConfig
+import io.legado.app.domain.model.ContentQualityProgress
 import io.legado.app.domain.model.MatchMode
 import io.legado.app.domain.usecase.AddToBookshelfUseCase
 import io.legado.app.domain.usecase.BookSearchControl
 import io.legado.app.domain.usecase.BookSearchRequest
 import io.legado.app.domain.usecase.BookShelfKey
+import io.legado.app.domain.usecase.CheckBookContentQualityUseCase
 import io.legado.app.domain.usecase.ExploreBooksUseCase
 import io.legado.app.domain.usecase.ResolveBookShelfStateUseCase
+import io.legado.app.domain.usecase.ResolveBookshelfConflictUseCase
 import io.legado.app.domain.usecase.SearchBooksUseCase
 import io.legado.app.domain.usecase.SearchRunEvent
-import io.legado.app.ui.config.otherConfig.OtherConfig
+import io.legado.app.ui.book.conflict.BookshelfConflictController
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.persistentSetOf
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.collections.immutable.toImmutableSet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -41,6 +47,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import splitties.init.appCtx
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchViewModel(
@@ -49,10 +56,13 @@ class SearchViewModel(
     private val searchBooksUseCase: SearchBooksUseCase,
     private val exploreBooksUseCase: ExploreBooksUseCase,
     private val addToBookshelfUseCase: AddToBookshelfUseCase,
-    private val localPreferencesRepository: LocalPreferencesRepository,
+    private val resolveBookshelfConflictUseCase: ResolveBookshelfConflictUseCase,
+    private val checkBookContentQualityUseCase: CheckBookContentQualityUseCase,
+    private val localPreferencesRepository: SettingsRepository,
+    private val downloadCacheSettingsGateway: DownloadCacheSettingsGateway,
 ) : ViewModel() {
 
-    val searchLayoutMode = localPreferencesRepository
+    private val searchLayoutMode = localPreferencesRepository
         .getPreference(LocalPreferencesKeys.SEARCH_LAYOUT_MODE, 0)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
@@ -83,6 +93,12 @@ class SearchViewModel(
     private val _effects = MutableSharedFlow<SearchEffect>(extraBufferCapacity = 16)
     val effects = _effects.asSharedFlow()
 
+    private val conflictController = BookshelfConflictController(
+        scope = viewModelScope,
+        addToBookshelfUseCase = addToBookshelfUseCase,
+        resolveBookshelfConflictUseCase = resolveBookshelfConflictUseCase,
+    )
+
     private val queryFlow = MutableStateFlow("")
     private val bookshelfKeys = MutableStateFlow<Set<BookShelfKey>>(emptySet())
     private var persistedSearchScopeRaw = ""
@@ -101,9 +117,11 @@ class SearchViewModel(
     private var currentSearchPage = 1
     private var resultCountBeforeCurrentPage = 0
     private var wasSearching = false
+    private var contentQualityJob: Job? = null
 
     init {
         syncScopeState()
+        observeBookshelfConflict()
         observeSearchScope()
         observeEnabledGroups()
         observeEnabledSources()
@@ -111,11 +129,33 @@ class SearchViewModel(
         observeQueryHistory()
         observeQueryBookshelfHints()
         observeMatchMode()
+        viewModelScope.launch {
+            searchLayoutMode.collect { mode -> _uiState.update { it.copy(layoutMode = mode) } }
+        }
     }
 
     fun onAddToShelf(book: SearchBook) {
+        conflictController.addToShelf(book)
+    }
+
+    private fun observeBookshelfConflict() {
         viewModelScope.launch {
-            addToBookshelfUseCase.execute(book)
+            conflictController.conflict.collect { conflict ->
+                _uiState.update { it.copy(bookshelfConflict = conflict) }
+            }
+        }
+        viewModelScope.launch {
+            conflictController.isResolving.collect { resolving ->
+                _uiState.update { it.copy(isResolvingBookshelfConflict = resolving) }
+            }
+        }
+        viewModelScope.launch {
+            conflictController.effects.collect { effect ->
+                when (effect) {
+                    is BookshelfConflictController.Effect.ShowMessage ->
+                        _effects.emit(SearchEffect.ShowMessage(appCtx.getString(effect.messageRes)))
+                }
+            }
         }
     }
 
@@ -160,6 +200,36 @@ class SearchViewModel(
                 )
             }
 
+            is SearchIntent.AddToShelf -> conflictController.addToShelf(intent.book)
+
+            SearchIntent.DismissBookshelfConflict -> conflictController.dismiss()
+
+            is SearchIntent.OpenBookshelfConflictBook -> {
+                // 先收起 Sheet 再导航：目标页与返回后的本页都会复用这份冲突状态，
+                // 不收起来的话返回时 Sheet 会被重新显示并吃掉一次返回键。
+                conflictController.dismiss()
+                emitEffect(
+                    SearchEffect.OpenBookInfo(
+                        name = intent.summary.name,
+                        author = intent.summary.author,
+                        bookUrl = intent.summary.bookUrl,
+                        origin = intent.summary.origin,
+                        coverPath = intent.summary.displayCover,
+                        sharedCoverKey = null,
+                    )
+                )
+            }
+
+            is SearchIntent.CoexistWithBookshelfConflict -> conflictController.coexist(
+                intent.existingBookUrl,
+                intent.options,
+            )
+
+            is SearchIntent.MigrateBookshelfConflict -> conflictController.migrate(
+                intent.existingBookUrl,
+                intent.options,
+            )
+
             is SearchIntent.OpenBookshelfBook -> {
                 emitEffect(
                     SearchEffect.OpenBookInfo(
@@ -194,6 +264,46 @@ class SearchViewModel(
 
             is SearchIntent.SetSettingsSheetVisible -> {
                 _uiState.update { it.copy(showSettingsSheet = intent.visible) }
+            }
+
+            SearchIntent.OpenContentQuality -> {
+                _uiState.update {
+                    it.copy(
+                        showSettingsSheet = false,
+                        contentQuality = it.contentQuality.copy(showSheet = true),
+                    )
+                }
+            }
+
+            SearchIntent.CloseContentQuality -> {
+                contentQualityJob?.cancel()
+                _uiState.update {
+                    it.copy(contentQuality = it.contentQuality.copy(showSheet = false, isRunning = false))
+                }
+            }
+
+            is SearchIntent.UpdateContentQualityChapterSpec -> _uiState.update {
+                it.copy(contentQuality = it.contentQuality.copy(chapterSpec = intent.value))
+            }
+
+            is SearchIntent.UpdateContentQualityKeywords -> _uiState.update {
+                it.copy(contentQuality = it.contentQuality.copy(keywords = intent.value))
+            }
+
+            is SearchIntent.UpdateContentQualitySkipHeadChars -> _uiState.update {
+                it.copy(contentQuality = it.contentQuality.copy(skipHeadChars = intent.value))
+            }
+
+            SearchIntent.StartContentQuality -> startContentQuality()
+
+            is SearchIntent.SetLayoutMode -> {
+                _uiState.update { it.copy(layoutMode = intent.mode) }
+                viewModelScope.launch {
+                    localPreferencesRepository.updatePreference(
+                        LocalPreferencesKeys.SEARCH_LAYOUT_MODE,
+                        intent.mode,
+                    )
+                }
             }
 
             is SearchIntent.ToggleSourceType -> {
@@ -325,6 +435,7 @@ class SearchViewModel(
 
     override fun onCleared() {
         stopSearch(manualStop = false)
+        contentQualityJob?.cancel()
         super.onCleared()
     }
 
@@ -357,11 +468,14 @@ class SearchViewModel(
             syncScopeState()
         }
 
-        // When the ViewModel already holds a non-empty committed query,
-        // it means a search session is in progress or completed.
-        // This happens when returning from BookInfo — the LaunchedEffect
-        // re-fires but we must not wipe the existing results.
-        val hasActiveSearch = _uiState.value.committedQuery.isNotEmpty()
+        // When the ViewModel already holds a keyword (committed or only typed)
+        // or visible results, a search session is still alive. This happens when
+        // returning from BookInfo — the LaunchedEffect re-fires but we must not
+        // wipe the keyword, the source results or the bookshelf hint list.
+        val state = _uiState.value
+        val hasActiveSearch = state.committedQuery.isNotEmpty() ||
+            state.query.isNotEmpty() ||
+            state.results.isNotEmpty()
         if (isSameRequest && hasActiveSearch) return
 
         clearSearchResults()
@@ -494,6 +608,7 @@ class SearchViewModel(
                 showExpandedSource = false,
                 expandedSourceSavedScrollIndex = 0,
                 expandedSourceSavedScrollOffset = 0,
+                contentQuality = ContentQualityUiState(),
             )
         }
 
@@ -533,7 +648,7 @@ class SearchViewModel(
                             page = page,
                             scope = BookSearchScope(searchScope.toString()),
                             matchMode = _uiState.value.matchMode,
-                            concurrency = OtherConfig.threadCount,
+                            concurrency = downloadCacheSettingsGateway.currentSettings.threadCount,
                             types = _uiState.value.selectedSourceTypes.takeIf { it.isNotEmpty() },
                         ),
                         searchControl
@@ -542,6 +657,7 @@ class SearchViewModel(
             } catch (exception: CancellationException) {
                 throw exception
             } catch (exception: Throwable) {
+                wasSearching = false
                 _uiState.update { it.copy(isSearching = false) }
                 exception.localizedMessage
                     ?.takeIf { it.isNotBlank() }
@@ -571,6 +687,7 @@ class SearchViewModel(
             }
 
             is SearchRunEvent.Finished -> {
+                wasSearching = false
                 _uiState.update { state ->
                     val emptyAction = if (searchResultBooks.isEmpty() && event.isEmpty && !searchScope.isAll()) {
                         SearchEmptyScopeAction(
@@ -611,6 +728,7 @@ class SearchViewModel(
 
     private fun clearSearchResults() {
         stopSearch(manualStop = true)
+        contentQualityJob?.cancel()
         searchResultBooks.clear()
         queryFlow.value = ""
         _uiState.update {
@@ -635,6 +753,79 @@ class SearchViewModel(
                 showExpandedSource = false,
                 expandedSourceSavedScrollIndex = 0,
                 expandedSourceSavedScrollOffset = 0,
+                contentQuality = ContentQualityUiState(),
+            )
+        }
+    }
+
+    private fun startContentQuality() {
+        val state = _uiState.value
+        if (state.isSearching || state.results.isEmpty()) return
+        val configState = state.contentQuality
+        val keywords = configState.keywords
+            .split(',', '，', ';', '；', '\n', ' ', '\t')
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+        if (keywords.isEmpty()) return
+        contentQualityJob?.cancel()
+        _uiState.update {
+            it.copy(
+                contentQuality = configState.copy(
+                    isRunning = true,
+                    stage = null,
+                    processedBooks = 0,
+                    totalBooks = state.results.size,
+                    currentBookName = "",
+                    results = kotlinx.collections.immutable.persistentMapOf(),
+                )
+            )
+        }
+        contentQualityJob = viewModelScope.launch(Dispatchers.Default) {
+            val config = ContentQualityConfig(
+                chapterSpec = configState.chapterSpec,
+                keywords = keywords,
+                skipHeadChars = configState.skipHeadChars.toIntOrNull()?.coerceAtLeast(0) ?: 300,
+            )
+            runCatching {
+                checkBookContentQualityUseCase.execute(
+                    books = state.results.map { it.book },
+                    config = config,
+                    onProgress = ::updateContentQualityProgress,
+                )
+            }.onSuccess { results ->
+                val resultMap = results.associate { result ->
+                    result.bookKey to ContentQualityResultUi(
+                        sourceName = result.sourceName,
+                        sampledChapterCount = result.sampledChapterCount,
+                        matchedChapterCount = result.matchedChapterCount,
+                        keywordHits = result.keywordHits,
+                        excluded = result.excluded,
+                        errorMessage = result.errorMessage,
+                    )
+                }.toImmutableMap()
+                _uiState.update {
+                    it.copy(contentQuality = it.contentQuality.copy(isRunning = false, results = resultMap))
+                }
+            }.onFailure {
+                if (it !is CancellationException) {
+                    _uiState.update { state ->
+                        state.copy(contentQuality = state.contentQuality.copy(isRunning = false))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateContentQualityProgress(progress: ContentQualityProgress) {
+        _uiState.update { state ->
+            state.copy(
+                contentQuality = state.contentQuality.copy(
+                    stage = progress.stage,
+                    processedBooks = progress.processedBooks,
+                    totalBooks = progress.totalBooks,
+                    currentBookName = progress.currentBookName,
+                )
             )
         }
     }
@@ -847,11 +1038,24 @@ class SearchViewModel(
     }
 
     private fun mergeSearchResults(books: List<SearchBook>) {
+        val bookUrlIndex = HashMap<String, SearchResultKey>()
+        searchResultBooks.forEach { (key, book) ->
+            bookUrlIndex[book.bookUrl] = key
+        }
         books.forEach { book ->
             val key = SearchResultKey(book.name, book.author)
+            val existingUrlKey = bookUrlIndex[book.bookUrl]
+            if (existingUrlKey != null && existingUrlKey != key) {
+                val existingBook = searchResultBooks[existingUrlKey]
+                if (existingBook != null) {
+                    existingBook.addOrigin(book.origin)
+                    return@forEach
+                }
+            }
             val currentBook = searchResultBooks[key]
             if (currentBook == null) {
                 searchResultBooks[key] = book
+                bookUrlIndex[book.bookUrl] = key
             } else {
                 book.origins.forEach { origin -> currentBook.addOrigin(origin) }
             }

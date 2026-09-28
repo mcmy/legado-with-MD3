@@ -41,10 +41,11 @@ import androidx.core.view.updateLayoutParams
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager.widget.ViewPager
 import io.legado.app.help.GlideImageGetter
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.AppShellSettingsGateway
 import io.legado.app.lib.theme.TintHelper
 import io.legado.app.utils.canvasrecorder.CanvasRecorder
 import io.legado.app.utils.canvasrecorder.record
+import org.koin.core.context.GlobalContext
 import splitties.systemservices.inputMethodManager
 import splitties.views.bottomPadding
 import splitties.views.topPadding
@@ -63,6 +64,15 @@ private tailrec fun getCompatActivity(context: Context?): AppCompatActivity? {
 val View.activity: AppCompatActivity?
     get() = getCompatActivity(context)
 
+private val appShellSettingsGateway
+    get() = GlobalContext.get().get<AppShellSettingsGateway>()
+
+private fun isNightTheme(): Boolean = when (appShellSettingsGateway.currentSettings.themeMode) {
+    "1" -> false
+    "2" -> true
+    else -> sysConfiguration.isNightMode
+}
+
 fun View.hideSoftInput() = run {
     inputMethodManager.hideSoftInputFromWindow(this.windowToken, 0)
 }
@@ -78,14 +88,14 @@ fun View.disableAutoFill() = run {
 
 fun View.applyTint(
     @ColorInt color: Int,
-    isDark: Boolean = AppConfig.isNightTheme
+    isDark: Boolean = isNightTheme()
 ) {
     TintHelper.setTintAuto(this, color, false, isDark)
 }
 
 fun View.applyBackgroundTint(
     @ColorInt color: Int,
-    isDark: Boolean = AppConfig.isNightTheme
+    isDark: Boolean = isNightTheme()
 ) {
     if (background == null) {
         setBackgroundColor(color)

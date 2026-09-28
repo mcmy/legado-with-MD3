@@ -1,17 +1,17 @@
 package io.legado.app.ui.widget.components.checkBox
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.card.GlassCard
@@ -23,10 +23,10 @@ fun CheckboxItem(
     color: Color = LegadoTheme.colorScheme.onSheetContent,
     checked: Boolean,
     enabled: Boolean = true,
+    description: String? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
     val alpha = if (enabled) 1f else 0.5f
-
     GlassCard(
         cornerRadius = 12.dp,
         containerColor = if (checked && enabled) LegadoTheme.colorScheme.secondaryContainer else color,
@@ -34,7 +34,12 @@ fun CheckboxItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(enabled = enabled) { onCheckedChange(!checked) }
+                .toggleable(
+                    value = checked,
+                    enabled = enabled,
+                    role = Role.Checkbox,
+                    onValueChange = onCheckedChange
+                )
                 .padding(vertical = 12.dp, horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -42,16 +47,32 @@ fun CheckboxItem(
                 checked = checked,
                 onCheckedChange = null,
                 enabled = enabled,
-                modifier = Modifier.alpha(alpha)
-            )
-            AppText(
-                text = title,
-                style = LegadoTheme.typography.bodyMediumEmphasized,
-                maxLines = 1,
+                includeStateSemantics = false,
                 modifier = Modifier
-                    .padding(start = 12.dp)
                     .alpha(alpha)
+                    .clearAndSetSemantics { }
             )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp)
+            ) {
+                AppText(
+                    text = title,
+                    style = LegadoTheme.typography.bodyMediumEmphasized,
+                    maxLines = 1,
+                    modifier = Modifier.alpha(alpha)
+                )
+                if (description != null) {
+                    AppText(
+                        text = description,
+                        style = LegadoTheme.typography.labelSmallEmphasized,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .alpha(alpha)
+                    )
+                }
+            }
         }
     }
 

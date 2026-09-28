@@ -1,10 +1,9 @@
 package io.legado.app.help.source
 
+import com.script.rhino.runScriptWithContext
 import io.legado.app.data.entities.RssSource
 import io.legado.app.utils.ACache
 import io.legado.app.utils.MD5Utils
-import io.legado.app.utils.NetworkUtils
-import com.script.rhino.runScriptWithContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -40,11 +39,7 @@ suspend fun RssSource.sortUrls(): List<Pair<String, String>> {
                     val name = sort.substringBefore("::")
                     val url = sort.substringAfter("::", "")
                     if (url.isNotEmpty()) {
-                        if (url.startsWith("{{")) {
-                            add(Pair(name, url))
-                        } else {
-                            add(Pair(name, NetworkUtils.getAbsoluteURL(sourceUrl, url)))
-                        }
+                        add(Pair(name, url))
                     }
                 }
                 if (isEmpty()) {

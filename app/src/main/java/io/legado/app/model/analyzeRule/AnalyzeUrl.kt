@@ -4,9 +4,6 @@ import android.annotation.SuppressLint
 import android.util.Base64
 import androidx.annotation.Keep
 import androidx.media3.common.MediaItem
-import cn.hutool.core.codec.PercentCodec
-import cn.hutool.core.net.RFC3986
-import cn.hutool.core.util.HexUtil
 import com.bumptech.glide.load.model.GlideUrl
 import com.script.buildScriptBindings
 import com.script.rhino.RhinoScriptEngine
@@ -15,12 +12,13 @@ import io.legado.app.constant.AppConst.UA_NAME
 import io.legado.app.constant.AppPattern
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
-import io.legado.app.exception.NoStackTraceException
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
+import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.CacheManager
 import io.legado.app.help.ConcurrentRateLimiter
 import io.legado.app.help.JsExtensions
-import io.legado.app.help.config.AppConfig
+import io.legado.app.help.crypto.toHexString
 import io.legado.app.help.exoplayer.ExoPlayerHelper
 import io.legado.app.help.glide.GlideHeaders
 import io.legado.app.help.http.BackstageWebView
@@ -59,13 +57,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.koin.core.context.GlobalContext
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import java.util.regex.Pattern
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -121,6 +119,7 @@ class AnalyzeUrl(
     private val domain: String
     private var webViewDelayTime: Long = 0
     private val concurrentRateLimiter = ConcurrentRateLimiter(source)
+    private val cacheSettingsGateway get() = GlobalContext.get().get<DownloadCacheSettingsGateway>()
 
     // 服务器ID
     var serverID: Long? = null
@@ -128,10 +127,10 @@ class AnalyzeUrl(
 
     init {
         coroutineContext = coroutineContext.minusKey(ContinuationInterceptor)
-        val urlMatcher = paramPattern.matcher(baseUrl)
-        if (urlMatcher.find()) baseUrl = baseUrl.substring(0, urlMatcher.start())
+        val urlMatch = paramPattern.find(baseUrl)
+        if (urlMatch != null) baseUrl = baseUrl.substring(0, urlMatch.range.first)
         (headerMapF ?: runScriptWithContext(coroutineContext) {
-            source?.getHeaderMap(hasLoginHeader)
+            source?.getHeaderMap(cacheSettingsGateway.currentSettings.userAgent, hasLoginHeader)
         })?.let {
             headerMap.putAll(it)
             if (it.containsKey("proxy")) {
@@ -161,18 +160,17 @@ class AnalyzeUrl(
      */
     private fun analyzeJs() {
         var start = 0
-        val jsMatcher = AppPattern.JS_PATTERN.matcher(ruleUrl)
         var result = ruleUrl
-        while (jsMatcher.find()) {
-            if (jsMatcher.start() > start) {
-                ruleUrl.substring(start, jsMatcher.start()).trim().let {
+        for (m in AppPattern.JS_PATTERN.findAll(ruleUrl)) {
+            if (m.range.first > start) {
+                ruleUrl.substring(start, m.range.first).trim().let {
                     if (it.isNotEmpty()) {
                         result = it.replace("@result", result)
                     }
                 }
             }
-            result = evalJS(jsMatcher.group(2) ?: jsMatcher.group(1), result).toString()
-            start = jsMatcher.end()
+            result = evalJS(m.groupValues[2].ifEmpty { m.groupValues[1] }, result).toString()
+            start = m.range.last + 1
         }
         if (ruleUrl.length > start) {
             ruleUrl.substring(start).trim().let {
@@ -204,13 +202,12 @@ class AnalyzeUrl(
         }
         //page
         page?.let {
-            val matcher = pagePattern.matcher(ruleUrl)
-            while (matcher.find()) {
-                val pages = matcher.group(1)!!.split(",")
+            for (m in pagePattern.findAll(ruleUrl)) {
+                val pages = m.groupValues[1].split(",")
                 ruleUrl = if (page < pages.size) { //pages[pages.size - 1]等同于pages.last()
-                    ruleUrl.replace(matcher.group(), pages[page - 1].trim { it <= ' ' })
+                    ruleUrl.replace(m.value, pages[page - 1].trim { it <= ' ' })
                 } else {
-                    ruleUrl.replace(matcher.group(), pages.last().trim { it <= ' ' })
+                    ruleUrl.replace(m.value, pages.last().trim { it <= ' ' })
                 }
             }
         }
@@ -221,15 +218,15 @@ class AnalyzeUrl(
      */
     private fun analyzeUrl() {
         //replaceKeyPageJs已经替换掉额外内容，此处url是基础形式，可以直接切首个‘,’之前字符串。
-        val urlMatcher = paramPattern.matcher(ruleUrl)
+        val urlMatch = paramPattern.find(ruleUrl)
         val urlNoOption =
-            if (urlMatcher.find()) ruleUrl.substring(0, urlMatcher.start()) else ruleUrl
+            if (urlMatch != null) ruleUrl.substring(0, urlMatch.range.first) else ruleUrl
         url = NetworkUtils.getAbsoluteURL(baseUrl, urlNoOption)
         NetworkUtils.getBaseUrl(url)?.let {
             baseUrl = it
         }
-        if (urlNoOption.length != ruleUrl.length) {
-            val urlOptionStr = ruleUrl.substring(urlMatcher.end())
+        if (urlMatch != null) {
+            val urlOptionStr = ruleUrl.substring(urlMatch.range.last + 1)
             var urlOption = GSONStrict.fromJsonObject<UrlOption>(urlOptionStr).getOrNull()
             if (urlOption == null) {
                 urlOption = GSON.fromJsonObject<UrlOption>(urlOptionStr).getOrNull()
@@ -239,7 +236,11 @@ class AnalyzeUrl(
             }
             urlOption?.let { option ->
                 option.getMethod()?.let {
-                    if (it.equals("POST", true)) method = RequestMethod.POST
+                    method = when (it.uppercase()) {
+                        "POST" -> RequestMethod.POST
+                        "HEAD" -> RequestMethod.HEAD
+                        else -> RequestMethod.GET
+                    }
                 }
                 option.getHeaderMap()?.forEach { entry ->
                     headerMap[entry.key.toString()] = entry.value.toString()
@@ -278,6 +279,8 @@ class AnalyzeUrl(
                     analyzeFields(it)
                 }
             }
+
+            RequestMethod.HEAD -> Unit
         }
     }
 
@@ -306,7 +309,7 @@ class AnalyzeUrl(
             if (NetworkUtils.encodedQuery(params)) {
                 return params
             }
-            return queryEncoder.encode(params, charset)
+            return encodeQueryParams(params, charset)
         }
         val len = params.length
         val sb = StringBuilder()
@@ -415,7 +418,7 @@ class AnalyzeUrl(
         skipRateLimit: Boolean = false
     ): StrResponse {
         if (type != null) {
-            return StrResponse(url, HexUtil.encodeHexStr(getByteArrayAwait()))
+            return StrResponse(url, getByteArrayAwait().toHexString())
         }
         if (skipRateLimit) {
             return executeStrRequest(jsStr, sourceRegex, useWebView, isTest)
@@ -483,6 +486,11 @@ class AnalyzeUrl(
                             } else {
                                 postJson(body)
                             }
+                        }
+
+                        RequestMethod.HEAD -> {
+                            get(urlNoQuery, encodedQuery)
+                            head()
                         }
 
                         else -> get(urlNoQuery, encodedQuery)
@@ -559,6 +567,11 @@ class AnalyzeUrl(
                         }
                     }
 
+                    RequestMethod.HEAD -> {
+                        get(urlNoQuery, encodedQuery)
+                        head()
+                    }
+
                     else -> get(urlNoQuery, encodedQuery)
                 }
             }
@@ -588,7 +601,7 @@ class AnalyzeUrl(
         if (readTimeout == null && callTimeout == null && dnsIp == null) {
             return client
         }
-        if (AppConfig.isCronet && dnsIp != null) {
+        if (cacheSettingsGateway.currentSettings.cronetEnabled && dnsIp != null) {
             customIp[urlNoQuery] = dnsIp!!
         }
         return client.newBuilder().run {
@@ -744,7 +757,7 @@ class AnalyzeUrl(
     }
 
     fun getUserAgent(): String {
-        return headerMap.get(UA_NAME, true) ?: AppConfig.userAgent
+        return headerMap.get(UA_NAME, true) ?: cacheSettingsGateway.currentSettings.userAgent
     }
 
     fun isPost(): Boolean {
@@ -760,10 +773,33 @@ class AnalyzeUrl(
     }
 
     companion object {
-        val paramPattern: Pattern = Pattern.compile("\\s*,\\s*(?=\\{)")
-        private val pagePattern = Pattern.compile("<(.*?)>")
-        private val queryEncoder =
-            RFC3986.UNRESERVED.orNew(PercentCodec.of("!$%&()*+,/:;=?@[\\]^`{|}"))
+        val paramPattern: Regex = Regex("\\s*,\\s*(?=\\{)")
+        private val pagePattern = Regex("<(.*?)>")
+        private const val QUERY_HEX_UPPER = "0123456789ABCDEF"
+        private val queryEncoderSafeChars: BooleanArray = BooleanArray(128).apply {
+            for (c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-~!$%&()*+,/:;=?@[\\]^`{|}") {
+                this[c.code] = true
+            }
+        }
+
+        private fun encodeQueryParams(str: String, charset: Charset): String {
+            val builder = StringBuilder(str.length)
+            for (c in str) {
+                if (c.code < 128 && queryEncoderSafeChars[c.code]) {
+                    builder.append(c)
+                } else {
+                    val bytes = c.toString().toByteArray(charset)
+                    for (b in bytes) {
+                        val v = b.toInt() and 0xFF
+                        builder.append('%')
+                        builder.append(QUERY_HEX_UPPER[v ushr 4])
+                        builder.append(QUERY_HEX_UPPER[v and 0x0F])
+                    }
+                }
+            }
+            return builder.toString()
+        }
+
         val customIp by lazy { ConcurrentHashMap<String, String>() }
         fun AnalyzeUrl.getMediaItem(): MediaItem {
             setCookie()

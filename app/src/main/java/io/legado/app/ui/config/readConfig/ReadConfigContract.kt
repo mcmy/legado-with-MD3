@@ -1,5 +1,9 @@
 package io.legado.app.ui.config.readConfig
 
+import androidx.compose.runtime.Stable
+import io.legado.app.ui.book.read.EyeProtectionUiState
+
+@Stable
 data class ReadConfigUiState(
     val screenOrientation: String = "0",
     val keepLight: String = "0",
@@ -7,16 +11,17 @@ data class ReadConfigUiState(
     val hideNavigationBar: Boolean = false,
     val paddingDisplayCutouts: Boolean = false,
     val titleBarMode: String = "1",
-    val readMenuBlurAlpha: Int = 60,
+    val readMenuBlurAlpha: Int = 85,
     val readBodyToLh: Boolean = true,
     val defaultSourceChangeAll: Boolean = true,
     val textFullJustify: Boolean = true,
     val textBottomJustify: Boolean = true,
     val adaptSpecialStyle: Boolean = true,
     val useZhLayout: Boolean = false,
-    val showBrightnessView: String = "1",
+    val eyeProtection: EyeProtectionUiState = EyeProtectionUiState(),
+    val showBrightnessView: String = "0",
     val brightnessVwPos: String = "1",
-    val brightnessAuto: Boolean = false,
+    val brightnessAuto: Boolean = true,
     val useUnderline: Boolean = false,
     val readSliderMode: String = "0",
     val doubleHorizontalPage: String = "0",
@@ -27,9 +32,13 @@ data class ReadConfigUiState(
     val keyPageOnLongPress: Boolean = false,
     val pageTouchSlop: Int = 0,
     val sliderVibrator: Boolean = false,
+    val useNewTocSheet: Boolean = true,
+    val maxLengthWithNoToc: Int = 3000,
     val selectVibrator: Boolean = false,
     val autoChangeSource: Boolean = true,
     val autoSuggestDayNight: Boolean = false,
+    val readingAnchorEnabled: Boolean = true,
+    val readAloudDetachReminderEnabled: Boolean = false,
     val selectText: Boolean = true,
     val noAnimScrollPage: Boolean = false,
     val clickImgWay: String = "2",
@@ -37,15 +46,24 @@ data class ReadConfigUiState(
     val disableReturnKey: Boolean = false,
     val expandTextMenu: Boolean = false,
     val showSelectMenuIcon: Boolean = true,
-    val textSelectMenuFilter: String = "",
     val showReadTitleAddition: Boolean = true,
     val autoReadSpeed: Int = 10,
     val prevKeys: String = "",
     val nextKeys: String = "",
-    val showMenuIcon: Boolean = true
+    val showMenuIcon: Boolean = false,
+    val activeSheet: ReadConfigSheet? = null,
 )
 
+sealed interface ReadConfigSheet {
+    data object PageKeys : ReadConfigSheet
+    data object ClickActions : ReadConfigSheet
+    data object EyeProtection : ReadConfigSheet
+}
+
 sealed interface ReadConfigIntent {
+    data object OpenPageKeys : ReadConfigIntent
+    data object OpenClickActions : ReadConfigIntent
+    data object DismissSheet : ReadConfigIntent
     data class ScreenOrientationChanged(val value: String) : ReadConfigIntent
     data class KeepLightChanged(val value: String) : ReadConfigIntent
     data class HideStatusBarChanged(val value: Boolean) : ReadConfigIntent
@@ -59,6 +77,13 @@ sealed interface ReadConfigIntent {
     data class TextBottomJustifyChanged(val value: Boolean) : ReadConfigIntent
     data class AdaptSpecialStyleChanged(val value: Boolean) : ReadConfigIntent
     data class UseZhLayoutChanged(val value: Boolean) : ReadConfigIntent
+    data object OpenEyeProtection : ReadConfigIntent
+    data class EyeProtectionEnabledChanged(val value: Boolean) : ReadConfigIntent
+    data class EyeProtectionIntensityChanged(val value: Int) : ReadConfigIntent
+    data class EyeProtectionAutoNightChanged(val value: Boolean) : ReadConfigIntent
+    data class EyeProtectionScheduleChanged(val value: Boolean) : ReadConfigIntent
+    data class EyeProtectionStartTimeChanged(val value: String) : ReadConfigIntent
+    data class EyeProtectionEndTimeChanged(val value: String) : ReadConfigIntent
     data class ShowBrightnessViewChanged(val value: String) : ReadConfigIntent
     data class BrightnessVwPosChanged(val value: String) : ReadConfigIntent
     data class UseUnderlineChanged(val value: Boolean) : ReadConfigIntent
@@ -71,6 +96,8 @@ sealed interface ReadConfigIntent {
     data class KeyPageOnLongPressChanged(val value: Boolean) : ReadConfigIntent
     data class PageTouchSlopChanged(val value: Int) : ReadConfigIntent
     data class SliderVibratorChanged(val value: Boolean) : ReadConfigIntent
+    data class UseNewTocSheetChanged(val value: Boolean) : ReadConfigIntent
+    data class MaxLengthWithNoTocChanged(val value: Int) : ReadConfigIntent
     data class SelectVibratorChanged(val value: Boolean) : ReadConfigIntent
     data class AutoChangeSourceChanged(val value: Boolean) : ReadConfigIntent
     data class SelectTextChanged(val value: Boolean) : ReadConfigIntent
@@ -78,11 +105,14 @@ sealed interface ReadConfigIntent {
     data class ClickImgWayChanged(val value: String) : ReadConfigIntent
     data class OptimizeRenderChanged(val value: Boolean) : ReadConfigIntent
     data class DisableReturnKeyChanged(val value: Boolean) : ReadConfigIntent
-    data class ExpandTextMenuChanged(val value: Boolean) : ReadConfigIntent
-    data class ShowSelectMenuIconChanged(val value: Boolean) : ReadConfigIntent
-    data class TextSelectMenuFilterChanged(val value: String) : ReadConfigIntent
     data class ShowReadTitleAdditionChanged(val value: Boolean) : ReadConfigIntent
     data class ShowMenuIconChanged(val value: Boolean) : ReadConfigIntent
     data class AutoSuggestDayNightChanged(val value: Boolean) : ReadConfigIntent
+    data class ReadingAnchorChanged(val value: Boolean) : ReadConfigIntent
+    data class ReadAloudDetachReminderChanged(val value: Boolean) : ReadConfigIntent
     data class PageKeysChanged(val prevKeys: String, val nextKeys: String) : ReadConfigIntent
+}
+
+sealed interface ReadConfigEffect {
+    data class SettingsUpdateFailed(val message: String) : ReadConfigEffect
 }

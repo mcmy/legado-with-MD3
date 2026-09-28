@@ -13,7 +13,7 @@ import io.legado.app.data.entities.rule.ExploreKind
 import io.legado.app.domain.usecase.ExploreKindUiUseCase
 import io.legado.app.help.source.getExploreInfoMap
 import io.legado.app.utils.InfoMap
-import io.legado.app.utils.showDialogFragment
+import io.legado.app.ui.main.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.launch
@@ -71,7 +71,7 @@ class ExploreKindItemState(
     }
 
     fun showError(error: String) {
-        activity?.showDialogFragment(io.legado.app.ui.widget.dialog.TextDialog("ERROR", error))
+        (activity as? MainActivity)?.showTextSheet("ERROR", error)
     }
 }
 

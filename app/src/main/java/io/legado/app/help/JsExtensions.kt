@@ -4,8 +4,6 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import androidx.annotation.Keep
 import androidx.core.net.toUri
-import cn.hutool.core.codec.Base64
-import cn.hutool.core.util.HexUtil
 import com.script.rhino.rhinoContext
 import com.script.rhino.rhinoContextOrNull
 import io.legado.app.constant.AppConst
@@ -14,10 +12,14 @@ import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.DownloadCacheSettingsGateway
 import io.legado.app.help.config.ThemeConfigStore
-import io.legado.app.ui.config.themeConfig.ThemeConfig
 import io.legado.app.help.config.ReadBookConfig
+import io.legado.app.help.crypto.base64ToByteArray
+import io.legado.app.help.crypto.digest
+import io.legado.app.help.crypto.hexToByteArray
+import io.legado.app.help.crypto.toHexString
 import io.legado.app.help.http.BackstageWebView
 import io.legado.app.help.http.CookieManager.cookieJarHeader
 import io.legado.app.help.http.CookieStore
@@ -30,7 +32,6 @@ import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.analyzeRule.QueryTTF
 import io.legado.app.ui.association.OnLineImportActivity
 import io.legado.app.ui.association.OpenUrlConfirmActivity
-import io.legado.app.ui.config.otherConfig.OtherConfig
 import io.legado.app.utils.ArchiveUtils
 import io.legado.app.utils.ChineseUtils
 import io.legado.app.utils.EncoderUtils
@@ -63,21 +64,21 @@ import okio.use
 import org.jsoup.Connection
 import org.jsoup.Jsoup
 import splitties.init.appCtx
+import org.koin.core.context.GlobalContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.Charset
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.SimpleTimeZone
-import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.uuid.Uuid
 
 /**
  * js扩展类, 在js中通过java变量调用
@@ -91,6 +92,11 @@ interface JsExtensions : JsEncodeUtils {
 
     fun getSource(): BaseSource?
     fun getTag(): String?
+
+    private val cacheGateway
+        get() = GlobalContext.get().get<DownloadCacheSettingsGateway>()
+    private val shellGateway
+        get() = GlobalContext.get().get<AppShellSettingsGateway>()
 
     private val context: CoroutineContext
         get() = rhinoContextOrNull?.coroutineContext ?: EmptyCoroutineContext
@@ -132,7 +138,7 @@ interface JsExtensions : JsEncodeUtils {
     }
     fun ajaxAll(urlList: Array<String>, skipRateLimit: Boolean): Array<StrResponse> {
         return runBlocking(context) {
-            urlList.asFlow().mapAsync(OtherConfig.threadCount) { url ->
+            urlList.asFlow().mapAsync(cacheGateway.currentSettings.threadCount) { url ->
                 val analyzeUrl = AnalyzeUrl(
                     url,
                     source = getSource(),
@@ -155,7 +161,7 @@ interface JsExtensions : JsEncodeUtils {
         skipRateLimit: Boolean
     ): Array<StrResponse> {
         return runBlocking(context) {
-            urlList.asFlow().mapAsync(OtherConfig.threadCount) { url ->
+            urlList.asFlow().mapAsync(cacheGateway.currentSettings.threadCount) { url ->
                 val analyzeUrl = AnalyzeUrl(
                     url,
                     source = getSource(),
@@ -231,7 +237,7 @@ interface JsExtensions : JsEncodeUtils {
                 url = url,
                 html = html,
                 javaScript = js,
-                headerMap = getSource()?.getHeaderMap(true),
+                headerMap = getSource()?.getHeaderMap(cacheGateway.currentSettings.userAgent, true),
                 tag = getSource()?.getKey()
             ).getStrResponse().body
         }
@@ -270,7 +276,7 @@ interface JsExtensions : JsEncodeUtils {
                 url = url,
                 html = html,
                 javaScript = js,
-                headerMap = getSource()?.getHeaderMap(true),
+                headerMap = getSource()?.getHeaderMap(cacheGateway.currentSettings.userAgent, true),
                 tag = getSource()?.getKey(),
                 sourceRegex = sourceRegex,
                 delayTime = delayTime
@@ -316,7 +322,7 @@ interface JsExtensions : JsEncodeUtils {
                 url = url,
                 html = html,
                 javaScript = js,
-                headerMap = getSource()?.getHeaderMap(true),
+                headerMap = getSource()?.getHeaderMap(cacheGateway.currentSettings.userAgent, true),
                 tag = getSource()?.getKey(),
                 overrideUrlRegex = overrideUrlRegex,
                 delayTime = delayTime
@@ -484,7 +490,7 @@ interface JsExtensions : JsEncodeUtils {
         )
         val file = File(path)
         file.createFileReplace()
-        HexUtil.decodeHex(content).let {
+        content.hexToByteArray().let {
             if (it.isNotEmpty()) {
                 file.writeBytes(it)
             }
@@ -599,12 +605,12 @@ interface JsExtensions : JsEncodeUtils {
      */
     @JavascriptInterface
     fun base64Decode(str: String?): String {
-        return Base64.decodeStr(str)
+        return str?.let { String(it.base64ToByteArray(), Charsets.UTF_8) } ?: ""
     }
 
     @JavascriptInterface
     fun base64Decode(str: String?, charset: String): String {
-        return Base64.decodeStr(str, charset(charset))
+        return str?.let { String(it.base64ToByteArray(), charset(charset)) } ?: ""
     }
 
     @JavascriptInterface
@@ -638,19 +644,19 @@ interface JsExtensions : JsEncodeUtils {
 
     /* HexString 解码为字节数组 */
     fun hexDecodeToByteArray(hex: String): ByteArray? {
-        return HexUtil.decodeHex(hex)
+        return hex.hexToByteArray()
     }
 
     /* hexString 解码为utf8String*/
     @JavascriptInterface
     fun hexDecodeToString(hex: String): String? {
-        return HexUtil.decodeHexStr(hex)
+        return String(hex.hexToByteArray(), Charsets.UTF_8)
     }
 
     /* utf8 编码为hexString */
     @JavascriptInterface
     fun hexEncodeToString(utf8: String): String? {
-        return HexUtil.encodeHexStr(utf8)
+        return utf8.toByteArray().toHexString()
     }
 
     /**
@@ -904,7 +910,7 @@ interface JsExtensions : JsEncodeUtils {
         val bytes = if (url.isAbsUrl()) {
             AnalyzeUrl(url, source = getSource(), coroutineContext = context).getByteArray()
         } else {
-            HexUtil.decodeHex(url)
+            url.hexToByteArray()
         }
         val bos = ByteArrayOutputStream()
         ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
@@ -932,7 +938,7 @@ interface JsExtensions : JsEncodeUtils {
         val bytes = if (url.isAbsUrl()) {
             AnalyzeUrl(url, source = getSource(), coroutineContext = context).getByteArray()
         } else {
-            HexUtil.decodeHex(url)
+            url.hexToByteArray()
         }
 
         return ByteArrayInputStream(bytes).use {
@@ -950,7 +956,7 @@ interface JsExtensions : JsEncodeUtils {
         val bytes = if (url.isAbsUrl()) {
             AnalyzeUrl(url, source = getSource(), coroutineContext = context).getByteArray()
         } else {
-            HexUtil.decodeHex(url)
+            url.hexToByteArray()
         }
 
         return ByteArrayInputStream(bytes).use {
@@ -978,7 +984,6 @@ interface JsExtensions : JsEncodeUtils {
      * @param data 支持url,本地文件,base64,ByteArray,自动判断,自动缓存
      * @param useCache 可选开关缓存,不传入该值默认开启缓存
      */
-    @OptIn(ExperimentalStdlibApi::class)
     fun queryTTF(data: Any?, useCache: Boolean): QueryTTF? {
         try {
             var key: String? = null
@@ -986,8 +991,7 @@ interface JsExtensions : JsEncodeUtils {
             when (data) {
                 is String -> {
                     if (useCache) {
-                        key = MessageDigest.getInstance("SHA-256").digest(data.toByteArray())
-                            .toHexString()
+                        key = digest("SHA-256", data.toByteArray()).toHexString()
                         qTTF = AppCacheManager.getQueryTTF(key)
                         if (qTTF != null) return qTTF
                     }
@@ -1006,7 +1010,7 @@ interface JsExtensions : JsEncodeUtils {
 
                 is ByteArray -> {
                     if (useCache) {
-                        key = MessageDigest.getInstance("SHA-256").digest(data).toHexString()
+                        key = digest("SHA-256", data).toHexString()
                         qTTF = AppCacheManager.getQueryTTF(key)
                         if (qTTF != null) return qTTF
                     }
@@ -1085,10 +1089,10 @@ interface JsExtensions : JsEncodeUtils {
     @JavascriptInterface
     fun toNumChapter(s: String?): String? {
         s ?: return null
-        val matcher = AppPattern.titleNumPattern.matcher(s)
-        if (matcher.find()) {
-            val intStr = StringUtils.stringToInt(matcher.group(2))
-            return "${matcher.group(1)}${intStr}${matcher.group(3)}"
+        val match = AppPattern.titleNumPattern.find(s)
+        if (match != null) {
+            val intStr = StringUtils.stringToInt(match.groupValues[2])
+            return "${match.groupValues[1]}${intStr}${match.groupValues[3]}"
         }
         return s
     }
@@ -1146,7 +1150,7 @@ interface JsExtensions : JsEncodeUtils {
      */
     @JavascriptInterface
     fun randomUUID(): String {
-        return UUID.randomUUID().toString()
+        return Uuid.random().toString()
     }
 
     @JavascriptInterface
@@ -1197,7 +1201,7 @@ interface JsExtensions : JsEncodeUtils {
      */
     @JavascriptInterface
     fun getThemeMode(): String {
-        return ThemeConfig.themeMode
+        return shellGateway.currentSettings.themeMode
     }
 
     /**

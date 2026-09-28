@@ -10,17 +10,23 @@ import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.repository.BookSourceRepository
 import io.legado.app.data.repository.SearchRepository
 import io.legado.app.domain.gateway.HomepageModulesGateway
+import io.legado.app.domain.gateway.HomepageSettingsGateway
 import io.legado.app.domain.model.BookShelfState
+import io.legado.app.domain.model.BookshelfConflict
+import io.legado.app.domain.model.ConflictBookSummary
 import io.legado.app.domain.model.CustomSetItem
 import io.legado.app.domain.model.HomepageModuleType
 import io.legado.app.domain.model.ModuleDef
 import io.legado.app.domain.model.ModuleItem
 import io.legado.app.domain.usecase.AddToBookshelfUseCase
 import io.legado.app.domain.usecase.BookShelfKey
+import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
 import io.legado.app.domain.usecase.ExploreBooksUseCase
 import io.legado.app.domain.usecase.ResolveBookShelfStateUseCase
+import io.legado.app.domain.usecase.ResolveBookshelfConflictUseCase
 import io.legado.app.domain.usecase.SaveSearchBooksUseCase
 import io.legado.app.help.source.exploreKinds
+import io.legado.app.ui.book.conflict.BookshelfConflictController
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.stackTraceStr
@@ -28,6 +34,9 @@ import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -40,6 +49,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import splitties.init.appCtx
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -47,11 +57,13 @@ class HomepageViewModel(
     application: Application,
     private val bookSourceRepository: BookSourceRepository,
     private val gateway: HomepageModulesGateway,
+    private val homepageSettingsGateway: HomepageSettingsGateway,
     private val searchRepository: SearchRepository,
     private val exploreBooksUseCase: ExploreBooksUseCase,
     private val saveSearchBooksUseCase: SaveSearchBooksUseCase,
     private val resolveBookShelfStateUseCase: ResolveBookShelfStateUseCase,
     private val addToBookshelfUseCase: AddToBookshelfUseCase,
+    private val resolveBookshelfConflictUseCase: ResolveBookshelfConflictUseCase,
 ) : BaseViewModel(application) {
 
     private val _bookshelf = MutableStateFlow<Set<BookShelfKey>>(emptySet())
@@ -92,6 +104,13 @@ class HomepageViewModel(
     private val _effects = MutableSharedFlow<HomepageEffect>(extraBufferCapacity = 8)
     val effects = _effects.asSharedFlow()
 
+    // 冲突状态通过 uiFlagsFlow 汇入 uiState（见下方 uiState），与其它 ViewModel 的写法保持一致。
+    private val conflictController = BookshelfConflictController(
+        scope = viewModelScope,
+        addToBookshelfUseCase = addToBookshelfUseCase,
+        resolveBookshelfConflictUseCase = resolveBookshelfConflictUseCase,
+    )
+
     private val loadJobs = ConcurrentHashMap<String, Job>()
     private val exploreSourcePartsFlow = bookSourceRepository.flowExploreSourceParts()
 
@@ -111,6 +130,10 @@ class HomepageViewModel(
         gateway.flowAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val customSetsFlow = gateway.flowCustomSets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val customSetsWithSettingsFlow = combine(
+        customSetsFlow,
+        homepageSettingsGateway.settings,
+    ) { customSets, settings -> customSets to settings }
 
     // 3. 业务加工流
     private val orderedModuleDefsFlow = combine(localModulesFlow, _configVersion) { modules, _ ->
@@ -120,10 +143,10 @@ class HomepageViewModel(
     val setsFlow = combine(
         localModulesFlow,
         allModulesCache,
-        customSetsFlow,
+        customSetsWithSettingsFlow,
         _configVersion
-    ) { _, allModules, customSets, _ ->
-        val hiddenSourceUrls = GSON.fromJsonArray<String>(HomepageConfig.homepageSourceHidden)
+    ) { _, allModules, (customSets, settings), _ ->
+        val hiddenSourceUrls = GSON.fromJsonArray<String>(settings.hiddenSourceUrlsJson)
             .getOrDefault(emptyList()).toSet()
         val moduleCountsBySet =
             allModules.mapNotNull { it.customSetId }.groupBy { it }.mapValues { it.value.size }
@@ -152,8 +175,13 @@ class HomepageViewModel(
 
     // 4. 聚合层
     private val uiFlagsFlow =
-        combine(_isRefreshing, _isManageMode) { refreshing, manage ->
-            HomepageUiFlags(refreshing, manage)
+        combine(
+            _isRefreshing,
+            _isManageMode,
+            conflictController.conflict,
+            conflictController.isResolving,
+        ) { refreshing, manage, conflict, resolvingConflict ->
+            HomepageUiFlags(refreshing, manage, conflict, resolvingConflict)
         }
 
     private val manageStateFlow = combine(
@@ -238,15 +266,11 @@ class HomepageViewModel(
     ) { modules, bookshelf ->
         if (bookshelf.isEmpty()) {
             modules.map { module ->
-                val state = module.state
-                if (state is ModuleLoadState.Loaded) {
-                    module.copy(state = state.copy(
-                        books = state.books.map { item ->
-                            if (item.shelfState == BookShelfState.NOT_IN_SHELF) item
-                            else item.copy(shelfState = BookShelfState.NOT_IN_SHELF)
-                        }.toImmutableList()
-                    ))
-                } else module
+                val state = module.state.mapBooks { item ->
+                    if (item.shelfState == BookShelfState.NOT_IN_SHELF) item
+                    else item.copy(shelfState = BookShelfState.NOT_IN_SHELF)
+                }
+                if (state === module.state) module else module.copy(state = state)
             }.toImmutableList()
         } else {
             val exactKeys = HashSet<Triple<String, String, String?>>(bookshelf.size)
@@ -256,22 +280,19 @@ class HomepageViewModel(
                 nameAuthorKeys.add(key.name to key.author)
             }
             modules.map { module ->
-                val state = module.state
-                if (state is ModuleLoadState.Loaded) {
-                    module.copy(state = state.copy(
-                        books = state.books.map { item ->
-                            val bookTriple = Triple(item.book.name, item.book.author, item.book.bookUrl)
-                            val newShelfState = when {
-                                bookTriple in exactKeys -> BookShelfState.IN_SHELF
-                                (item.book.name to item.book.author) in nameAuthorKeys ->
-                                    BookShelfState.SAME_NAME_AUTHOR
-                                else -> BookShelfState.NOT_IN_SHELF
-                            }
-                            if (item.shelfState == newShelfState) item
-                            else item.copy(shelfState = newShelfState)
-                        }.toImmutableList()
-                    ))
-                } else module
+                val state = module.state.mapBooks { item ->
+                    val bookTriple = Triple(item.book.name, item.book.author, item.book.bookUrl)
+                    val newShelfState = when {
+                        bookTriple in exactKeys -> BookShelfState.IN_SHELF
+                        (item.book.name to item.book.author) in nameAuthorKeys ->
+                            BookShelfState.SAME_NAME_AUTHOR
+
+                        else -> BookShelfState.NOT_IN_SHELF
+                    }
+                    if (item.shelfState == newShelfState) item
+                    else item.copy(shelfState = newShelfState)
+                }
+                if (state === module.state) module else module.copy(state = state)
             }.toImmutableList()
         }
     }
@@ -286,7 +307,9 @@ class HomepageViewModel(
             modules = modules,
             isRefreshing = flags.isRefreshing,
             isManageMode = flags.isManageMode,
-            manageState = manageState
+            manageState = manageState,
+            bookshelfConflict = flags.bookshelfConflict,
+            isResolvingBookshelfConflict = flags.isResolvingBookshelfConflict,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomepageUiState())
 
@@ -301,7 +324,12 @@ class HomepageViewModel(
                         val json = GSON.fromJson(configStr, Map::class.java)
                         if (json != null) {
                             val map = mutableMapOf<String, String>()
-                            json.forEach { (k, v) -> map["layout_$k"] = v.toString() }
+                            json.forEach { (k, v) ->
+                                map["layout_$k"] = when (v) {
+                                    is Double -> if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
+                                    else -> v.toString()
+                                }
+                            }
                             cache[module.id] = map
                         }
                     } catch (_: Exception) {
@@ -314,6 +342,17 @@ class HomepageViewModel(
         viewModelScope.launch {
             exploreSourcePartsFlow.collect { sources ->
                 _bookSourcePartsCache.value = sources.associateBy { it.bookSourceUrl }
+            }
+        }
+
+        viewModelScope.launch {
+            conflictController.effects.collect { effect ->
+                when (effect) {
+                    is BookshelfConflictController.Effect.ShowMessage ->
+                        _effects.emit(
+                            HomepageEffect.ShowSnackbar(appCtx.getString(effect.messageRes))
+                        )
+                }
             }
         }
 
@@ -426,6 +465,66 @@ class HomepageViewModel(
 
     private fun loadModule(module: ModuleItem) {
         loadJobs[module.id]?.cancel()
+        val rankingKindTitles = module.rankingKindTitles()
+        if (rankingKindTitles != null) {
+            loadJobs[module.id] = viewModelScope.launch {
+                kotlin.runCatching {
+                    val source = bookSourceRepository.getBookSource(module.sourceUrl)
+                        ?: throw Exception("Source not found")
+                    val allKinds = withContext(Dispatchers.IO) { source.exploreKinds() }
+                    val selectedKinds = rankingKindTitles.mapNotNull { title ->
+                        allKinds.find { it.title == title }
+                    }
+                    if (selectedKinds.isEmpty()) throw Exception("Ranking kinds not found")
+
+                    val shelf = _bookshelf.value
+                    coroutineScope {
+                        selectedKinds.map { kind ->
+                            async {
+                                val state = kotlin.runCatching {
+                                    exploreBooksUseCase.executeForRanking(
+                                        module.sourceUrl,
+                                        kind.url,
+                                        null
+                                    )
+                                }.fold(
+                                    onSuccess = { books ->
+                                        ModuleLoadState.Loaded(
+                                            books = books.map { book ->
+                                                HomepageBookItemUi(
+                                                    book = book,
+                                                    shelfState = resolveBookShelfStateUseCase.execute(
+                                                        name = book.name,
+                                                        author = book.author,
+                                                        url = book.bookUrl,
+                                                        shelf = shelf
+                                                    )
+                                                )
+                                            }.toImmutableList()
+                                        )
+                                    },
+                                    onFailure = { ModuleLoadState.Error(it.stackTraceStr) }
+                                )
+                                HomepageRankingSourceUi(
+                                    title = kind.title,
+                                    url = kind.url,
+                                    state = state,
+                                )
+                            }
+                        }.awaitAll().toImmutableList()
+                    }
+                }.onSuccess { sources ->
+                    _moduleContentStates.update {
+                        it + (module.id to ModuleLoadState.Rankings(sources))
+                    }
+                }.onFailure { e ->
+                    _moduleContentStates.update {
+                        it + (module.id to ModuleLoadState.Error(e.stackTraceStr))
+                    }
+                }
+            }.also { it.invokeOnCompletion { loadJobs.remove(module.id) } }
+            return
+        }
         if (module.type == HomepageModuleType.ButtonGroup.key) {
             loadJobs[module.id] = viewModelScope.launch {
                 kotlin.runCatching {
@@ -587,11 +686,15 @@ class HomepageViewModel(
     }
 
     fun toggleSourceFilter(sourceUrl: String, isEnabled: Boolean) {
-        val hidden = GSON.fromJsonArray<String>(HomepageConfig.homepageSourceHidden)
+        val hidden = GSON.fromJsonArray<String>(
+            homepageSettingsGateway.currentSettings.hiddenSourceUrlsJson
+        )
             .getOrDefault(emptyList()).toMutableSet()
         if (isEnabled) hidden.remove(sourceUrl) else hidden.add(sourceUrl)
-        HomepageConfig.homepageSourceHidden = GSON.toJson(hidden.toList())
-        notifyConfigChanged()
+        viewModelScope.launch {
+            homepageSettingsGateway.setHiddenSourceUrlsJson(GSON.toJson(hidden.toList()))
+            notifyConfigChanged()
+        }
     }
 
     private suspend fun ensureSetForSource(sourceUrl: String, sourceName: String): String {
@@ -835,6 +938,66 @@ class HomepageViewModel(
         }
     }
 
+    fun addRankingFromKinds(
+        sourceUrl: String,
+        targetSetId: String?,
+        title: String,
+        type: String,
+        kindTitles: List<String>
+    ) {
+        if (
+            kindTitles.isEmpty() ||
+            (type != HomepageModuleType.Ranking.key &&
+                    type != HomepageModuleType.GridRanking.key)
+        ) {
+            return
+        }
+        viewModelScope.launch {
+            val source = bookSourceRepository.getBookSource(sourceUrl) ?: return@launch
+            val allKinds = withContext(Dispatchers.IO) { source.exploreKinds() }
+            val selectedKinds = kindTitles.mapNotNull { selectedTitle ->
+                allKinds.find { it.title == selectedTitle }
+            }
+            if (selectedKinds.isEmpty()) return@launch
+
+            val setId = targetSetId ?: ensureSetForSource(sourceUrl, source.bookSourceName)
+            val isGroup = selectedKinds.size > 1
+            val key = if (isGroup) {
+                "${type}_${jsonHash(GSON.toJson(kindTitles)).take(12)}"
+            } else {
+                selectedKinds.first().title
+            }
+            val id = ModuleDef.globalIdOf(sourceUrl, key, setId)
+            val module = ModuleItem(
+                id = id,
+                sourceUrl = sourceUrl,
+                moduleKey = key,
+                type = type,
+                title = title,
+                args = if (isGroup) {
+                    GSON.toJson(
+                        RankingKindsArgs(
+                            isHomepageRankingGroup = true,
+                            kindTitles = selectedKinds.map { it.title }
+                        )
+                    )
+                } else {
+                    null
+                },
+                url = if (isGroup) null else selectedKinds.first().url,
+                isEnabled = true,
+                isUserCreated = true,
+                customSetId = setId,
+                syncedAt = System.currentTimeMillis(),
+            )
+            gateway.upsertAll(listOf(module))
+            _pendingUserModules.update { pending ->
+                if (pending.any { it.id == id }) pending else pending + module
+            }
+            notifyConfigChanged()
+        }
+    }
+
     fun joinModule(sourceUrl: String, targetSetId: String?, def: ModuleDef) =
         addCustomModule(sourceUrl, targetSetId, def)
 
@@ -882,8 +1045,41 @@ class HomepageViewModel(
     }
 
     fun onAddToShelf(book: SearchBook) {
-        execute {
-            addToBookshelfUseCase.execute(book)
+        conflictController.addToShelf(book)
+    }
+
+    fun dismissBookshelfConflict() {
+        conflictController.dismiss()
+    }
+
+    fun coexistWithBookshelfConflict(
+        existingBookUrl: String,
+        options: ChangeSourceMigrationOptions,
+    ) {
+        conflictController.coexist(existingBookUrl, options)
+    }
+
+    fun migrateBookshelfConflict(
+        existingBookUrl: String,
+        options: ChangeSourceMigrationOptions,
+    ) {
+        conflictController.migrate(existingBookUrl, options)
+    }
+
+    fun openBookshelfConflictBook(summary: ConflictBookSummary) {
+        // 先收起 Sheet 再导航，否则返回本页时 Sheet 会重新显示并吃掉一次返回键。
+        conflictController.dismiss()
+        viewModelScope.launch {
+            _effects.emit(
+                HomepageEffect.NavigateToBookInfo(
+                    name = summary.name,
+                    author = summary.author,
+                    bookUrl = summary.bookUrl,
+                    origin = summary.origin,
+                    coverPath = summary.displayCover,
+                    sharedCoverKey = null,
+                )
+            )
         }
     }
 
@@ -958,5 +1154,44 @@ class HomepageViewModel(
 
 private data class HomepageUiFlags(
     val isRefreshing: Boolean,
-    val isManageMode: Boolean
+    val isManageMode: Boolean,
+    val bookshelfConflict: BookshelfConflict?,
+    val isResolvingBookshelfConflict: Boolean,
 )
+
+private data class RankingKindsArgs(
+    val isHomepageRankingGroup: Boolean = false,
+    val kindTitles: List<String> = emptyList()
+)
+
+private fun ModuleItem.rankingKindTitles(): List<String>? {
+    if (
+        type != HomepageModuleType.Ranking.key &&
+        type != HomepageModuleType.GridRanking.key
+    ) {
+        return null
+    }
+    val rankingArgs = args ?: return null
+    return runCatching {
+        GSON.fromJson(rankingArgs, RankingKindsArgs::class.java)
+            ?.takeIf { it.isHomepageRankingGroup }
+            ?.kindTitles
+            ?.takeIf { it.size > 1 }
+    }.getOrNull()
+}
+
+private fun ModuleLoadState.mapBooks(
+    transform: (HomepageBookItemUi) -> HomepageBookItemUi
+): ModuleLoadState = when (this) {
+    is ModuleLoadState.Loaded -> copy(
+        books = books.map(transform).toImmutableList()
+    )
+
+    is ModuleLoadState.Rankings -> copy(
+        sources = sources.map { source ->
+            source.copy(state = source.state.mapBooks(transform))
+        }.toImmutableList()
+    )
+
+    else -> this
+}

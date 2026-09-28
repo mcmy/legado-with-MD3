@@ -12,17 +12,20 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.legado.app.R
 import io.legado.app.constant.AppLog
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.ThemeSettingsGateway
 import io.legado.app.help.coroutine.Coroutine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.coroutines.CoroutineContext
+import org.koin.core.context.GlobalContext
 
 
 abstract class BaseDialogFragment(
     @LayoutRes layoutID: Int,
     private val adaptationSoftKeyboard: Boolean = false
 ) : DialogFragment(layoutID) {
+
+    private val themeGateway get() = GlobalContext.get().get<ThemeSettingsGateway>()
 
     private var onDismissListener: OnDismissListener? = null
 
@@ -45,7 +48,7 @@ abstract class BaseDialogFragment(
         super.onStart()
 //        if (adaptationSoftKeyboard) {
 //            dialog?.window?.setBackgroundDrawableResource(R.color.transparent)
-//        } else if (AppConfig.isEInkMode) {
+//        } else if (themeGateway.currentSettings.appTheme == "4") {
 //            dialog?.window?.let {
 //                it.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 //                val attr = it.attributes
@@ -78,9 +81,8 @@ abstract class BaseDialogFragment(
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         if (adaptationSoftKeyboard) {
-            view.findViewById<View>(R.id.vw_bg)?.setOnClickListener(null)
             view.setOnClickListener { dismiss() }
-        } else if (!AppConfig.isEInkMode) {
+        } else if (themeGateway.currentSettings.appTheme != "4") {
             //view.setBackgroundColor(ThemeStore.backgroundColor())
         }
         onFragmentCreated(view, savedInstanceState)

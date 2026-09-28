@@ -18,9 +18,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.legado.app.R
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.ui.main.bookCoverSharedElementKey
 import io.legado.app.ui.theme.LegadoTheme
@@ -44,6 +46,7 @@ fun SearchSourceSection(
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null,
     sourceSectionIndex: Int = 0,
+    qualityMaskForBook: (SearchBook) -> Boolean = { false },
 ) {
     if (items.isEmpty()) return
 
@@ -73,7 +76,8 @@ fun SearchSourceSection(
             if (onViewAll != null) {
                 SmallTonalButton(
                     onClick = onViewAll,
-                    icon = Icons.AutoMirrored.Filled.ArrowForward
+                    icon = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = stringResource(R.string.show_all),
                 )
             }
         }
@@ -95,15 +99,17 @@ fun SearchSourceSection(
                     item.book.bookUrl,
                     "search_source:$sourceSectionIndex:$index"
                 )
+                val qualityMasked = qualityMaskForBook(item.book)
                 SearchBookGridItem(
                     book = item.book,
                     shelfState = item.shelfState,
-                    onClick = { onClickBook(item.book, sharedCoverKey) },
+                    onClick = { if (!qualityMasked) onClickBook(item.book, sharedCoverKey) },
                     onLongClick = onLongClickBook,
                     modifier = Modifier.width(100.dp),
                     sharedTransitionScope = sharedTransitionScope,
                     animatedVisibilityScope = animatedVisibilityScope,
                     sharedCoverKey = sharedCoverKey,
+                    qualityMasked = qualityMasked,
                 )
             }
         }

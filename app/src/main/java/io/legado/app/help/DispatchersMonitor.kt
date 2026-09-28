@@ -1,7 +1,8 @@
 package io.legado.app.help
 
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.utils.LogUtils
+import org.koin.core.context.GlobalContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.Default
@@ -22,6 +23,8 @@ object DispatchersMonitor {
 
     private const val TAG = "DispatchersMonitor"
 
+    private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
+
     private val dispatcher by lazy {
         Executors.newSingleThreadExecutor {
             Thread(it, TAG)
@@ -32,7 +35,7 @@ object DispatchersMonitor {
 
     fun init() {
         scope.coroutineContext.cancelChildren()
-        if (!AppConfig.recordLog) {
+        if (!otherGateway.currentSettings.recordLog) {
             return
         }
         monitor(IO)

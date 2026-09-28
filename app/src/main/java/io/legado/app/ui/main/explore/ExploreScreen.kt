@@ -49,16 +49,18 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.data.entities.BookSourcePart
 import io.legado.app.domain.usecase.ExploreKindUiUseCase
 import io.legado.app.help.source.getExploreInfoMap
-import io.legado.app.ui.book.search.SearchActivity
 import io.legado.app.ui.book.search.SearchScope
-import io.legado.app.ui.book.source.edit.BookSourceEditActivity
-import io.legado.app.ui.login.SourceLoginActivity
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ThemeResolver
@@ -77,41 +79,26 @@ import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.progressIndicator.AppContainedLoadingIndicator
 import io.legado.app.ui.widget.components.text.AppText
-import io.legado.app.utils.startActivity
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
-@Composable
-fun ExploreScreen(
-    onOpenExploreShow: (title: String?, sourceUrl: String, exploreUrl: String?) -> Unit,
-) {
-    ExploreDiscoveryScreen(onOpenExploreShow = onOpenExploreShow)
-}
 
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalFoundationApi::class,
 )
 @Composable
-private fun ExploreDiscoveryScreen(
+fun ExploreRouteScreen(
     viewModel: ExploreViewModel = koinViewModel(),
     onOpenExploreShow: (title: String?, sourceUrl: String, exploreUrl: String?) -> Unit,
+    onOpenLogin: (sourceUrl: String) -> Unit,
+    onOpenEdit: (sourceUrl: String) -> Unit,
+    onOpenSearch: (scopeRaw: String) -> Unit,
 ) {
     val context = LocalContext.current
     val activity = context as? AppCompatActivity
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val listItems by remember(uiState.items, uiState.expandedId, uiState.exploreKinds) {
-        derivedStateOf { viewModel.buildExploreListItems(uiState) }
-    }
-    var sourceToDeleteUrl by rememberSaveable { mutableStateOf<String?>(null) }
-    val sourceToDelete = remember(sourceToDeleteUrl, uiState.items) {
-        uiState.items.firstOrNull { it.bookSourceUrl == sourceToDeleteUrl }
-    }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     val exploreKindUseCase: ExploreKindUiUseCase = koinInject()
 
     LaunchedEffect(viewModel, activity, exploreKindUseCase) {
@@ -125,19 +112,55 @@ private fun ExploreDiscoveryScreen(
                         sourceUrl = effect.sourceUrl,
                         infoMap = infoMap,
                         activity = activity,
-                        onRefreshKinds = { viewModel.refreshExploreKinds(effect.sourceUrl) }
+                        onRefreshKinds = {
+                            uiState.items.firstOrNull { it.bookSourceUrl == effect.sourceUrl }
+                                ?.let { viewModel.onIntent(ExploreIntent.RefreshKinds(it)) }
+                        }
                     )
+                }
+                is ExploreEffect.OpenEdit -> {
+                    onOpenEdit(effect.sourceUrl)
+                }
+                is ExploreEffect.OpenSearch -> {
+                    onOpenSearch(SearchScope(effect.source).toString())
+                }
+                is ExploreEffect.OpenLogin -> {
+                    onOpenLogin(effect.sourceUrl)
                 }
             }
         }
     }
 
-    val stickyHeaderSource by remember(listItems, uiState.items) {
+    ExploreScreen(
+        state = uiState,
+        onIntent = viewModel::onIntent,
+        onOpenExploreShow = onOpenExploreShow,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun ExploreScreen(
+    state: ExploreViewModel.ExploreUiState,
+    onIntent: (ExploreIntent) -> Unit,
+    onOpenExploreShow: (title: String?, sourceUrl: String, exploreUrl: String?) -> Unit,
+) {
+    val listItems by remember(state.items, state.expandedId, state.exploreKinds) {
+        derivedStateOf { buildExploreListItems(state) }
+    }
+    var sourceToDeleteUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    val sourceToDelete = remember(sourceToDeleteUrl, state.items) {
+        state.items.firstOrNull { it.bookSourceUrl == sourceToDeleteUrl }
+    }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    val stickyHeaderSource by remember(listItems, state.items) {
         derivedStateOf {
             val firstIndex = listState.firstVisibleItemIndex
             val item = listItems.getOrNull(firstIndex)
             if (item is ExploreListItem.KindRow) {
-                uiState.items.find { it.bookSourceUrl == item.sourceUrl }
+                state.items.find { it.bookSourceUrl == item.sourceUrl }
             } else {
                 null
             }
@@ -148,29 +171,29 @@ private fun ExploreDiscoveryScreen(
 
     ListScaffold(
         title = stringResource(R.string.discovery),
-        state = uiState,
-        subtitle = uiState.selectedGroup.ifEmpty { stringResource(R.string.all) },
-        onSearchQueryChange = { viewModel.search(it) },
-        onSearchToggle = { viewModel.toggleSearchVisible(it) },
+        state = state,
+        subtitle = state.selectedGroup.ifEmpty { stringResource(R.string.all) },
+        onSearchQueryChange = { onIntent(ExploreIntent.Search(it)) },
+        onSearchToggle = { onIntent(ExploreIntent.ToggleSearch(it)) },
         searchPlaceholder = stringResource(R.string.search),
         dropDownMenuContent = { dismiss ->
             RoundDropdownMenuItem(
                 leadingIcon = { MenuItemIcon(Icons.Default.Group) },
                 text = stringResource(R.string.all),
-                onClick = { viewModel.setGroup(""); dismiss() }
+                onClick = { onIntent(ExploreIntent.SetGroup("")); dismiss() }
             )
-            uiState.groups.forEach { group ->
+            state.groups.forEach { group ->
                 RoundDropdownMenuItem(
                     leadingIcon = { MenuItemIcon(Icons.AutoMirrored.Outlined.Label) },
                     text = group,
-                    onClick = { viewModel.setGroup(group); dismiss() }
+                    onClick = { onIntent(ExploreIntent.SetGroup(group)); dismiss() }
                 )
             }
         },
         contentWindowInsets = WindowInsets(0)
     ) { paddingValues ->
         Box(modifier = Modifier.fillMaxSize()) {
-            if (uiState.items.isEmpty()) {
+            if (state.items.isEmpty()) {
                 EmptyMessage(
                     modifier = Modifier
                         .fillMaxSize()
@@ -198,31 +221,18 @@ private fun ExploreDiscoveryScreen(
                     when (listItem) {
                         is ExploreListItem.Header -> {
                             val item = listItem.source
-                            val isExpanded = uiState.expandedId == item.bookSourceUrl
+                            val isExpanded = state.expandedId == item.bookSourceUrl
                         ExploreSourceHeader(
                             modifier = Modifier.animateItem(),
                             item = item,
                             isExpanded = isExpanded,
-                            loadingKinds = if (isExpanded) uiState.loadingKinds else false,
-                            onClick = { viewModel.toggleExpand(item) },
-                            onTop = { viewModel.topSource(item) },
-                            onEdit = {
-                                context.startActivity<BookSourceEditActivity> {
-                                    putExtra("sourceUrl", item.bookSourceUrl)
-                                }
-                            },
-                            onSearch = {
-                                context.startActivity<SearchActivity> {
-                                    putExtra("searchScope", SearchScope(item).toString())
-                                }
-                            },
-                            onLogin = {
-                                context.startActivity<SourceLoginActivity> {
-                                    putExtra("type", "bookSource")
-                                    putExtra("key", item.bookSourceUrl)
-                                }
-                            },
-                            onRefresh = { viewModel.refreshExploreKinds(item) },
+                            loadingKinds = if (isExpanded) state.loadingKinds else false,
+                            onClick = { onIntent(ExploreIntent.ToggleExpand(item)) },
+                            onTop = { onIntent(ExploreIntent.TopSource(item)) },
+                            onEdit = { onIntent(ExploreIntent.OpenEdit(item)) },
+                            onSearch = { onIntent(ExploreIntent.OpenSearch(item)) },
+                            onLogin = { onIntent(ExploreIntent.OpenLogin(item)) },
+                            onRefresh = { onIntent(ExploreIntent.RefreshKinds(item)) },
                             onDelete = { sourceToDeleteUrl = item.bookSourceUrl },
                             isMiuix = composeEngine
                         )
@@ -245,13 +255,21 @@ private fun ExploreDiscoveryScreen(
                                         },
                                         modifier = Modifier.weight(span.toFloat()),
                                         isMiuix = composeEngine,
-                                        displayNameOverride = uiState.kindDisplayNames[kind.title],
-                                        valueOverride = uiState.kindValues[kind.title],
+                                        displayNameOverride = state.kindDisplayNames[kind.title],
+                                        valueOverride = state.kindValues[kind.title],
                                         onValueChange = { value ->
-                                            viewModel.updateKindValue(listItem.sourceUrl, kind, value)
+                                            onIntent(
+                                                ExploreIntent.UpdateKindValue(
+                                                    listItem.sourceUrl,
+                                                    kind,
+                                                    value,
+                                                )
+                                            )
                                         },
                                         onRunAction = {
-                                            viewModel.requestKindAction(listItem.sourceUrl, kind)
+                                            onIntent(
+                                                ExploreIntent.RunKindAction(listItem.sourceUrl, kind)
+                                            )
                                         }
                                     )
                                 }
@@ -280,6 +298,10 @@ private fun ExploreDiscoveryScreen(
                     cornerRadius = 12.dp,
                     horizontalPadding = 12.dp,
                     verticalPadding = 8.dp,
+                    modifier = Modifier.semantics {
+                        contentDescription = item.bookSourceName
+                        role = Role.Button
+                    },
                     onClick = {
                         scope.launch {
                             val index = listItems.indexOfFirst {
@@ -300,7 +322,7 @@ private fun ExploreDiscoveryScreen(
         title = stringResource(R.string.sure_del),
         confirmText = stringResource(android.R.string.ok),
         onConfirm = { source ->
-            viewModel.deleteSource(source)
+            onIntent(ExploreIntent.DeleteSource(source))
             sourceToDeleteUrl = null
         },
         dismissText = stringResource(android.R.string.cancel),
@@ -327,6 +349,9 @@ fun ExploreSourceHeader(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val rotation by animateFloatAsState(if (isExpanded) 90f else 0f, label = "rotation")
+    val expandActionLabel = stringResource(if (isExpanded) R.string.collapse else R.string.expand)
+    val loadingLabel = stringResource(R.string.loading)
+    val moreMenuLabel = stringResource(R.string.more_menu)
 
     val containerColor by animateColorAsState(
         targetValue = if (isExpanded)
@@ -356,20 +381,23 @@ fun ExploreSourceHeader(
         ListItem(
             modifier = Modifier
                 .combinedClickable(
+                    role = Role.Button,
+                    onClickLabel = expandActionLabel,
+                    onLongClickLabel = moreMenuLabel,
                     onClick = onClick,
                     onLongClick = { showMenu = true }
                 )
+                .semantics(mergeDescendants = true) {
+                    contentDescription = item.bookSourceName
+                    role = Role.Button
+                    if (loadingKinds) {
+                        stateDescription = loadingLabel
+                    }
+                }
                 .fillMaxWidth(),
             colors = ListItemDefaults.colors(
                 containerColor = Color.Transparent
             ),
-            headlineContent = {
-                AppText(
-                    text = item.bookSourceName,
-                    style = LegadoTheme.typography.titleMedium,
-                    color = contentColor
-                )
-            },
             trailingContent = {
                 AnimatedContent(
                     targetState = loadingKinds,
@@ -431,9 +459,13 @@ fun ExploreSourceHeader(
                         onClick = { onDelete(); showMenu = false }
                     )
                 }
-            }
-        )
+            },
+        ) {
+            AppText(
+                text = item.bookSourceName,
+                style = LegadoTheme.typography.titleMedium,
+                color = contentColor
+            )
+        }
     }
 }
-
-

@@ -30,6 +30,7 @@ import io.legado.app.ui.widget.components.text.AppText
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.basic.InputField as MiuixSearchBarInputField
 import top.yukonga.miuix.kmp.basic.TextField as MiuixTextField
+import top.yukonga.miuix.kmp.basic.TextFieldDefaults as MiuixTextFieldDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,7 +41,7 @@ fun AppTextField(
     readOnly: Boolean = false,
     backgroundColor: Color = Color.Unspecified,
     label: String? = null,
-    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Attached(),
+    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Inside(),
     placeholder: @Composable (() -> Unit)? = null,
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
@@ -67,7 +68,13 @@ fun AppTextField(
             modifier = modifier,
             enabled = enabled,
             readOnly = readOnly,
-            backgroundColor = if (backgroundColor != Color.Unspecified) backgroundColor else MiuixTheme.colorScheme.surfaceContainerHigh,
+            colors = MiuixTextFieldDefaults.textFieldColors(
+                backgroundColor = if (backgroundColor != Color.Unspecified) {
+                    backgroundColor
+                } else {
+                    MiuixTheme.colorScheme.surfaceContainerHigh
+                },
+            ),
             label = label ?: "",
             leadingIcon = leadingIcon,
             trailingIcon = trailingIcon,
@@ -166,7 +173,13 @@ fun AppTextField(
             modifier = modifier,
             enabled = enabled,
             readOnly = readOnly,
-            backgroundColor = if (backgroundColor != Color.Unspecified) backgroundColor else MiuixTheme.colorScheme.surfaceContainerHigh,
+            colors = MiuixTextFieldDefaults.textFieldColors(
+                backgroundColor = if (backgroundColor != Color.Unspecified) {
+                    backgroundColor
+                } else {
+                    MiuixTheme.colorScheme.surfaceContainerHigh
+                },
+            ),
             label = label ?: "",
             leadingIcon = leadingIcon,
             trailingIcon = trailingIcon,
@@ -228,7 +241,7 @@ fun AppTextFieldSurface(
     enabled: Boolean = true,
     readOnly: Boolean = false,
     label: String? = null,
-    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Attached(),
+    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Inside(),
     placeholder: @Composable (() -> Unit)? = null,
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
@@ -284,7 +297,7 @@ fun AppDenseTextField(
     readOnly: Boolean = false,
     backgroundColor: Color = Color.Unspecified,
     label: String? = null,
-    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Attached(),
+    labelPosition: TextFieldLabelPosition = TextFieldLabelPosition.Inside(),
     placeholder: @Composable (() -> Unit)? = null,
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,

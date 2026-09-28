@@ -2,20 +2,22 @@ package io.legado.app.help.storage
 
 import android.content.Context
 import android.net.Uri
-import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.documentfile.provider.DocumentFile
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.CacheManager
 import io.legado.app.help.DirectLinkUpload
-import io.legado.app.help.config.AppConfig
+import io.legado.app.help.book.isLocal
+import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.LocalConfig
-import io.legado.app.help.config.ThemeConfigStore
 import io.legado.app.help.config.ReadBookConfig
+import io.legado.app.help.config.ThemeConfigStore
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.model.BookCover
 import io.legado.app.utils.FileUtils
@@ -23,9 +25,7 @@ import io.legado.app.utils.GSON
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.compress.ZipUtils
 import io.legado.app.utils.createFolderIfNotExist
-import io.legado.app.data.repository.dataStore
 import io.legado.app.utils.externalFiles
-import kotlinx.coroutines.flow.first
 import io.legado.app.utils.getFile
 import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.normalizeFileName
@@ -36,6 +36,7 @@ import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.File
 import java.io.FileInputStream
@@ -50,6 +51,12 @@ import java.util.concurrent.TimeUnit
  */
 object Backup {
 
+    private val readStyleGateway: ReadStyleGateway
+        get() = GlobalContext.get().get()
+
+    private val backupSettingsGateway: BackupSettingsGateway
+        get() = GlobalContext.get().get()
+
     val backupPath: String by lazy {
         appCtx.filesDir.getFile("backup").createFolderIfNotExist().absolutePath
     }
@@ -63,6 +70,7 @@ object Backup {
         arrayOf(
             "bookshelf.json",
             "bookmark.json",
+            "bookMarking.json",
             "bookGroup.json",
             "bookSource.json",
             "rssSources.json",
@@ -77,6 +85,11 @@ object Backup {
             "httpTTS.json",
             "keyboardAssists.json",
             "dictRule.json",
+            "homepageModules.json",
+            "homepageCustomSets.json",
+            "highlightRule.json",
+            "highlightTagRule.json",
+            "tagGroupRule.json",
             "servers.json",
             DirectLinkUpload.ruleFileName,
             ReadBookConfig.configFileName,
@@ -91,8 +104,8 @@ object Backup {
     private fun getNowZipFileName(): String {
         val backupDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
             .format(Date(System.currentTimeMillis()))
-        val deviceName = AppConfig.webDavDeviceName
-        return if (deviceName?.isNotBlank() == true) {
+        val deviceName = backupSettingsGateway.currentSettings.webDavDeviceName
+        return if (deviceName.isNotBlank()) {
             "backup${backupDate}-${deviceName}.zip"
         } else {
             "backup${backupDate}.zip"
@@ -111,7 +124,7 @@ object Backup {
                     if (shouldBackup()) {
                         val backupZipFileName = getNowZipFileName()
                         if (!AppWebDav.hasBackUp(backupZipFileName)) {
-                            backup(context, AppConfig.backupPath)
+                            backup(context, backupSettingsGateway.currentSettings.backupPath)
                         } else {
                             LocalConfig.lastBackup = System.currentTimeMillis()
                         }
@@ -136,50 +149,109 @@ object Backup {
         LocalConfig.lastBackup = System.currentTimeMillis()
         val aes = BackupAES()
         FileUtils.delete(backupPath)
-        writeListToJson(appDb.bookDao.all, "bookshelf.json", backupPath)
-        writeListToJson(appDb.bookmarkDao.all, "bookmark.json", backupPath)
-        writeListToJson(appDb.bookGroupDao.all, "bookGroup.json", backupPath)
-        writeListToJson(appDb.bookSourceDao.all, "bookSource.json", backupPath)
-        writeListToJson(appDb.rssSourceDao.all, "rssSources.json", backupPath)
-        writeListToJson(appDb.rssStarDao.all, "rssStar.json", backupPath)
-        writeListToJson(appDb.replaceRuleDao.all, "replaceRule.json", backupPath)
-        writeListToJson(appDb.readRecordDao.all, "readRecord.json", backupPath)
-        writeListToJson(appDb.readRecordDao.allDetail, "readRecordDetail.json", backupPath)
-        writeListToJson(appDb.readRecordDao.allSession, "readRecordSession.json", backupPath)
-        writeListToJson(appDb.searchKeywordDao.all, "searchHistory.json", backupPath)
-        writeListToJson(appDb.ruleSubDao.all, "sourceSub.json", backupPath)
-        writeListToJson(appDb.txtTocRuleDao.all, "txtTocRule.json", backupPath)
-        writeListToJson(appDb.httpTTSDao.all, "httpTTS.json", backupPath)
-        writeListToJson(appDb.keyboardAssistsDao.all, "keyboardAssists.json", backupPath)
-        writeListToJson(appDb.dictRuleDao.all, "dictRule.json", backupPath)
-        GSON.toJson(appDb.serverDao.all).let { json ->
-            aes.runCatching {
-                encryptBase64(json)
-            }.getOrDefault(json).let {
-                FileUtils.createFileIfNotExist(backupPath + File.separator + "servers.json")
-                    .writeText(it)
+        writeListToJson(
+            appDb.bookDao.all.filterNot { BackupConfig.backupIgnoreLocalBook && it.isLocal },
+            "bookshelf.json",
+            backupPath,
+        )
+        // 书签与划线/想法笔记（book_marks）视为一体，统一受既有 bookmark 忽略项控制
+        if (BackupConfig.dbIsNotIgnored("bookmark", true)) {
+            writeListToJson(appDb.bookmarkDao.all, "bookmark.json", backupPath)
+            writeListToJson(appDb.bookMarkingDao.all, "bookMarking.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("bookGroup", true)) {
+            writeListToJson(appDb.bookGroupDao.all, "bookGroup.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("bookSource", true)) {
+            writeListToJson(appDb.bookSourceDao.all, "bookSource.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("rssSource", true)) {
+            writeListToJson(appDb.rssSourceDao.all, "rssSources.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("rssStar", true)) {
+            writeListToJson(appDb.rssStarDao.all, "rssStar.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("replaceRule", true)) {
+            writeListToJson(appDb.replaceRuleDao.all, "replaceRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("readRecord", true)) {
+            writeListToJson(appDb.readRecordDao.all, "readRecord.json", backupPath)
+            writeListToJson(appDb.readRecordDao.allDetail, "readRecordDetail.json", backupPath)
+            writeListToJson(appDb.readRecordDao.allSession, "readRecordSession.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("searchHistory", true)) {
+            writeListToJson(appDb.searchKeywordDao.all, "searchHistory.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("sourceSub", true)) {
+            writeListToJson(appDb.ruleSubDao.all, "sourceSub.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("txtTocRule", true)) {
+            writeListToJson(appDb.txtTocRuleDao.all, "txtTocRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("httpTTS", true)) {
+            writeListToJson(appDb.httpTTSDao.all, "httpTTS.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("keyboardAssists", true)) {
+            writeListToJson(appDb.keyboardAssistsDao.all, "keyboardAssists.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("dictRule", true)) {
+            writeListToJson(appDb.dictRuleDao.all, "dictRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("homepageModules", true)) {
+            writeListToJson(appDb.homepageModuleDao.getAll(), "homepageModules.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("homepageCustomSets", true)) {
+            writeListToJson(
+                appDb.homepageCustomSetDao.getAll(),
+                "homepageCustomSets.json",
+                backupPath
+            )
+        }
+        if (BackupConfig.dbIsNotIgnored("highlightRule", true)) {
+            writeListToJson(appDb.highlightRuleDao.getAll(), "highlightRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("highlightTagRule", true)) {
+            writeListToJson(appDb.highlightTagRuleDao.getAll(), "highlightTagRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("tagGroupRule", true)) {
+            writeListToJson(appDb.tagGroupRuleDao.getAll(), "tagGroupRule.json", backupPath)
+        }
+        if (BackupConfig.dbIsNotIgnored("server", true)) {
+            GSON.toJson(appDb.serverDao.all).let { json ->
+                aes.runCatching {
+                    encryptBase64(json)
+                }.getOrDefault(json).let {
+                    FileUtils.createFileIfNotExist(backupPath + File.separator + "servers.json")
+                        .writeText(it)
+                }
             }
         }
         currentCoroutineContext().ensureActive()
-        GSON.toJson(ReadBookConfig.configList).let {
-            FileUtils.createFileIfNotExist(backupPath + File.separator + ReadBookConfig.configFileName)
-                .writeText(it)
+        if (!BackupConfig.backupIgnoreReadConfig) {
+            readStyleGateway.exportConfigsJson().let {
+                FileUtils.createFileIfNotExist(backupPath + File.separator + ReadBookConfig.configFileName)
+                    .writeText(it)
+            }
+            readStyleGateway.exportShareConfigJson().let {
+                FileUtils.createFileIfNotExist(backupPath + File.separator + ReadBookConfig.shareConfigFileName)
+                    .writeText(it)
+            }
         }
-        GSON.toJson(ReadBookConfig.shareConfig).let {
-            FileUtils.createFileIfNotExist(backupPath + File.separator + ReadBookConfig.shareConfigFileName)
-                .writeText(it)
-        }
-        GSON.toJson(ThemeConfigStore.configList).let {
-            FileUtils.createFileIfNotExist(backupPath + File.separator + ThemeConfigStore.configFileName)
-                .writeText(it)
+        if (!BackupConfig.backupIgnoreThemeConfig) {
+            GSON.toJson(ThemeConfigStore.configList).let {
+                FileUtils.createFileIfNotExist(backupPath + File.separator + ThemeConfigStore.configFileName)
+                    .writeText(it)
+            }
         }
         DirectLinkUpload.getConfig()?.let {
             FileUtils.createFileIfNotExist(backupPath + File.separator + DirectLinkUpload.ruleFileName)
                 .writeText(GSON.toJson(it))
         }
-        BookCover.getConfig()?.let {
-            FileUtils.createFileIfNotExist(backupPath + File.separator + BookCover.configFileName)
-                .writeText(GSON.toJson(it))
+        if (!BackupConfig.backupIgnoreCoverConfig) {
+            BookCover.getConfig()?.let {
+                FileUtils.createFileIfNotExist(backupPath + File.separator + BookCover.configFileName)
+                    .writeText(GSON.toJson(it))
+            }
         }
         if (!BackupConfig.ignoreReadConfig) {
             CacheManager.get(webReadConfigKey, true)?.let {
@@ -188,8 +260,7 @@ object Backup {
             }
         }
         currentCoroutineContext().ensureActive()
-        val configMap = appCtx.dataStore.data.first()
-            .asMap()
+        val configMap = AppConfigStore.preferences.asMap()
             .mapKeys { it.key.name }
         val xmlBuilder = StringBuilder()
         xmlBuilder.append("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n")
@@ -215,13 +286,13 @@ object Backup {
 
         currentCoroutineContext().ensureActive()
         val zipFileName = getNowZipFileName()
-        val paths = arrayListOf(*backupFileNames)
-        for (i in 0 until paths.size) {
-            paths[i] = backupPath + File.separator + paths[i]
-        }
+        val paths = backupFileNames
+            .map { File(backupPath, it) }
+            .filter(File::isFile)
+            .map(File::getAbsolutePath)
         FileUtils.delete(zipFilePath)
         FileUtils.delete(zipFilePath.replace("tmp_", ""))
-        val backupFileName = if (AppConfig.onlyLatestBackup) {
+        val backupFileName = if (backupSettingsGateway.currentSettings.onlyLatestBackup) {
             "backup.zip"
         } else {
             zipFileName
@@ -253,7 +324,7 @@ object Backup {
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
-        ReadBookConfig.getAllPicBgStr().map {
+        readStyleGateway.allBackgroundImagePaths().map {
             if (it.contains(File.separator)) {
                 File(it)
             } else {

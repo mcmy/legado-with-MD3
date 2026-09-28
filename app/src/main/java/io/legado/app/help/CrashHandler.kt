@@ -11,9 +11,9 @@ import android.os.Process
 import android.webkit.WebSettings
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.AppLog
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.config.AppConfig
-import io.legado.app.help.config.LocalConfig
 import io.legado.app.model.ReadAloud
 import io.legado.app.utils.FileDoc
 import io.legado.app.utils.FileUtils
@@ -25,6 +25,7 @@ import io.legado.app.utils.longToastOnUiLegacy
 import io.legado.app.utils.stackTraceStr
 import io.legado.app.utils.writeText
 import splitties.init.appCtx
+import org.koin.core.context.GlobalContext
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
@@ -82,14 +83,14 @@ class CrashHandler(val context: Context) : Thread.UncaughtExceptionHandler {
      */
     private fun handleException(ex: Throwable?): Boolean {
         if (ex == null) return false
-        LocalConfig.appCrash = true
         //保存日志文件
         val crashFileName = saveCrashInfo2File(ex)
-        if ((ex is OutOfMemoryError || ex.cause is OutOfMemoryError) && AppConfig.recordHeapDump) {
+        if ((ex is OutOfMemoryError || ex.cause is OutOfMemoryError) &&
+            otherGateway.currentSettings.recordHeapDump
+        ) {
             doHeapDump()
         }
         return if (startCrashReport(crashFileName)) {
-            LocalConfig.appCrash = false
             true
         } else {
             context.longToastOnUiLegacy(ex.stackTraceStr)
@@ -110,6 +111,9 @@ class CrashHandler(val context: Context) : Thread.UncaughtExceptionHandler {
 
     companion object {
         const val EXTRA_CRASH_FILE_NAME = "crashFileName"
+
+        private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
+        private val backupGateway by lazy { GlobalContext.get().get<BackupSettingsGateway>() }
 
         private const val CRASH_REPORT_ACTIVITY = "io.legado.app.ui.about.CrashReportActivity"
 
@@ -172,7 +176,7 @@ class CrashHandler(val context: Context) : Thread.UncaughtExceptionHandler {
             val time = format.format(Date())
             val fileName = "crash-$time-$timestamp.log"
             try {
-                val backupPath = AppConfig.backupPath
+                val backupPath = backupGateway.currentSettings.backupPath
                     ?: throw NoStackTraceException("备份路径未配置")
                 val uri = Uri.parse(backupPath)
                 val fileDoc = FileDoc.fromUri(uri, true)

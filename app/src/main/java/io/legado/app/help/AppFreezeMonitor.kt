@@ -8,12 +8,15 @@ import android.content.IntentFilter
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.utils.LogUtils
+import org.koin.core.context.GlobalContext
 
 object AppFreezeMonitor {
 
     private const val TAG = "AppFreezeMonitor"
+
+    private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
 
     val handler by lazy {
         Handler(HandlerThread("AppFreezeMonitor").apply { start() }.looper)
@@ -28,7 +31,7 @@ object AppFreezeMonitor {
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     fun init(context: Context) {
-        if (!AppConfig.recordLog) {
+        if (!otherGateway.currentSettings.recordLog) {
             if (registeredReceiver) {
                 registeredReceiver = false
                 context.unregisterReceiver(screenStatusReceiver)
@@ -60,7 +63,7 @@ object AppFreezeMonitor {
 
                 previous = current
 
-                if (AppConfig.recordLog) {
+                if (otherGateway.currentSettings.recordLog) {
                     handler.postDelayed(this, 3000)
                 } else {
                     monitorRunnable = null

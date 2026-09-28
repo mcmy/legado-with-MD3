@@ -5,6 +5,8 @@ import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ThemeResolver
 import top.yukonga.miuix.kmp.basic.Checkbox as MiuixCheckbox
@@ -14,22 +16,30 @@ fun AppCheckbox(
     checked: Boolean,
     onCheckedChange: ((Boolean) -> Unit)?,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    includeStateSemantics: Boolean = true
 ) {
     val state = if (checked) ToggleableState.On else ToggleableState.Off
+    val semanticModifier = if (includeStateSemantics) {
+        modifier.semantics {
+            toggleableState = state
+        }
+    } else {
+        modifier
+    }
 
     if (ThemeResolver.isMiuixEngine(composeEngine)) {
         MiuixCheckbox(
             state = state,
             onClick = onCheckedChange?.let { { it(!checked) } },
-            modifier = modifier,
+            modifier = semanticModifier,
             enabled = enabled
         )
     } else {
         Checkbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            modifier = modifier,
+            modifier = semanticModifier,
             enabled = enabled
         )
     }

@@ -10,7 +10,6 @@ import io.legado.app.domain.model.AiMessage
 import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiProtocol
 import io.legado.app.domain.model.AiProviderConfig
-import io.legado.app.domain.model.AiReasoningLevel
 import io.legado.app.domain.model.AiToolCall
 import io.legado.app.domain.model.AiToolDefinition
 import io.legado.app.help.http.addHeaders
@@ -62,14 +61,14 @@ class OpenAiResponsesHandler : AiProtocolHandler {
         if (hasReasoningCapability(request.model.capabilities)) {
             body["reasoning"] = buildMap<String, Any> {
                 put("summary", "auto")
-                if (params.reasoningLevel != AiReasoningLevel.AUTO) {
-                    put("effort", params.reasoningLevel.effort)
+                params.reasoningLevel.effortFor(provider)?.let {
+                    put("effort", it)
                 }
             }
         }
 
         return retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            val response = okHttpClient.newCallStrResponse {
+            val response = aiOkHttpClient.newCallStrResponse {
                 url(provider.baseUrl + provider.responsesPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
@@ -114,14 +113,14 @@ class OpenAiResponsesHandler : AiProtocolHandler {
         if (hasReasoningCapability(request.model.capabilities)) {
             body["reasoning"] = buildMap<String, Any> {
                 put("summary", "auto")
-                if (params.reasoningLevel != AiReasoningLevel.AUTO) {
-                    put("effort", params.reasoningLevel.effort)
+                params.reasoningLevel.effortFor(provider)?.let {
+                    put("effort", it)
                 }
             }
         }
 
         val response = retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            okHttpClient.newCallResponse {
+            aiOkHttpClient.newCallResponse {
                 url(provider.baseUrl + provider.responsesPath)
                 postJson(GSON.toJson(body))
                 addHeaders(

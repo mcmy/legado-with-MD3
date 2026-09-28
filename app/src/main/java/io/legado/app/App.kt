@@ -6,12 +6,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
-import android.content.res.Configuration
 import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.core.graphics.scale
-import coil.ImageLoader
-import coil.ImageLoaderFactory
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
 import com.github.liuyueyi.quick.transfer.constants.TransType
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.DynamicColorsOptions
@@ -20,6 +19,7 @@ import com.jeremyliao.liveeventbus.logger.DefaultLogger
 import com.script.rhino.ReadOnlyJavaObject
 import com.script.rhino.RhinoScriptEngine
 import com.script.rhino.RhinoWrapFactory
+import io.legado.app.constant.AppConst.channelIdBookSourceCheck
 import io.legado.app.constant.AppConst.channelIdDownload
 import io.legado.app.constant.AppConst.channelIdReadAloud
 import io.legado.app.constant.AppConst.channelIdWeb
@@ -34,9 +34,15 @@ import io.legado.app.data.entities.rule.BookInfoRule
 import io.legado.app.data.entities.rule.ContentRule
 import io.legado.app.data.entities.rule.ExploreRule
 import io.legado.app.data.entities.rule.SearchRule
-import io.legado.app.data.repository.SettingsRepository
 import io.legado.app.di.appDatabaseModule
 import io.legado.app.di.appModule
+import io.legado.app.domain.gateway.AppLocaleGateway
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
+import io.legado.app.domain.gateway.ReadStyleGateway
+import io.legado.app.domain.gateway.ThemeSettingsGateway
 import io.legado.app.help.AppFreezeMonitor
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.CrashHandler
@@ -45,7 +51,9 @@ import io.legado.app.help.DispatchersMonitor
 import io.legado.app.help.LifecycleHelp
 import io.legado.app.help.RuleBigDataHelp
 import io.legado.app.help.book.BookHelp
+import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.help.config.ThemeConfigStore
 import io.legado.app.help.config.ThemeConfigStore.applyDayNightInit
@@ -58,15 +66,17 @@ import io.legado.app.help.source.SourceHelp
 import io.legado.app.help.storage.Backup
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.model.BookCover
-import io.legado.app.ui.book.read.page.entities.TextLine
 import io.legado.app.utils.ChineseUtils
 import io.legado.app.utils.FirebaseManager
 import io.legado.app.utils.LogUtils
-import io.legado.app.utils.defaultSharedPreferences
 import io.legado.app.utils.getPrefBoolean
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.isDebuggable
+import kotlinx.coroutines.Dispatchers.Main
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.chromium.base.ThreadUtils
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
@@ -78,22 +88,57 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.logging.Level
 
-class App : Application(), ImageLoaderFactory {
+class App : Application(), SingletonImageLoader.Factory {
 
-    private lateinit var oldConfig: Configuration
+    private val themeGateway get() = get<ThemeSettingsGateway>()
+    private val otherGateway get() = get<OtherSettingsGateway>()
+    private val backupGateway get() = get<BackupSettingsGateway>()
+    private val readGateway get() = get<ReadSettingsGateway>()
 
-    override fun newImageLoader(): ImageLoader {
+    override fun newImageLoader(context: Context): ImageLoader {
         return get()
     }
 
     override fun onCreate() {
+        // 首行初始化设置快照层：同步预加载 DataStore（触发 SP 迁移），
+        // 之后所有 getPref* 门面读取均为纯内存查找，须先于一切主题/配置读取
+        AppConfigStore.init(this)
+        // 一次性迁移：把旧版语言偏好写入 AppCompat per-app locales，之后交由
+        // autoStoreLocales 持久化。不能每次启动都执行——API 33+ 上会覆盖用户在
+        // 系统设置里选择的应用语言，API <33 上此时 AppCompat 存储尚未加载、
+        // getApplicationLocales() 恒为空，isEmpty 守卫会形同虚设
+        val legacyLanguage = if (!LocalConfig.appLocaleMigrated) {
+            LocalConfig.appLocaleMigrated = true
+            AppConfigStore.getString(PreferKey.language) ?: "auto"
+        } else null
         startKoin {
             androidContext(this@App)
             modules(appDatabaseModule, appModule)
         }
+        @Suppress("DEPRECATION")
+        AppConfig.initialize(
+            shellGateway = get(),
+            themeGateway = get(),
+            bookshelfGateway = get(),
+            otherGateway = get(),
+            backupGateway = get(),
+            cacheGateway = get(),
+            coverGateway = get(),
+            readGateway = get(),
+            aloudGateway = get(),
+            importBookGateway = get(),
+            exportGateway = get(),
+        )
+        ReadBookConfig.initialize(
+            configStore = get(),
+            readSettingsGateway = get(),
+        )
+        if (legacyLanguage != null) {
+            get<AppLocaleGateway>().migrateLegacyLanguage(legacyLanguage)
+        }
         applyDayNightInit(this)
         if (getPrefString("app_theme", "0") == "12") {
-            if (AppConfig.customMode == "accent")
+            if (themeGateway.currentSettings.customMode == "accent")
                 setTheme(R.style.ThemeOverlay_WhiteBackground)
 
             val colorImagePath = getPrefString(PreferKey.colorImage)
@@ -130,34 +175,50 @@ class App : Application(), ImageLoaderFactory {
         if (isDebuggable) {
             ThreadUtils.setThreadAssertsDisabledForTesting(true)
         }
-        oldConfig = Configuration(resources.configuration)
         registerActivityLifecycleCallbacks(LifecycleHelp)
-        defaultSharedPreferences.registerOnSharedPreferenceChangeListener(AppConfig)
+        // Rhino 的全局 ContextFactory 必须在任何线程执行 Context.enter() 之前安装：
+        // 它只在 RhinoScriptEngine 的 object init 里通过 ContextFactory.initGlobal 生效，
+        // 而 Context.enter() 取的就是这个全局工厂。原先 initRhino() 排在下面那个
+        // Coroutine.async 的末尾，冷启动早期执行的脚本（书源登录/换源/解析）可能先拿到
+        // 普通 Context，强转 RhinoContext 会直接崩溃并把该线程永久污染。
+        // 这里改为在 onCreate 中同步执行；RhinoWrapFactory 注册同理要早于任何脚本执行。
+        initRhino()
         Coroutine.async {
-            AppWebDav.upConfig()
+            get<BackupSettingsGateway>().settings
+                .map {
+                    listOf(it.webDavUrl, it.webDavDir, it.webDavAccount, it.webDavPassword)
+                }
+                .distinctUntilChanged()
+                .collect { AppWebDav.upConfig() }
+        }
+        // themeMode 是日夜的唯一来源，除外观设置外（阅读页快捷按钮、主题包、恢复备份）
+        // 也会直接写网关。AppCompat 的夜间模式统一跟随网关，否则资源配置不变，
+        // WebView、旧 View 界面拿到的仍是切换前的深浅色。
+        Coroutine.async {
+            get<AppShellSettingsGateway>().settings
+                .map { it.themeMode }
+                .distinctUntilChanged()
+                .collect {
+                    withContext(Main) { ThemeConfigStore.initNightMode() }
+                }
         }
         Coroutine.async {
             LogUtils.init(this@App)
             LogUtils.d("App", "onCreate")
             LogUtils.logDeviceInfo()
-            // 确保 DataStore 迁移后 SP 中的主题配置值未丢失
-            kotlin.runCatching {
-                get<SettingsRepository>().postMigrationSync()
-            }
             //预下载Cronet so
             Cronet.preDownload()
             createNotificationChannels()
             LiveEventBus.config()
                 .lifecycleObserverAlwaysActive(true)
                 .autoClear(false)
-                .enableLogger(BuildConfig.DEBUG || AppConfig.recordLog)
+                .enableLogger(BuildConfig.DEBUG || otherGateway.currentSettings.recordLog)
                 .setLogger(EventLogger())
             DefaultData.upVersion()
             AppFreezeMonitor.init(this@App)
             DispatchersMonitor.init()
             URL.setURLStreamHandlerFactory(ObsoleteUrlFactory(okHttpClient))
             launch { installGmsTlsProvider(appCtx) }
-            initRhino()
             //初始化封面
             BookCover.toString()
             //清除过期数据
@@ -169,10 +230,10 @@ class App : Application(), ImageLoaderFactory {
             RuleBigDataHelp.clearInvalid()
             BookHelp.clearInvalidCache()
             Backup.clearCache()
-            ReadBookConfig.clearBgAndCache()
+            get<ReadStyleGateway>().clearUnusedBackgrounds()
             ThemeConfigStore.clearBg()
             //初始化简繁转换引擎
-            when (AppConfig.chineseConverterType) {
+            when (readGateway.currentSettings.chineseConverterType) {
                 1 -> {
                     ChineseUtils.fixT2sDict()
                     ChineseUtils.preLoad(true, TransType.TRADITIONAL_TO_SIMPLE)
@@ -183,25 +244,11 @@ class App : Application(), ImageLoaderFactory {
             //调整排序序号
             SourceHelp.adjustSortNumber()
             //同步阅读记录
-            if (AppConfig.syncBookProgress) {
+            if (backupGateway.currentSettings.syncBookProgress) {
                 AppWebDav.upConfig()
                 AppWebDav.downloadAllBookProgress()
             }
         }
-    }
-
-//    override fun onConfigurationChanged(newConfig: Configuration) {
-//        super.onConfigurationChanged(newConfig)
-//        val diff = newConfig.diff(oldConfig)
-//        if ((diff and ActivityInfo.CONFIG_UI_MODE) != 0) {
-//            applyDayNight(this)
-//        }
-//        oldConfig = Configuration(newConfig)
-//    }
-
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        TextLine.trimCaches(level)
     }
 
     /**
@@ -263,6 +310,17 @@ class App : Application(), ImageLoaderFactory {
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
 
+        val bookSourceCheckChannel = NotificationChannel(
+            channelIdBookSourceCheck,
+            getString(R.string.check_book_source),
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            enableLights(false)
+            enableVibration(false)
+            setSound(null, null)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+
         val webChannel = NotificationChannel(
             channelIdWeb,
             getString(R.string.web_service),
@@ -278,6 +336,7 @@ class App : Application(), ImageLoaderFactory {
         notificationManager.createNotificationChannels(
             listOf(
                 downloadChannel,
+                bookSourceCheckChannel,
                 readAloudChannel,
                 webChannel
             )
@@ -285,6 +344,7 @@ class App : Application(), ImageLoaderFactory {
     }
 
     private fun initRhino() {
+        @Suppress("UNUSED_EXPRESSION")
         RhinoScriptEngine
         RhinoWrapFactory.register(BookSource::class.java, NativeBaseSource.factory)
         RhinoWrapFactory.register(RssSource::class.java, NativeBaseSource.factory)

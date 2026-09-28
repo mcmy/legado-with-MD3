@@ -3,15 +3,16 @@ package io.legado.app.utils
 import android.content.Context
 import com.google.firebase.FirebaseApp
 import com.google.firebase.analytics.FirebaseAnalytics
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import org.koin.core.context.GlobalContext
 
 object FirebaseManager {
 
-    var isEnabled: Boolean
-        get() = AppConfig.firebaseEnable
-        private set(value) {
-            AppConfig.firebaseEnable = value
-        }
+    private val otherSettingsGateway
+        get() = GlobalContext.get().get<OtherSettingsGateway>()
+
+    val isEnabled: Boolean
+        get() = otherSettingsGateway.currentSettings.firebaseEnable
 
     fun init(context: Context) {
         applyState(context, isEnabled)
@@ -37,6 +38,5 @@ object FirebaseManager {
                 // 忽略异常
             }
         }
-        isEnabled = enabled
     }
 }

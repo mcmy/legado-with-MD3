@@ -73,7 +73,10 @@ fun AboutScreen(
         )
     }
 
-    AboutOverlays(state = state, onIntent = onIntent)
+    AboutOverlays(
+        state = state,
+        onIntent = onIntent,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -148,19 +151,19 @@ private fun MaterialAboutScreen(
                 FilledTonalIconButton(onClick = { onIntent(AboutIntent.OpenUrl("https://github.com/HapeLee/legado-with-MD3")) }) {
                     Icon(
                         painter = painterResource(R.drawable.ic_web_outline),
-                        contentDescription = stringResource(R.string.back)
+                        contentDescription = stringResource(R.string.about_open_project_homepage)
                     )
                 }
                 FilledTonalIconButton(onClick = { onIntent(AboutIntent.OpenUrl("https://github.com/HapeLee/legado-with-MD3")) }) {
                     Icon(
                         painter = painterResource(R.drawable.ic_github),
-                        contentDescription = stringResource(R.string.back)
+                        contentDescription = stringResource(R.string.about_open_github)
                     )
                 }
                 FilledTonalIconButton(onClick = { onIntent(AboutIntent.CheckUpdate) }) {
                     Icon(
                         painter = painterResource(R.drawable.ic_import),
-                        contentDescription = stringResource(R.string.back)
+                        contentDescription = stringResource(R.string.check_update)
                     )
                 }
             }
@@ -259,6 +262,7 @@ private fun AboutOverlays(
         is AboutSheet.Update -> UpdateSheet(
             show = currentSheet is AboutSheet.Update,
             updateInfo = sheet.updateInfo,
+            updateToVariant = state.updateToVariant,
             mode = sheet.mode,
             onDismissRequest = { onIntent(AboutIntent.DismissSheet) },
             onStartDownload = { onIntent(AboutIntent.StartDownload) },

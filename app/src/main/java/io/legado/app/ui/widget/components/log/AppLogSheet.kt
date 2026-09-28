@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,7 +23,7 @@ import io.legado.app.R
 import io.legado.app.constant.AppLog
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.EmptyMessage
-import io.legado.app.ui.widget.components.button.series.MediumPlainButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.utils.LogUtils
@@ -34,25 +35,32 @@ fun AppLogSheet(
     show: Boolean,
     onDismissRequest: () -> Unit
 ) {
-    var logs by remember(show) { mutableStateOf(loadAllLogs()) }
+    var logs by remember { mutableStateOf(emptyList<LogEntry>()) }
     var showDetail by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(show) {
+        if (show) {
+            logs = loadAllLogs()
+        }
+    }
 
     AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismissRequest,
         title = stringResource(R.string.log),
         endAction = {
-            MediumPlainButton(
+            MediumTonalButton(
                 onClick = {
                     clearAllLogs()
                     logs = emptyList()
                 },
-                icon = Icons.Default.DeleteSweep
+                icon = Icons.Default.DeleteSweep,
+                contentDescription = stringResource(R.string.clear)
             )
         }
     ) {
         if (logs.isEmpty()) {
-            EmptyMessage(message = stringResource(R.string.no_logs))
+            EmptyMessage(modifier = Modifier.fillMaxWidth(),message = stringResource(R.string.no_logs))
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),

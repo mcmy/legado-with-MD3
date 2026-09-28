@@ -6,13 +6,8 @@ export type webReadConfig = {
   infiniteLoading: boolean
   customFontName: string
   jumpDuration: number
-  customTheme: {
-    enabled: boolean
-    textColor: string
-    bodyBgColor: string
-    contentBgColor: string
-    popupBgColor: string
-  }
+  autoPage: boolean
+  autoPageSpeed: number
   spacing: {
     paragraph: number
     line: number

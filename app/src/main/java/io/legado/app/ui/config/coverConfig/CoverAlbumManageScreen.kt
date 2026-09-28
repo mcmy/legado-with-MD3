@@ -44,7 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveContentPadding
@@ -52,6 +52,7 @@ import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.AppTextField
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.button.AppIconButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.card.GlassCard
 import io.legado.app.ui.widget.components.card.NormalCard
@@ -309,10 +310,10 @@ private fun CoverAlbumEditorSheet(
         onDismissRequest = onDismissRequest,
         title = album?.name,
         endAction = {
-            SmallPlainButton(
+            MediumTonalButton(
                 onClick = { onAddImages(isDark) },
                 icon = Icons.Default.Add,
-                text = stringResource(R.string.cover_album_add_images),
+                contentDescription = stringResource(R.string.cover_album_add_images),
             )
         },
     ) {
@@ -402,7 +403,7 @@ private fun CoverAlbumDialogs(
         )
 
         is CoverAlbumDialog.Delete -> AppAlertDialog(
-            show = true,
+            data = dialog,
             onDismissRequest = { onIntent(CoverAlbumIntent.DismissDialog) },
             title = stringResource(R.string.cover_album_delete),
             text = stringResource(R.string.cover_album_delete_confirmation, dialog.name),

@@ -7,8 +7,9 @@ import androidx.lifecycle.viewModelScope
 import io.legado.app.R
 import io.legado.app.base.BaseViewModel
 import io.legado.app.constant.AppLog
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.help.CrashHandler
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.update.AppUpdate
 import io.legado.app.utils.FileDoc
 import io.legado.app.utils.FileUtils
@@ -23,22 +24,42 @@ import io.legado.app.utils.list
 import io.legado.app.utils.openInputStream
 import io.legado.app.utils.openOutputStream
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import java.io.File
 import java.io.FileFilter
 
-class AboutViewModel(application: Application) : BaseViewModel(application) {
+class AboutViewModel(
+    application: Application,
+    private val otherSettingsGateway: OtherSettingsGateway,
+    private val backupSettingsGateway: BackupSettingsGateway,
+) : BaseViewModel(application) {
 
-    private val _uiState = MutableStateFlow(AboutUiState())
+    private val _uiState = MutableStateFlow(
+        AboutUiState(updateToVariant = otherSettingsGateway.currentSettings.updateToVariant)
+    )
     val uiState: StateFlow<AboutUiState> = _uiState.asStateFlow()
 
     private val _effects = MutableSharedFlow<AboutEffect>(extraBufferCapacity = 8)
     val effects = _effects.asSharedFlow()
+
+    init {
+        viewModelScope.launch {
+            otherSettingsGateway.settings
+                .map { it.updateToVariant }
+                .distinctUntilChanged()
+                .collect { updateToVariant ->
+                    _uiState.update { it.copy(updateToVariant = updateToVariant) }
+                }
+        }
+    }
 
     fun onIntent(intent: AboutIntent) {
         when (intent) {
@@ -114,7 +135,7 @@ class AboutViewModel(application: Application) : BaseViewModel(application) {
             context.externalCacheDir
                 ?.getFile("crash")
                 ?.let { FileUtils.delete(it, false) }
-            val backupPath = AppConfig.backupPath
+            val backupPath = backupSettingsGateway.currentSettings.backupPath
             if (!backupPath.isNullOrEmpty()) {
                 val uri = Uri.parse(backupPath)
                 FileDoc.fromUri(uri, true)
@@ -138,7 +159,7 @@ class AboutViewModel(application: Application) : BaseViewModel(application) {
             ?.getFile("crash")
             ?.listFiles(FileFilter { it.isFile })
             ?.forEach { list.add(FileDoc.fromFile(it)) }
-        val backupPath = AppConfig.backupPath
+        val backupPath = backupSettingsGateway.currentSettings.backupPath
         if (!backupPath.isNullOrEmpty()) {
             val uri = Uri.parse(backupPath)
             FileDoc.fromUri(uri, true)
@@ -151,11 +172,11 @@ class AboutViewModel(application: Application) : BaseViewModel(application) {
 
     private fun saveLog() {
         execute {
-            val backupPath = AppConfig.backupPath ?: run {
+            val backupPath = backupSettingsGateway.currentSettings.backupPath ?: run {
                 _effects.tryEmit(AboutEffect.ShowToast(context.getString(R.string.about_backup_dir_not_set)))
                 return@execute
             }
-            if (!AppConfig.recordLog) {
+            if (!otherSettingsGateway.currentSettings.recordLog) {
                 _effects.tryEmit(AboutEffect.ShowToast(context.getString(R.string.about_log_recording_disabled)))
                 delay(3000)
             }
@@ -170,11 +191,11 @@ class AboutViewModel(application: Application) : BaseViewModel(application) {
 
     private fun createHeapDump() {
         execute {
-            val backupPath = AppConfig.backupPath ?: run {
+            val backupPath = backupSettingsGateway.currentSettings.backupPath ?: run {
                 _effects.tryEmit(AboutEffect.ShowToast(context.getString(R.string.about_backup_dir_not_set)))
                 return@execute
             }
-            if (!AppConfig.recordHeapDump) {
+            if (!otherSettingsGateway.currentSettings.recordHeapDump) {
                 _effects.tryEmit(AboutEffect.ShowToast(context.getString(R.string.about_heap_dump_recording_disabled)))
                 delay(3000)
             }

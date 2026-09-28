@@ -6,13 +6,13 @@ import androidx.lifecycle.MutableLiveData
 import com.jayway.jsonpath.JsonPath
 import io.legado.app.R
 import io.legado.app.base.BaseViewModel
+import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.AppPattern
-import io.legado.app.data.appDb
 import io.legado.app.data.entities.RssSource
+import io.legado.app.data.repository.RssRepository
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.config.AppConfig
 import io.legado.app.help.http.decompressed
 import io.legado.app.help.http.newCallResponseBody
 import io.legado.app.help.http.okHttpClient
@@ -29,7 +29,11 @@ import io.legado.app.utils.readText
 import io.legado.app.utils.splitNotBlank
 import splitties.init.appCtx
 
-class ImportRssSourceViewModel(app: Application) : BaseViewModel(app) {
+class ImportRssSourceViewModel(
+    app: Application,
+    private val repository: RssRepository,
+    private val otherSettingsGateway: OtherSettingsGateway,
+) : BaseViewModel(app) {
     var isAddGroup = false
     var groupName: String? = null
     val errorLiveData = MutableLiveData<String>()
@@ -63,9 +67,9 @@ class ImportRssSourceViewModel(app: Application) : BaseViewModel(app) {
     fun importSelect(finally: () -> Unit) {
         execute {
             val group = groupName?.trim()
-            val keepName = AppConfig.importKeepName
-            val keepGroup = AppConfig.importKeepGroup
-            val keepEnable = AppConfig.importKeepEnable
+            val keepName = otherSettingsGateway.currentSettings.importKeepName
+            val keepGroup = otherSettingsGateway.currentSettings.importKeepGroup
+            val keepEnable = otherSettingsGateway.currentSettings.importKeepEnable
             val selectSource = arrayListOf<RssSource>()
             selectStatus.forEachIndexed { index, b ->
                 if (b) {
@@ -186,7 +190,7 @@ class ImportRssSourceViewModel(app: Application) : BaseViewModel(app) {
     private fun comparisonSource() {
         execute {
             allSources.forEach {
-                val has = appDb.rssSourceDao.getByKey(it.sourceUrl)
+                val has = repository.getByKey(it.sourceUrl)
                 checkSources.add(has)
                 selectStatus.add(has == null || has.lastUpdateTime < it.lastUpdateTime)
             }

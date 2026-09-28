@@ -9,10 +9,12 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.data.entities.RssSource
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.CacheManager
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.model.AudioPlay
+import io.legado.app.model.Debug
 import io.legado.app.model.ReadBook
 import io.legado.app.model.analyzeRule.AnalyzeRule
 import io.legado.app.model.analyzeRule.AnalyzeRule.Companion.setChapter
@@ -21,8 +23,10 @@ import io.legado.app.ui.rss.read.RssJsExtensions
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.isJsonObject
+import io.legado.app.utils.toastOnUi
+import org.json.JSONObject
 import java.lang.ref.WeakReference
-import java.util.UUID
+import kotlin.uuid.Uuid
 
 @Suppress("unused")
 class WebJsExtensions(
@@ -37,7 +41,7 @@ class WebJsExtensions(
 
     interface Callback {
         fun upConfig(config: String)
-        fun onNavigateToArticles(sortUrl: String? = null)
+        fun onNavigateToArticles(sortUrl: String? = null, origin: String? = null)
     }
 
     @JavascriptInterface
@@ -218,10 +222,38 @@ class WebJsExtensions(
     override fun open(name: String, url: String?, title: String?, origin: String?) {
         when (name) {
             "sort" -> {
-                val sortUrl = if (!url.isNullOrBlank()) {
-                    if (url.isJsonObject()) url else title?.let { "{\"$it\":\"$url\"}" } ?: url
-                } else null
-                callbackRef.get()?.onNavigateToArticles(sortUrl)
+                val sortUrl = if (url.isJsonObject()) {
+                    url
+                } else {
+                    title?.let { JSONObject().put(title, url).toString() } ?: url
+                }
+                val originKey = origin?.takeIf { it.isNotBlank() }
+                val targetSourceUrl = if (originKey != null) {
+                    appDb.rssSourceDao.getByKey(originKey)?.sourceUrl
+                } else {
+                    (getSource() as? RssSource)?.sourceUrl
+                }
+                if (targetSourceUrl == null) {
+                    // origin 指定的订阅源未安装时不能回退到当前源, 否则会用当前源的规则解析跨站 HTML
+                    if (originKey != null) {
+                        val missing = if (title.isNullOrBlank()) {
+                            originKey
+                        } else {
+                            "$title($originKey)"
+                        }
+                        Debug.log(
+                            getSource()?.getKey(),
+                            "WebView open(sort): 未找到订阅源 $missing url=$url"
+                        )
+                        activityRef.get()?.toastOnUi("未找到订阅源:$missing")
+                    }
+                    return
+                }
+                Debug.log(
+                    getSource()?.getKey(),
+                    "WebView open(sort): url=$url, title=$title, origin=$origin, target=$targetSourceUrl"
+                )
+                callbackRef.get()?.onNavigateToArticles(sortUrl, targetSourceUrl)
             }
             else -> super.open(name, url, title, origin)
         }
@@ -282,10 +314,10 @@ class WebJsExtensions(
         }
 
         val uuid by lazy {
-            UUID.randomUUID().toString().replace('-', getRandomLetter()).chunked(6)
+            Uuid.random().toString().replace('-', getRandomLetter()).chunked(6)
         }
         val uuid2 by lazy {
-            UUID.randomUUID().toString().replace('-', getRandomLetter()).chunked(6)
+            Uuid.random().toString().replace('-', getRandomLetter()).chunked(6)
         }
         val nameUrl by lazy { "https://" + uuid[0] + ".com/" + uuid2[0] + ".js" }
         val nameJava by lazy { getRandomLetter() + uuid[1] + uuid2[1] }

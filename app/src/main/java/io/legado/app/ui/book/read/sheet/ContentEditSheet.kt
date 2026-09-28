@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndSelectAll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -19,56 +23,57 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import io.legado.app.R
+import io.legado.app.ui.book.read.ContentEditUiState
 import io.legado.app.ui.book.read.ReadBookIntent
-import io.legado.app.ui.book.read.ReadBookUiState
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppTextField
-import io.legado.app.ui.widget.components.button.series.SmallTonalButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.checkBox.AppCheckbox
+import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
+import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 import io.legado.app.ui.widget.components.progressIndicator.AppCircularProgressIndicator
 import io.legado.app.ui.widget.components.text.AppText
-import io.legado.app.utils.sendToClip
 
 @Composable
 fun ContentEditSheet(
     show: Boolean,
-    state: ReadBookUiState,
+    state: ContentEditUiState,
     onIntent: (ReadBookIntent) -> Unit,
     onDismissRequest: () -> Unit,
 ) {
-    val context = LocalContext.current
     val editorState = remember { TextFieldState() }
     val editorScrollState = rememberScrollState()
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     var pendingLocateOffset by remember { mutableStateOf<Int?>(null) }
+    var menuExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(show) {
         if (!show) return@LaunchedEffect
         onIntent(ReadBookIntent.LoadContentEdit)
     }
 
-    LaunchedEffect(state.contentEditText, state.contentEditCursorOffset) {
-        if (editorState.text.toString() != state.contentEditText) {
-            editorState.setTextAndSelectAll(state.contentEditText)
+    LaunchedEffect(state.text, state.cursorOffset) {
+        if (editorState.text.toString() != state.text) {
+            editorState.setTextAndSelectAll(state.text)
             editorState.edit {
-                val offset = state.contentEditCursorOffset.coerceIn(0, length)
+                val offset = state.cursorOffset.coerceIn(0, length)
                 selection = TextRange(offset)
                 pendingLocateOffset = offset
             }
         }
     }
 
-    LaunchedEffect(show, state.contentEditLoading, pendingLocateOffset, textLayoutResult) {
+    LaunchedEffect(show, state.loading, pendingLocateOffset, textLayoutResult) {
         val layoutResult = textLayoutResult
         val locateOffset = pendingLocateOffset
-        if (!show || state.contentEditLoading || layoutResult == null || locateOffset == null) {
+        if (!show || state.loading || layoutResult == null || locateOffset == null) {
             return@LaunchedEffect
         }
         val layoutTextLength = layoutResult.layoutInput.text.length
@@ -88,7 +93,7 @@ fun ContentEditSheet(
     LaunchedEffect(editorState) {
         snapshotFlow { editorState.text.toString() }
             .collect { text ->
-                if (text != state.contentEditText) {
+                if (text != state.text) {
                     onIntent(ReadBookIntent.SetContentEditText(text))
                 }
             }
@@ -97,42 +102,69 @@ fun ContentEditSheet(
     AppModalBottomSheet(
         show = show,
         onDismissRequest = onDismissRequest,
-        title = state.contentEditTitle,
+        title = stringResource(R.string.edit_chapter),
+        startAction = {
+            Box {
+                MediumTonalButton(
+                    onClick = { menuExpanded = true },
+                    icon = Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.more_menu),
+                )
+                RoundDropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) { dismiss ->
+                    RoundDropdownMenuItem(
+                        text = stringResource(R.string.content_edit_reset),
+                        leadingIcon = { MenuItemIcon(Icons.Default.Restore) },
+                        onClick = {
+                            dismiss()
+                            onIntent(ReadBookIntent.ResetContentEdit)
+                        },
+                    )
+                    RoundDropdownMenuItem(
+                        text = stringResource(R.string.content_edit_body_only),
+                        isSelected = state.bodyOnly,
+                        onClick = {
+                            dismiss()
+                            onIntent(ReadBookIntent.SetContentEditBodyOnly(!state.bodyOnly))
+                        },
+                    )
+                }
+            }
+        },
+        endAction = {
+            MediumTonalButton(
+                onClick = {
+                    onIntent(
+                        ReadBookIntent.SaveContentEdit(
+                            editorState.text.toString(),
+                            state.saveToSource,
+                            state.chapterTitle,
+                        )
+                    )
+                    onDismissRequest()
+                },
+                icon = Icons.Default.Save,
+                contentDescription = stringResource(R.string.action_save),
+            )
+        },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 16.dp),
         ) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SmallTonalButton(
-                    onClick = {
-                        onIntent(
-                            ReadBookIntent.SaveContentEdit(
-                                editorState.text.toString(),
-                                state.contentEditSaveToSource
-                            )
-                        )
-                        onDismissRequest()
-                    },
-                    text = stringResource(R.string.action_save)
-                )
-                SmallTonalButton(
-                    onClick = {
-                    onIntent(ReadBookIntent.ResetContentEdit)
-                    },
-                    text = stringResource(R.string.reset)
-                )
-                SmallTonalButton(
-                    onClick = {
-                    context.sendToClip("${state.contentEditTitle}\n${editorState.text}")
-                    }, text = stringResource(R.string.copy_all)
-                )
-            }
+            AppTextField(
+                value = state.chapterTitle,
+                onValueChange = { onIntent(ReadBookIntent.SetContentEditTitle(it)) },
+                label = stringResource(R.string.content_edit_title),
+                singleLine = true,
+                enabled = !state.loading,
+                modifier = Modifier.fillMaxWidth(),
+            )
 
-            Spacer(Modifier.height(8.dp))
-
-            if (state.contentEditLoading) {
+            if (state.loading) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -155,11 +187,11 @@ fun ContentEditSheet(
                 )
             }
 
-            if (state.contentEditIsLocalTxt) {
+            if (state.isLocalTxt) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     AppCheckbox(
-                        checked = state.contentEditSaveToSource,
+                        checked = state.saveToSource,
                         onCheckedChange = { onIntent(ReadBookIntent.SetContentEditSaveToSource(it)) },
                     )
                     AppText(

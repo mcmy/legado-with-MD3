@@ -3,12 +3,12 @@ package io.legado.app.ui.book.info
 import android.os.Bundle
 import androidx.compose.runtime.Composable
 import io.legado.app.base.BaseComposeActivity
+import io.legado.app.ui.login.SourceLoginType
 import io.legado.app.ui.main.MainActivity
-import io.legado.app.ui.widget.dialog.VariableDialog
 import io.legado.app.utils.startActivity
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
-class BookInfoActivity : BaseComposeActivity(), VariableDialog.Callback {
+class BookInfoActivity : BaseComposeActivity() {
 
     private val viewModel: BookInfoViewModel by viewModel()
 
@@ -29,9 +29,31 @@ class BookInfoActivity : BaseComposeActivity(), VariableDialog.Callback {
             onOpenSearch = { keyword ->
                 startActivity(MainActivity.createSearchIntent(this, key = keyword))
             },
+            onOpenBookSourceEdit = { sourceUrl ->
+                startActivity(MainActivity.createBookSourceEditIntent(this, sourceUrl))
+            },
+            onOpenSourceLogin = { sourceUrl ->
+                startActivity(
+                    MainActivity.createSourceLoginIntent(
+                        this,
+                        SourceLoginType.BookSource,
+                        sourceUrl,
+                    )
+                )
+            },
             onOpenReader = { bookUrl, inBookshelf, chapterChanged ->
                 startActivity(
                     MainActivity.createReadBookIntent(
+                        context = this,
+                        bookUrl = bookUrl,
+                        inBookshelf = inBookshelf,
+                        chapterChanged = chapterChanged,
+                    )
+                )
+            },
+            onOpenMangaReader = { bookUrl, inBookshelf, chapterChanged ->
+                startActivity(
+                    MainActivity.createReadMangaIntent(
                         context = this,
                         bookUrl = bookUrl,
                         inBookshelf = inBookshelf,
@@ -53,10 +75,28 @@ class BookInfoActivity : BaseComposeActivity(), VariableDialog.Callback {
                     MainActivity.createExploreShowIntent(this, title, sourceUrl, exploreUrl)
                 )
             },
+            onOpenCharacterDetail = { bookUrl, characterId ->
+                startActivity(
+                    MainActivity.createBookCharacterDetailIntent(
+                        this,
+                        bookUrl,
+                        characterId
+                    )
+                )
+            },
+            onOpenCharacterNetwork = { bookUrl ->
+                startActivity(MainActivity.createBookCharacterNetworkIntent(this, bookUrl))
+            },
+            onOpenCharacterList = { bookUrl ->
+                startActivity(MainActivity.createBookCharacterListIntent(this, bookUrl))
+            },
+            onOpenKnowledgeList = { bookUrl ->
+                startActivity(MainActivity.createBookKnowledgeListIntent(this, bookUrl))
+            },
+            onOpenEventList = { bookUrl ->
+                startActivity(MainActivity.createBookEventListIntent(this, bookUrl))
+            },
         )
     }
 
-    override fun setVariable(key: String, variable: String?) {
-        viewModel.setVariable(key, variable)
-    }
 }

@@ -7,20 +7,28 @@ import io.legado.app.constant.AppPattern.spaceRegex
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.data.entities.BookContentProcess
+import io.legado.app.data.entities.BookMarking
 import io.legado.app.data.entities.ReplaceRule
+import io.legado.app.domain.model.BookContentProcessEngine
+import io.legado.app.domain.model.TextProcessAction
+import io.legado.app.domain.model.TextProcessStyle
 import io.legado.app.exception.RegexTimeoutException
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.utils.ChineseUtils
+import io.legado.app.utils.GSON
 import io.legado.app.utils.escapeRegex
+import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.replace
 import io.legado.app.utils.stackTraceStr
 import io.legado.app.utils.toastOnUi
 import kotlinx.coroutines.CancellationException
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.regex.Pattern
 
 class ContentProcessor private constructor(
     private val bookName: String,
@@ -54,6 +62,9 @@ class ContentProcessor private constructor(
     private val titleReplaceRules = CopyOnWriteArrayList<ReplaceRule>()
     private val contentReplaceRules = CopyOnWriteArrayList<ReplaceRule>()
     val removeSameTitleCache = hashSetOf<String>()
+
+    private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
+    private val readGateway by lazy { GlobalContext.get().get<ReadSettingsGateway>() }
 
     init {
         upReplaceRules()
@@ -101,28 +112,30 @@ class ContentProcessor private constructor(
         var mContent = content
         var sameTitleRemoved = false
         var effectiveReplaceRules: ArrayList<ReplaceRule>? = null
+        var effectiveContentProcesses: List<BookContentProcess> = emptyList()
         if (content != "null") {
             //去除重复标题
             val fileName = chapter.getFileName("nr")
             if (!removeSameTitleCache.contains(fileName)) try {
-                val name = Pattern.quote(book.name)
+                val name = Regex.escape(book.name)
                 var title = chapter.title.escapeRegex().replace(spaceRegex, "\\\\s*")
-                var matcher = Pattern.compile("^(\\s|\\p{P}|${name})*${title}(\\s)*")
-                    .matcher(mContent)
-                if (matcher.find()) {
-                    mContent = mContent.substring(matcher.end())
+                var match = Regex("^(\\s|\\p{P}|${name})*${title}(\\s)*")
+                    .find(mContent)
+                if (match != null) {
+                    mContent = mContent.substring(match.range.last + 1)
                     sameTitleRemoved = true
-                } else if (useReplace && book.getUseReplaceRule()) {
-                    title = Pattern.quote(
+                } else if (useReplace && book.getUseReplaceRule(otherGateway.currentSettings.replaceEnableDefault)) {
+                    title = Regex.escape(
                         chapter.getDisplayTitle(
                             contentReplaceRules,
-                            chineseConvert = false
+                            chineseConvert = false,
+                            chineseConverterType = readGateway.currentSettings.chineseConverterType,
                         )
                     )
-                    matcher = Pattern.compile("^(\\s|\\p{P}|${name})*${title}(\\s)*")
-                        .matcher(mContent)
-                    if (matcher.find()) {
-                        mContent = mContent.substring(matcher.end())
+                    match = Regex("^(\\s|\\p{P}|${name})*${title}(\\s)*")
+                        .find(mContent)
+                    if (match != null) {
+                        mContent = mContent.substring(match.range.last + 1)
                         sameTitleRemoved = true
                     }
                 }
@@ -136,7 +149,7 @@ class ContentProcessor private constructor(
             if (chineseConvert) {
                 //简繁转换
                 try {
-                    when (AppConfig.chineseConverterType) {
+                    when (readGateway.currentSettings.chineseConverterType) {
                         1 -> mContent = ChineseUtils.t2s(mContent)
                         2 -> mContent = ChineseUtils.s2t(mContent)
                     }
@@ -145,14 +158,14 @@ class ContentProcessor private constructor(
                 }
             }
             val useHtmlMap = mutableMapOf<String, String>()
-            if (AppConfig.adaptSpecialStyle) { //html处理
+            if (readGateway.currentSettings.adaptSpecialStyle) { //html处理
                 mContent = AppPattern.useHtmlRegex.replace(mContent) { matchResult ->
                     val placeholder = "特殊格式的占位不应该被看见${useHtmlMap.size}。"
                     useHtmlMap[placeholder] = "\n${matchResult.value.replace("\n", "")}\n"
                     placeholder
                 }
             }
-            if (useReplace && book.getUseReplaceRule()) {
+            if (useReplace && book.getUseReplaceRule(otherGateway.currentSettings.replaceEnableDefault)) {
                 val replaceBook = book.toSearchBook()
                 //替换
                 effectiveReplaceRules = arrayListOf()
@@ -191,12 +204,29 @@ class ContentProcessor private constructor(
             useHtmlMap.forEach { (placeholder, originalContent) ->
                 mContent = mContent.replace(placeholder, originalContent)
             }
+            val contentProcesses = appDb.bookContentProcessDao.getForChapterSync(
+                bookUrl = book.bookUrl,
+                chapterIndex = chapter.index,
+            )
+            // 用户划线/高亮笔记独立存于 book_marks，渲染时转成合成 BookContentProcess
+            // 混进现有管线（锚点/样式不变，引擎对标记类不改文本）。
+            val markings = appDb.bookMarkingDao.getForChapterSync(
+                bookUrl = book.bookUrl,
+                chapterIndex = chapter.index,
+            ).map { it.toRenderProcess() }
+            if (contentProcesses.isNotEmpty() || markings.isNotEmpty()) {
+                val applyResult =
+                    BookContentProcessEngine.apply(mContent, contentProcesses + markings)
+                mContent = applyResult.text
+                effectiveContentProcesses = applyResult.effectiveProcesses
+            }
         }
         if (includeTitle) {
             //重新添加标题
             mContent = chapter.getDisplayTitle(
                 getTitleReplaceRules(),
-                useReplace = useReplace && book.getUseReplaceRule()
+                useReplace = useReplace && book.getUseReplaceRule(otherGateway.currentSettings.replaceEnableDefault),
+                chineseConverterType = readGateway.currentSettings.chineseConverterType,
             ) + "\n" + mContent
         }
         if (isAndroid8) {
@@ -215,7 +245,41 @@ class ContentProcessor private constructor(
                 }
             }
         }
-        return BookContent(sameTitleRemoved, contents, effectiveReplaceRules)
+        return BookContent(sameTitleRemoved, contents, effectiveReplaceRules, effectiveContentProcesses)
+    }
+
+    /**
+     * 把用户划线/高亮笔记转成「仅供渲染」的合成正文处理记录。
+     *
+     * 引擎对标记类（KIND_USER_UNDERLINE/HIGHLIGHT）不改文本，只按锚点能否解析决定
+     * 是否计入 effectiveProcesses；渲染层用 anchorJson + styleJson 画线。id 加
+     * `mark:` 前缀避免与真实正文处理记录冲突。
+     */
+    private fun BookMarking.toRenderProcess(): BookContentProcess {
+        // book_marks 无 kind 列（样式即类型）：按 styleJson 推导，供引擎/渲染层识别
+        val style = styleJson?.let { GSON.fromJsonObject<TextProcessStyle>(it).getOrNull() }
+        val derivedKind = if (style?.underlineMode != 0) {
+            BookContentProcess.KIND_USER_UNDERLINE
+        } else {
+            BookContentProcess.KIND_USER_HIGHLIGHT
+        }
+        return BookContentProcess(
+            id = "mark:$id",
+            bookUrl = bookUrl,
+            chapterIndex = chapterIndex,
+            kind = derivedKind,
+            stage = BookContentProcess.STAGE_CONTENT,
+            target = BookContentProcess.TARGET_SELECTION,
+            anchorJson = anchorJson,
+            actionJson = GSON.toJson(TextProcessAction(TextProcessAction.TYPE_MARK)),
+            styleJson = styleJson,
+            source = BookContentProcess.SOURCE_USER,
+            enabled = enabled,
+            status = BookContentProcess.STATUS_ACTIVE,
+            sortOrder = 0,
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+        )
     }
 
 }

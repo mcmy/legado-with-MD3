@@ -11,16 +11,22 @@ import io.legado.app.constant.AppPattern
 import io.legado.app.constant.BookSourceType
 import io.legado.app.constant.BookType
 import io.legado.app.data.appDb
+import io.legado.app.data.dao.BookDao
+import io.legado.app.data.dao.BookGroupDao
 import io.legado.app.data.entities.BaseBook
 import io.legado.app.data.entities.Book
+import io.legado.app.data.entities.BookGroup
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.HighlightTagRule
-import io.legado.app.ui.book.info.HighlightedTag
+import io.legado.app.data.entities.TagGroupRule
+import io.legado.app.domain.gateway.BookExportSettingsGateway
+import io.legado.app.domain.gateway.ImportBookSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.help.RuleBigDataHelp
-import io.legado.app.help.config.AppConfig
 import io.legado.app.model.localBook.LocalBook
-import io.legado.app.ui.config.otherConfig.OtherConfig
+import io.legado.app.ui.book.info.HighlightedTag
 import io.legado.app.utils.FileDoc
 import io.legado.app.utils.GSON
 import io.legado.app.utils.MD5Utils
@@ -31,14 +37,22 @@ import io.legado.app.utils.isUri
 import io.legado.app.utils.normalizeFileName
 import io.legado.app.utils.splitNotBlank
 import io.legado.app.utils.toastOnUi
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.daysUntil
+import kotlinx.datetime.todayIn
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.File
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.time.Clock
 
+private val otherGateway by lazy { GlobalContext.get().get<OtherSettingsGateway>() }
+private val importBookGateway by lazy { GlobalContext.get().get<ImportBookSettingsGateway>() }
+private val readGateway by lazy { GlobalContext.get().get<ReadSettingsGateway>() }
+private val exportGateway by lazy { GlobalContext.get().get<BookExportSettingsGateway>() }
 
 val Book.isAudio: Boolean
     get() = isType(BookType.audio)
@@ -122,8 +136,18 @@ fun Book.contains(word: String?): Boolean {
             || originName.contains(word)
             || origin.contains(word)
             || kind?.contains(word) == true
+            || customTag?.contains(word) == true
             || intro?.contains(word) == true
 }
+
+fun Book.getSourceTagList(): List<String> =
+    kind?.splitNotBlank(",", "\n").orEmpty().distinct()
+
+fun Book.getCustomTagList(): List<String> =
+    customTag?.splitNotBlank(",", "\n").orEmpty().distinct()
+
+fun Book.getDisplayTagList(): List<String> =
+    (getCustomTagList() + getSourceTagList()).distinct()
 
 /**
  * 仅在目标bookUrl未被其他书占用，或判定为同一本书时，允许迁移主键。
@@ -172,8 +196,8 @@ fun Book.getLocalUri(): Uri {
         return uri
     }
     //不同的设备书籍保存路径可能不一样, uri无效时尝试寻找当前保存路径下的文件
-    val defaultBookDir = OtherConfig.defaultBookTreeUri
-    val importBookDir = AppConfig.importBookPath
+    val defaultBookDir = otherGateway.currentSettings.defaultBookTreeUri
+    val importBookDir = importBookGateway.currentSettings.importBookPath
 
     // 查找书籍保存目录
     if (!defaultBookDir.isNullOrBlank()) {
@@ -244,7 +268,7 @@ fun Book.getLocalUri(): Uri {
 
 
 fun Book.getArchiveUri(): Uri? {
-    val defaultBookDir = OtherConfig.defaultBookTreeUri
+    val defaultBookDir = otherGateway.currentSettings.defaultBookTreeUri
     return if (isArchive && !defaultBookDir.isNullOrBlank()) {
         FileDoc.fromUri(defaultBookDir.toUri(), true)
             .find(archiveName)?.uri
@@ -398,7 +422,23 @@ fun parseHighlightedTags(
 
 fun applyTagGroupRules(
     books: List<Book>,
-    rules: List<io.legado.app.data.entities.TagGroupRule>,
+    rules: List<TagGroupRule>,
+) {
+    appDb.runInTransaction {
+        applyTagGroupRules(
+            books = books,
+            rules = rules,
+            groupDao = appDb.bookGroupDao,
+            bookDao = appDb.bookDao,
+        )
+    }
+}
+
+fun applyTagGroupRules(
+    books: List<Book>,
+    rules: List<TagGroupRule>,
+    groupDao: BookGroupDao,
+    bookDao: BookDao,
 ) {
     if (rules.isEmpty()) return
 
@@ -412,9 +452,6 @@ fun applyTagGroupRules(
     }
     if (compiledRules.isEmpty()) return
 
-    val groupDao = appDb.bookGroupDao
-    val bookDao = appDb.bookDao
-
     // Resolve groupName -> groupId (find or create BookGroup)
     val groupCache = mutableMapOf<String, Long>()
     for ((rule, _) in compiledRules) {
@@ -423,7 +460,7 @@ fun applyTagGroupRules(
             val groupId = existing?.groupId ?: run {
                 val newId = groupDao.getUnusedId()
                 groupDao.insert(
-                    io.legado.app.data.entities.BookGroup(
+                    BookGroup(
                         groupId = newId,
                         groupName = rule.groupName,
                     )
@@ -434,21 +471,17 @@ fun applyTagGroupRules(
         }
     }
 
-    // Mask of all group IDs managed by tag group rules
-    val allRuleGroupMask = groupCache.values.fold(0L) { acc, id -> acc or id }
-
     val updatedBooks = mutableListOf<Book>()
     for (book in books) {
-        val kinds = book.kind?.splitNotBlank(",", "\n").orEmpty()
+        val kinds = book.getDisplayTagList()
         var newGroupMask = 0L
         for ((rule, regex) in compiledRules) {
             if (kinds.any { regex.containsMatchIn(it) }) {
                 newGroupMask = newGroupMask or (groupCache[rule.groupName] ?: 0L)
             }
         }
-        // Clear old rule-managed bits, then set new ones
-        val clearedGroup = book.group and allRuleGroupMask.inv()
-        val finalGroup = clearedGroup or newGroupMask
+        // Tag rules only add matching groups; manually assigned groups are preserved.
+        val finalGroup = book.group or newGroupMask
         if (book.group != finalGroup) {
             book.group = finalGroup
             updatedBooks.add(book)
@@ -456,9 +489,7 @@ fun applyTagGroupRules(
     }
 
     if (updatedBooks.isNotEmpty()) {
-        appDb.runInTransaction {
-            bookDao.update(*updatedBooks.toTypedArray())
-        }
+        bookDao.update(*updatedBooks.toTypedArray())
     }
 }
 
@@ -495,16 +526,14 @@ fun applyTagGroupRulesForBook(book: Book) {
         }
     }
 
-    val allRuleGroupMask = groupCache.values.fold(0L) { acc, id -> acc or id }
-    val kinds = book.kind?.splitNotBlank(",", "\n").orEmpty()
+    val kinds = book.getDisplayTagList()
     var newGroupMask = 0L
     for ((rule, regex) in compiledRules) {
         if (kinds.any { regex.containsMatchIn(it) }) {
             newGroupMask = newGroupMask or (groupCache[rule.groupName] ?: 0L)
         }
     }
-    val clearedGroup = book.group and allRuleGroupMask.inv()
-    val finalGroup = clearedGroup or newGroupMask
+    val finalGroup = book.group or newGroupMask
     if (book.group != finalGroup) {
         book.group = finalGroup
     }
@@ -518,7 +547,11 @@ fun Book.sync(oldBook: Book) {
         durChapterIndex = curBook.durChapterIndex
         val replaceRules = ContentProcessor.get(this).getTitleReplaceRules()
         appDb.bookChapterDao.getChapter(bookUrl, durChapterIndex)?.let {
-            durChapterTitle = it.getDisplayTitle(replaceRules, getUseReplaceRule())
+            durChapterTitle = it.getDisplayTitle(
+                replaceRules,
+                getUseReplaceRule(otherGateway.currentSettings.replaceEnableDefault),
+                chineseConverterType = readGateway.currentSettings.chineseConverterType,
+            )
         }
     }
     canUpdate = curBook.canUpdate
@@ -591,8 +624,10 @@ fun Book.isSameNameAuthor(other: Any?): Boolean {
     return false
 }
 
-fun Book.getExportFileName(suffix: String): String {
-    val template = AppConfig.bookExportFileName
+fun Book.getExportFileName(
+    suffix: String,
+    template: String? = exportGateway.currentSettings.bookExportFileName,
+): String {
     if (template.isNullOrBlank()) {
         return "$name 作者：${getRealAuthor()}.$suffix"
     }
@@ -644,7 +679,7 @@ fun Book.getExportFileName(suffix: String): String {
 fun Book.getExportFileName(
     suffix: String,
     epubIndex: Int,
-    jsStr: String? = AppConfig.episodeExportFileName
+    jsStr: String? = exportGateway.currentSettings.episodeExportFileName
 ): String {
     // 默认规则
     val default = "$name 作者：${getRealAuthor()} [${epubIndex}].$suffix"
@@ -666,11 +701,12 @@ fun Book.getExportFileName(
 // 根据当前日期计算章节总数
 fun Book.simulatedTotalChapterNum(): Int {
     return if (readSimulating()) {
-        val currentDate = LocalDate.now()
-        val daysPassed = if (config.startDate != null) {
+        val currentDate = Clock.System.todayIn(TimeZone.currentSystemDefault())
+        val startDateStr = config.startDate
+        val daysPassed = if (startDateStr != null) {
             try {
-                val startDate = LocalDate.parse(config.startDate)
-                ChronoUnit.DAYS.between(startDate, currentDate).toInt() + 1
+                val startDate = LocalDate.parse(startDateStr)
+                startDate.daysUntil(currentDate) + 1
             } catch (e: Exception) {
                 println("解析起始日期失败: ${config.startDate}, 错误: ${e.message}")
                 1 // 解析失败时返回默认值1

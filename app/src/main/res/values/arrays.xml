@@ -201,6 +201,9 @@
 		<item>Time and Battery</item>
 		<item>Time and Battery Classic</item>
 		<item>Time and Battery%</item>
+		<item>Whole-book pages</item>
+		<item>Whole-book pages and progress</item>
+		<item>Custom</item>
 	</string-array>
 
 	<string-array name="text_font_weight">
@@ -222,6 +225,22 @@
 		<item>Landscape Mode</item>
 		<item>Off</item>
 	</string-array>
+
+    <string-array name="top_bar_button_style">
+        <item>Plain</item>
+        <item>Tonal</item>
+        <item>Outlined</item>
+        <item>Semi-transparent</item>
+        <item>Liquid Glass</item>
+    </string-array>
+
+    <string-array name="top_bar_button_style_value">
+        <item>plain</item>
+        <item>tonal</item>
+        <item>outlined</item>
+        <item>glass</item>
+        <item>liquid</item>
+    </string-array>
 
     <string-array name="paletteStyle">
         <item>TonalSpot</item>
@@ -327,6 +346,12 @@
 		<item>Selected</item>
 		<item>Labeled</item>
 		<item>Unlabeled</item>
+	</string-array>
+
+	<string-array name="book_info_background_blur_entries">
+		<item>@string/book_info_background_blur_off</item>
+		<item>@string/book_info_background_blur_on</item>
+		<item>@string/book_info_background_blur_off_for_default</item>
 	</string-array>
 
 	<string-array name="customContrast">

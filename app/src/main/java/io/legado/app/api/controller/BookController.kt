@@ -14,7 +14,7 @@ import io.legado.app.help.CacheManager
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.book.isLocal
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.BookshelfSettingsGateway
 import io.legado.app.help.glide.ImageLoader
 import io.legado.app.model.BookCover
 import io.legado.app.model.ImageProvider
@@ -29,11 +29,14 @@ import io.legado.app.utils.stackTraceStr
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import splitties.init.appCtx
+import org.koin.core.context.GlobalContext
 import java.io.File
 import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
 
 object BookController {
+
+    private val bookshelfGateway by lazy { GlobalContext.get().get<BookshelfSettingsGateway>() }
 
     private lateinit var book: Book
     private var bookSource: BookSource? = null
@@ -50,7 +53,7 @@ object BookController {
             return if (books.isEmpty()) {
                 returnData.setErrorMsg("还没有添加小说")
             } else {
-                val data = when (AppConfig.bookshelfSort) {
+                val data = when (bookshelfGateway.currentSettings.bookshelfSort) {
                     1 -> books.sortedByDescending { it.latestChapterTime }
                     2 -> books.sortedWith { o1, o2 ->
                         o1.name.cnCompare(o2.name)

@@ -4,10 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.util.DisplayMetrics
 import androidx.annotation.Keep
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.graphics.toColorInt
-import io.legado.app.ui.config.themeConfig.ThemeConfig
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.ThemeSettingsGateway
+import io.legado.app.ui.book.read.ConfigUpdateAction
+import io.legado.app.ui.book.read.ReadConfigUpdateBus
 import io.legado.app.R
-import io.legado.app.constant.EventBus
 import io.legado.app.constant.PreferKey
 import io.legado.app.constant.Theme
 import io.legado.app.help.DefaultData
@@ -22,9 +25,11 @@ import io.legado.app.utils.getFile
 import io.legado.app.utils.getPrefInt
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.hexString
-import io.legado.app.utils.postEvent
+import io.legado.app.utils.isNightMode
 import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.stackBlur
+import io.legado.app.utils.sysConfiguration
+import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.File
 
@@ -33,40 +38,67 @@ object ThemeConfigStore {
     const val configFileName = "themeConfig.json"
     val configFilePath = FileUtils.getPath(appCtx.filesDir, configFileName)
 
+    private val themeSettingsGateway: ThemeSettingsGateway
+        get() = GlobalContext.get().get()
+
+    private val shellSettingsGateway: AppShellSettingsGateway
+        get() = GlobalContext.get().get()
+
+    val isNightTheme: Boolean
+        get() = when (shellSettingsGateway.currentSettings.themeMode) {
+            "1" -> false
+            "2" -> true
+            else -> sysConfiguration.isNightMode
+        }
+
     val configList: ArrayList<Config> by lazy {
         val cList = getConfigs() ?: DefaultData.themeConfigs
         ArrayList(cList)
     }
 
     fun getTheme() = when {
-        AppConfig.isNightTheme -> Theme.Dark
+        isNightTheme -> Theme.Dark
         else -> Theme.Light
     }
 
     fun applyDayNight(context: Context) {
         initNightMode()
-        postEvent(EventBus.RECREATE, "")
-        postEvent(EventBus.UP_CONFIG, arrayListOf(2))
+        ReadConfigUpdateBus.post(setOf(ConfigUpdateAction.UpdateStyle))
+    }
+
+    /**
+     * Compose 界面通过 ThemeConfig.themeMode 快照状态自动换色；旧 View 界面由
+     * BaseActivity 的兼容策略决定热更新、重新绑定或受控重建。
+     */
+    fun applyDayNightLive() {
+        initNightMode()
+        ReadConfigUpdateBus.post(setOf(ConfigUpdateAction.UpdateStyle))
     }
 
     fun applyDayNightInit(context: Context) {
         initNightMode()
     }
 
-    private fun initNightMode() {
-        ThemeConfig.initNightMode()
+    fun initNightMode() {
+        val mode = when (shellSettingsGateway.currentSettings.themeMode) {
+            "1" -> AppCompatDelegate.MODE_NIGHT_NO
+            "2" -> AppCompatDelegate.MODE_NIGHT_YES
+            else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+        }
+        AppCompatDelegate.setDefaultNightMode(mode)
     }
 
     fun getBgImage(context: Context, metrics: DisplayMetrics): Bitmap? {
+        val theme = themeSettingsGateway.currentSettings
         val bgCfg = when (getTheme()) {
             Theme.Light -> Pair(
-                ThemeConfig.bgImageLight,
-                ThemeConfig.bgImageBlurring
+                theme.backgroundImageLight,
+                theme.backgroundImageBlurring
             )
 
             Theme.Dark -> Pair(
-                ThemeConfig.bgImageDark,
-                ThemeConfig.bgImageNBlurring
+                theme.backgroundImageDark,
+                theme.backgroundImageDarkBlurring
             )
 
             else -> null
@@ -88,8 +120,7 @@ object ThemeConfigStore {
 
     fun save() {
         val json = GSON.toJson(configList)
-        FileUtils.delete(configFilePath)
-        FileUtils.createFileIfNotExist(configFilePath).writeText(json)
+        FileUtils.writeTextAtomic(configFilePath, json)
     }
 
     fun addConfig(json: String): Boolean {
@@ -146,13 +177,14 @@ object ThemeConfigStore {
      * 清理无用背景图片
      */
     fun clearBg() {
-        val bgImagePath = ThemeConfig.bgImageLight
+        val theme = themeSettingsGateway.currentSettings
+        val bgImagePath = theme.backgroundImageLight
         appCtx.externalFiles.getFile(PreferKey.bgImage).listFiles()?.forEach {
             if (it.absolutePath != bgImagePath) {
                 it.delete()
             }
         }
-        val bgImageNPath = ThemeConfig.bgImageDark
+        val bgImageNPath = theme.backgroundImageDark
         appCtx.externalFiles.getFile(PreferKey.bgImageN).listFiles()?.forEach {
             if (it.absolutePath != bgImageNPath) {
                 it.delete()
@@ -161,7 +193,7 @@ object ThemeConfigStore {
     }
 
     fun getDurConfig(context: Context): Config {
-        val isNight = AppConfig.isNightTheme
+        val isNight = isNightTheme
         val name = if (isNight) {
             "MD3-Night"
         } else {
@@ -183,10 +215,9 @@ object ThemeConfigStore {
             context.getPrefInt(PreferKey.cBackground, context.getCompatColor(R.color.md_grey_100))
         val bBackground =
             context.getPrefInt(PreferKey.cBBackground, context.getCompatColor(R.color.md_grey_200))
-        val bgImgPath =
-            ThemeConfig.bgImageLight
-        val bgImgBlur =
-            ThemeConfig.bgImageBlurring
+        val theme = themeSettingsGateway.currentSettings
+        val bgImgPath = theme.backgroundImageLight
+        val bgImgBlur = theme.backgroundImageBlurring
 
         return Config(
             themeName = name,
@@ -215,10 +246,9 @@ object ThemeConfigStore {
             context.getPrefInt(PreferKey.cNBackground, context.getCompatColor(R.color.md_grey_900))
         val bBackground =
             context.getPrefInt(PreferKey.cNBBackground, context.getCompatColor(R.color.md_grey_850))
-        val bgImgPath =
-            ThemeConfig.bgImageDark
-        val bgImgBlur =
-            ThemeConfig.bgImageNBlurring
+        val theme = themeSettingsGateway.currentSettings
+        val bgImgPath = theme.backgroundImageDark
+        val bgImgBlur = theme.backgroundImageDarkBlurring
         return Config(
             themeName = name,
             isNightTheme = true,

@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -12,11 +15,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import io.legado.app.R
 import io.legado.app.data.entities.Bookmark
 import io.legado.app.ui.widget.components.AppTextFieldSurface
 import io.legado.app.ui.widget.components.alert.AppAlertDialog
-import io.legado.app.ui.widget.components.button.series.SmallTonalButton
+import io.legado.app.ui.widget.components.button.series.MediumTonalButton
 import io.legado.app.ui.widget.components.icon.AppIcons
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
 
@@ -38,14 +43,14 @@ fun BookmarkEditSheet(
         onDismissRequest = onDismiss,
         title = bookmark.chapterName,
         startAction = {
-            SmallTonalButton(
+            MediumTonalButton(
                 onClick = { showDeleteConfirmDialog = true },
                 icon = AppIcons.Delete,
-                contentDescription = "删除"
+                contentDescription = stringResource(R.string.delete)
             )
         },
         endAction = {
-            SmallTonalButton(
+            MediumTonalButton(
                 onClick = {
                     val newBookmark = bookmark.apply {
                         this.bookText = bookText
@@ -54,7 +59,7 @@ fun BookmarkEditSheet(
                     onSave(newBookmark)
                 },
                 icon = AppIcons.Check,
-                contentDescription = "保存"
+                contentDescription = stringResource(R.string.action_save)
             )
         }
     ) {
@@ -70,14 +75,14 @@ fun BookmarkEditSheet(
     AppAlertDialog(
         show = showDeleteConfirmDialog,
         onDismissRequest = { showDeleteConfirmDialog = false },
-        title = "确认删除",
-        text = "你确定要删除这条书签吗？",
-        confirmText = "删除",
+        title = stringResource(R.string.confirm_delete_bookmark),
+        text = stringResource(R.string.delete_bookmark_message),
+        confirmText = stringResource(R.string.delete),
         onConfirm = {
             showDeleteConfirmDialog = false
             onDelete(bookmark)
         },
-        dismissText = "取消",
+        dismissText = stringResource(R.string.cancel),
         onDismiss = { showDeleteConfirmDialog = false }
     )
 }
@@ -94,11 +99,13 @@ fun BookmarkEditContent(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
     ) {
         AppTextFieldSurface(
             value = bookText,
             onValueChange = onBookTextChange,
-            label = "原文",
+            label = stringResource(R.string.bookmark_original_text),
             modifier = Modifier.fillMaxWidth(),
             maxLines = 10
         )
@@ -108,7 +115,7 @@ fun BookmarkEditContent(
         AppTextFieldSurface(
             value = content,
             onValueChange = onContentChange,
-            label = "摘要/笔记",
+            label = stringResource(R.string.bookmark_note),
             modifier = Modifier.fillMaxWidth(),
             maxLines = 5
         )

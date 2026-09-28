@@ -1,13 +1,13 @@
 package io.legado.app.help
 
-import android.content.SharedPreferences
 import android.net.Uri
 import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.exception.NoStackTraceException
-import io.legado.app.help.config.AppConfig
+import io.legado.app.domain.gateway.BackupSettingsGateway
+import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.LocalConfig
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupRestoreLock
@@ -17,14 +17,12 @@ import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
 import io.legado.app.lib.webdav.WebDavFile
 import io.legado.app.model.remote.RemoteBookWebDav
-import io.legado.app.ui.config.backupConfig.BackupConfig
 import io.legado.app.utils.AlphanumComparator
 import io.legado.app.utils.FileUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.UrlUtil
 import io.legado.app.utils.compress.ZipUtils
-import io.legado.app.utils.defaultSharedPreferences
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.isJson
 import io.legado.app.utils.normalizeFileName
@@ -34,12 +32,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import splitties.init.appCtx
+import org.koin.core.context.GlobalContext
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -66,10 +67,12 @@ sealed class WebDavState {
     ) : WebDavState()
 }
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 class WebDavManager(
-    private val prefs: SharedPreferences = appCtx.defaultSharedPreferences,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-) : SharedPreferences.OnSharedPreferenceChangeListener {
+) {
+
+    private val backupGateway by lazy { GlobalContext.get().get<BackupSettingsGateway>() }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val configFlow = MutableStateFlow(readConfig())
@@ -79,12 +82,22 @@ class WebDavManager(
     private var refreshJob: Job? = null
 
     init {
-        prefs.registerOnSharedPreferenceChangeListener(this)
+        scope.launch {
+            merge(
+                AppConfigStore.observeString(PreferKey.webDavUrl).drop(1),
+                AppConfigStore.observeString(PreferKey.webDavAccount).drop(1),
+                AppConfigStore.observeString(PreferKey.webDavPassword).drop(1),
+                AppConfigStore.observeString(PreferKey.webDavDir).drop(1),
+                AppConfigStore.observeString(PreferKey.webDavDeviceName).drop(1),
+            ).debounce(100).collect {
+                configFlow.value = readConfig()
+                refresh()
+            }
+        }
         refresh()
     }
 
     fun close() {
-        prefs.unregisterOnSharedPreferenceChangeListener(this)
         scope.cancel()
     }
 
@@ -202,7 +215,7 @@ class WebDavManager(
         onSuccess: (() -> Unit)? = null
     ) {
         val auth = requireAuthorization()
-        if (!AppConfig.syncBookProgress) return
+        if (!backupGateway.currentSettings.syncBookProgress) return
         if (!NetworkUtils.isAvailable()) return
         try {
             val bookProgress = BookProgress(book)
@@ -220,7 +233,7 @@ class WebDavManager(
 
     suspend fun uploadBookProgress(bookProgress: BookProgress, onSuccess: (() -> Unit)? = null) {
         val auth = requireAuthorization()
-        if (!AppConfig.syncBookProgress) return
+        if (!backupGateway.currentSettings.syncBookProgress) return
         if (!NetworkUtils.isAvailable()) return
         val json = GSON.toJson(bookProgress)
         val url = getProgressUrl(bookProgress.name, bookProgress.author)
@@ -273,25 +286,14 @@ class WebDavManager(
         }
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == PreferKey.webDavUrl
-            || key == PreferKey.webDavAccount
-            || key == PreferKey.webDavPassword
-            || key == PreferKey.webDavDir
-            || key == PreferKey.webDavDeviceName
-        ) {
-            configFlow.value = readConfig()
-            refresh()
-        }
-    }
-
     private fun readConfig(): WebDavConfig {
+        val settings = backupGateway.currentSettings
         return WebDavConfig(
-            url = BackupConfig.webDavUrl,
-            account = BackupConfig.webDavAccount,
-            password = BackupConfig.webDavPassword,
-            dir = BackupConfig.webDavDir,
-            deviceName = BackupConfig.webDavDeviceName
+            url = settings.webDavUrl,
+            account = settings.webDavAccount,
+            password = settings.webDavPassword,
+            dir = settings.webDavDir,
+            deviceName = settings.webDavDeviceName
         )
     }
 

@@ -1,16 +1,18 @@
 package io.legado.app.domain.usecase
 
+import androidx.room.withTransaction
 import io.legado.app.constant.AppLog
-import io.legado.app.constant.BookType
+import io.legado.app.data.AppDatabase
 import io.legado.app.data.dao.BookChapterDao
 import io.legado.app.data.dao.BookDao
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
+import io.legado.app.data.repository.ReadRecordRepository
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.help.book.BookHelp
-import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.book.isLocal
-import io.legado.app.help.book.removeType
 import io.legado.app.model.ReadBook
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.mapAsync
@@ -66,8 +68,12 @@ enum class BatchChangeSourcePreviewStatus {
 }
 
 class ChangeBookSourceUseCase(
+    private val database: AppDatabase,
     private val bookDao: BookDao,
     private val bookChapterDao: BookChapterDao,
+    private val otherSettingsGateway: OtherSettingsGateway,
+    private val readSettingsGateway: ReadSettingsGateway,
+    private val readRecordRepository: ReadRecordRepository,
 ) {
 
     fun applyMigration(
@@ -76,12 +82,17 @@ class ChangeBookSourceUseCase(
         chapters: List<BookChapter>,
         options: ChangeSourceMigrationOptions,
     ): Book {
-        oldBook.applyMigrationTo(newBook, chapters, options)
-        newBook.removeType(BookType.updateError)
+        oldBook.migrateInto(
+            target = newBook,
+            chapters = chapters,
+            options = options,
+            defaultReplaceEnabled = otherSettingsGateway.currentSettings.replaceEnableDefault,
+            chineseConverterType = readSettingsGateway.currentSettings.chineseConverterType,
+        )
         return newBook
     }
 
-    fun changeTo(
+    suspend fun changeTo(
         oldBook: Book,
         newBook: Book,
         chapters: List<BookChapter>,
@@ -94,11 +105,17 @@ class ChangeBookSourceUseCase(
         } else if (oldBook.bookUrl != newBook.bookUrl) {
             BookHelp.updateCacheFolder(oldBook, newBook)
         }
-        bookChapterDao.delByBook(oldBook.bookUrl)
-        bookDao.delete(oldBook)
-        bookDao.insert(newBook)
+        database.withTransaction {
+            bookChapterDao.delByBook(oldBook.bookUrl)
+            bookDao.delete(oldBook)
+            bookDao.insert(newBook)
+            if (options.migrateChapters) {
+                bookChapterDao.insert(*chapters.toTypedArray())
+            }
+            // 旧书已从书架删除，它的阅读会话必须跟着改挂到新副本，否则新副本的时长会从零开始。
+            readRecordRepository.reassignBookReadSessions(oldBook, newBook)
+        }
         if (options.migrateChapters) {
-            bookChapterDao.insert(*chapters.toTypedArray())
             ReadBook.onChapterListUpdated(newBook)
         }
         return ChangeBookSourceResult(oldBookUrl, newBook)
@@ -228,51 +245,4 @@ class ChangeBookSourceUseCase(
         return chapters
     }
 
-    private fun Book.applyMigrationTo(
-        newBook: Book,
-        chapters: List<BookChapter>,
-        options: ChangeSourceMigrationOptions,
-    ) {
-        newBook.totalChapterNum = chapters.size
-        if (options.migrateReadingProgress && chapters.isNotEmpty()) {
-            newBook.durChapterIndex = BookHelp
-                .getDurChapter(durChapterIndex, durChapterTitle, chapters, totalChapterNum)
-                .coerceIn(0, chapters.lastIndex)
-            newBook.durChapterTitle = chapters[newBook.durChapterIndex].getDisplayTitle(
-                ContentProcessor.get(newBook.name, newBook.origin).getTitleReplaceRules(),
-                getUseReplaceRule()
-            )
-            newBook.durChapterPos = durChapterPos
-            newBook.durChapterTime = durChapterTime
-        } else {
-            newBook.durChapterIndex = 0
-            newBook.durChapterTitle = chapters.firstOrNull()?.getDisplayTitle(
-                ContentProcessor.get(newBook.name, newBook.origin).getTitleReplaceRules(),
-                getUseReplaceRule()
-            )
-            newBook.durChapterPos = 0
-            newBook.durChapterTime = System.currentTimeMillis()
-        }
-        if (options.migrateGroup) {
-            newBook.group = group
-            newBook.order = order
-        }
-        if (options.migrateCover) {
-            newBook.customCoverUrl = customCoverUrl
-        }
-        if (options.migrateCategory) {
-            newBook.customTag = customTag
-        }
-        if (options.migrateRemark) {
-            newBook.customIntro = customIntro
-            newBook.remark = remark
-        }
-        newBook.canUpdate = canUpdate
-        if (config.fixedType) {
-            newBook.type = type
-        }
-        if (options.migrateReadConfig) {
-            newBook.readConfig = readConfig
-        }
-    }
 }

@@ -38,6 +38,7 @@ import io.legado.app.ui.theme.LegadoTheme.composeEngine
 import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.button.ConfirmDismissButtonsRow
 import io.legado.app.ui.widget.components.SplicedColumnDivider
+import io.legado.app.ui.widget.components.sliderAccessibility
 import io.legado.app.ui.widget.components.text.AppText
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Slider as MiuixSlider
@@ -52,6 +53,8 @@ fun SliderSettingItem(
     valueRange: ClosedFloatingPointRange<Float>,
     steps: Int = 0,
     description: String? = null,
+    valueLabel: ((Float) -> String)? = null,
+    decimal: Boolean = false,
     onValueChange: (Float) -> Unit
 ) {
 
@@ -60,14 +63,30 @@ fun SliderSettingItem(
     var sliderValue by remember(value) { mutableFloatStateOf(value) }
     val textFieldState = rememberTextFieldState()
 
+    // 默认整数模式：滑动吸附到整数；decimal = true 时保留 0.1 精度
+    fun snap(v: Float): Float =
+        if (decimal) (v * 10).roundToInt() / 10f else v.roundToInt().toFloat()
+
+    fun format(v: Float): String =
+        if (v % 1f == 0f) v.toInt().toString() else v.toString()
+
     LaunchedEffect(value) {
         sliderValue = value
     }
 
+    // 拖动过程中让标题下的数值实时跟随滑块，松手后才真正应用
+    val displayDescription = when {
+        valueLabel != null -> valueLabel(sliderValue)
+        sliderValue != value -> format(sliderValue)
+        else -> description
+    }
+
+    val sliderAccessibilityValue = displayDescription ?: sliderValue.toString()
+
     LaunchedEffect(isInputMode) {
         if (isInputMode) {
             textFieldState.edit {
-                replace(0, length, value.toString())
+                replace(0, length, format(value))
             }
         }
     }
@@ -75,8 +94,7 @@ fun SliderSettingItem(
     fun commitValue() {
         if (isInputMode) {
             textFieldState.text.toString().toFloatOrNull()?.let { num ->
-                val rounded = (num * 10).roundToInt() / 10f
-                onValueChange(rounded.coerceIn(valueRange))
+                onValueChange(snap(num).coerceIn(valueRange))
             }
         } else if (sliderValue != value) {
             onValueChange(sliderValue)
@@ -93,7 +111,7 @@ fun SliderSettingItem(
         ) {
             BasicComponent(
                 title = title,
-                summary = description,
+                summary = displayDescription,
                 onClick = {
                     if (expanded) {
                         commitValue()
@@ -128,17 +146,19 @@ fun SliderSettingItem(
                             MiuixSlider(
                                 value = sliderValue,
                                 onValueChange = {
-                                    sliderValue = (it * 10).roundToInt() / 10f
-                                    textFieldState.edit {
-                                        replace(0, length, sliderValue.toString())
-                                    }
+                                    sliderValue = snap(it)
                                 },
                                 onValueChangeFinished = {
                                     onValueChange(sliderValue.coerceIn(valueRange))
                                 },
                                 valueRange = valueRange,
                                 steps = steps,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sliderAccessibility(
+                                        label = title,
+                                        value = sliderAccessibilityValue,
+                                    )
                             )
                         }
                     }
@@ -149,11 +169,7 @@ fun SliderSettingItem(
                         onConfirm = {
                             onValueChange(defaultValue)
                             textFieldState.edit {
-                                replace(
-                                    0,
-                                    length,
-                                    defaultValue.toInt().toString()
-                                )
+                                replace(0, length, format(defaultValue))
                             }
                         },
                         dismissText = if (isInputMode) {
@@ -170,7 +186,7 @@ fun SliderSettingItem(
     } else {
         SettingItem(
             title = title,
-            option = description,
+            option = displayDescription,
             expanded = expanded,
             onExpandChange = {
                 if (expanded) {
@@ -212,17 +228,19 @@ fun SliderSettingItem(
                             Slider(
                                 value = sliderValue,
                                 onValueChange = {
-                                    sliderValue = (it * 10).roundToInt() / 10f
-                                    textFieldState.edit {
-                                        replace(0, length, sliderValue.toString())
-                                    }
+                                    sliderValue = snap(it)
                                 },
                                 onValueChangeFinished = {
                                     onValueChange(sliderValue.coerceIn(valueRange))
                                 },
                                 valueRange = valueRange,
                                 steps = steps,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .sliderAccessibility(
+                                        label = title,
+                                        value = sliderAccessibilityValue,
+                                    )
                             )
                         }
                     }
@@ -234,11 +252,7 @@ fun SliderSettingItem(
                     onConfirm = {
                         onValueChange(defaultValue)
                         textFieldState.edit {
-                            replace(
-                                0,
-                                length,
-                                defaultValue.toInt().toString()
-                            )
+                            replace(0, length, format(defaultValue))
                         }
                     },
                     dismissText = if (isInputMode) {
@@ -252,4 +266,3 @@ fun SliderSettingItem(
         )
     }
 }
-

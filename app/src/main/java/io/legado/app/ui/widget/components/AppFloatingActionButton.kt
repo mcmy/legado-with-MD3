@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,6 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
+import io.legado.app.ui.theme.ProvideAppDensity
 import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.text.AppText
 import top.yukonga.miuix.kmp.basic.Button
@@ -61,7 +63,7 @@ fun AppFloatingActionButton(
     tooltipText: String? = null,
     icon: ImageVector? = null,
     containerColor: Color = LegadoTheme.colorScheme.primaryContainer,
-    contentColor: Color = LegadoTheme.colorScheme.onPrimaryContainer,
+    contentColor: Color = LegadoTheme.colorScheme.primary,
     content: (@Composable () -> Unit)? = null
 ) {
     val isMiuix = ThemeResolver.isMiuixEngine(LegadoTheme.composeEngine)
@@ -94,20 +96,28 @@ fun AppFloatingActionButton(
         )
     } else {
         if (tooltipText != null) {
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
-                    TooltipAnchorPosition.Above
-                ),
-                tooltip = { PlainTooltip { AppText(tooltipText) } },
-                state = rememberTooltipState(),
-            ) {
-                FloatingActionButton(
-                    onClick = onClick,
-                    modifier = modifier,
-                    containerColor = containerColor,
-                    contentColor = contentColor,
-                    content = fabContent
-                )
+            Box(modifier = modifier) {
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+                        TooltipAnchorPosition.Above
+                    ),
+                    tooltip = {
+                        ProvideAppDensity {
+                            PlainTooltip(
+                                containerColor = LegadoTheme.colorScheme.surfaceContainerLow,
+                                contentColor = LegadoTheme.colorScheme.onSurface,
+                            ) { AppText(tooltipText) }
+                        }
+                    },
+                    state = rememberTooltipState(),
+                ) {
+                    FloatingActionButton(
+                        onClick = onClick,
+                        containerColor = containerColor,
+                        contentColor = contentColor,
+                        content = fabContent
+                    )
+                }
             }
         } else {
             FloatingActionButton(
@@ -192,7 +202,7 @@ fun AppFloatingActionButtonMenu(
                         MiuixIcon(
                             imageVector = if (expanded) Icons.Filled.Close
                             else Icons.AutoMirrored.Filled.MenuOpen,
-                            contentDescription = "Menu",
+                            contentDescription = stringResource(R.string.menu),
                             tint = Color.White
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -224,7 +234,7 @@ fun AppFloatingActionButtonMenu(
                     }
                     Icon(
                         imageVector = imageVector,
-                        contentDescription = "Menu",
+                        contentDescription = stringResource(R.string.menu),
                         modifier = Modifier.animateIcon({ checkedProgress }),
                     )
                 }

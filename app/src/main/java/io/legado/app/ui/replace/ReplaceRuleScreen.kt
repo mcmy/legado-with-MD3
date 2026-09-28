@@ -3,25 +3,22 @@ package io.legado.app.ui.replace
 import android.content.ClipData
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -44,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
 import io.legado.app.base.BaseRuleEvent
 import io.legado.app.data.entities.ReplaceRule
+import io.legado.app.ui.theme.ProvideAppDensity
 import io.legado.app.ui.theme.adaptiveContentPadding
 import io.legado.app.ui.theme.adaptiveHorizontalPadding
 import io.legado.app.ui.widget.components.ActionItem
@@ -61,7 +59,6 @@ import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.rules.RuleListScaffold
 import io.legado.app.ui.widget.components.tabRow.AppTabRow
-import io.legado.app.ui.widget.components.text.AppText
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -74,12 +71,19 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 @Composable
 fun ReplaceRuleRouteScreen(
     viewModel: ReplaceRuleViewModel = koinViewModel(),
+    bookUrl: String? = null,
     onBackClick: () -> Unit,
     onNavigateToEdit: (ReplaceEditRoute) -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val importState by viewModel.importState.collectAsStateWithLifecycle()
     val groups by viewModel.allGroups.collectAsStateWithLifecycle()
+
+    LaunchedEffect(bookUrl) {
+        if (!bookUrl.isNullOrBlank()) {
+            viewModel.onIntent(ReplaceRuleIntent.InitBookData(bookUrl))
+        }
+    }
 
     ReplaceRuleScreen(
         state = uiState,
@@ -207,7 +211,6 @@ fun ReplaceRuleScreen(
         onToggleAll = { onIntent(ReplaceRuleIntent.ToggleImportAll(it)) },
         onUpdateItem = { index, rule -> onIntent(ReplaceRuleIntent.UpdateImportItem(index, rule)) },
         onConfirm = { onIntent(ReplaceRuleIntent.SaveImportedRules) },
-        topBarActions = {},
         itemTitle = { rule -> rule.name },
         itemSubtitle = { rule ->
             rule.group?.takeIf { it.isNotBlank() }
@@ -215,7 +218,7 @@ fun ReplaceRuleScreen(
     )
 
     if (importState is BaseImportUiState.Loading) {
-        Dialog(onDismissRequest = { onIntent(ReplaceRuleIntent.CancelImport) }) { LoadingIndicator() }
+        Dialog(onDismissRequest = { onIntent(ReplaceRuleIntent.CancelImport) }) { ProvideAppDensity { LoadingIndicator() } }
     }
 
     LaunchedEffect(importState) {
@@ -277,6 +280,7 @@ fun ReplaceRuleScreen(
         data = showDeleteRuleDialog,
         onDismissRequest = { showDeleteRuleDialog = null },
         title = stringResource(R.string.delete),
+        text = stringResource(R.string.sure_del),
         confirmText = stringResource(R.string.ok),
         onConfirm = { rule ->
             onIntent(ReplaceRuleIntent.DeleteRule(rule))
@@ -359,10 +363,6 @@ fun ReplaceRuleScreen(
                 text = stringResource(R.string.group_management),
                 onClick = { showGroupManageSheet = true; dismiss() }
             )
-            RoundDropdownMenuItem(
-                text = stringResource(R.string.help),
-                onClick = { /*TODO*/ dismiss() }
-            )
             PillDivider()
             RoundDropdownMenuItem(
                 text = stringResource(R.string.sort_old_first),
@@ -409,9 +409,26 @@ fun ReplaceRuleScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(rules, key = { it.id }) { ui ->
+                    val enabledState = stringResource(
+                        if (ui.isEnabled) R.string.enabled else R.string.disabled
+                    )
+                    val reorderHint = if (canReorder && !inSelectionMode) {
+                        stringResource(R.string.a11y_long_press_reorder)
+                    } else {
+                        null
+                    }
+                    val itemDescription = listOfNotNull(
+                        ui.name,
+                        ui.pattern.takeIf { it.isNotBlank() },
+                        enabledState,
+                        reorderHint
+                    ).joinToString()
                     ReorderableSelectionItem(
                         state = reorderableState,
                         key = ui.id,
+                        reorderIndex = rules.indexOf(ui),
+                        reorderItemCount = rules.size,
+                        onMoveItem = { from, to -> onIntent(ReplaceRuleIntent.MoveItem(from, to)) },
                         title = ui.name,
                         isEnabled = ui.isEnabled,
                         isSelected = selectedIds.contains(ui.id),
@@ -423,6 +440,16 @@ fun ReplaceRuleScreen(
                         onEnabledChange = { enabled ->
                             onIntent(ReplaceRuleIntent.SetRuleEnabled(ui.id, enabled))
                         },
+                        contentDescription = itemDescription,
+                        enableSwitchContentDescription = stringResource(
+                            R.string.a11y_rule_enabled_switch,
+                            ui.name
+                        ),
+                        editContentDescription = stringResource(R.string.a11y_edit_named, ui.name),
+                        moreContentDescription = stringResource(
+                            R.string.a11y_more_actions_for,
+                            ui.name
+                        ),
                         onClickEdit = {
                             onNavigateToEdit(
                                 ReplaceEditRoute(
@@ -473,4 +500,5 @@ fun ReplaceRuleScreen(
             }
         }
     }
+
 }

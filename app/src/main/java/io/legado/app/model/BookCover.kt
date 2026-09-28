@@ -19,13 +19,13 @@ import com.bumptech.glide.request.RequestOptions
 import com.bumptech.glide.request.target.Target
 import com.bumptech.glide.request.target.Target.SIZE_ORIGINAL
 import io.legado.app.R
-import io.legado.app.ui.config.coverConfig.CoverConfig
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
+import io.legado.app.domain.gateway.AppShellSettingsGateway
+import io.legado.app.domain.gateway.CoverSettingsGateway
+import io.legado.app.domain.gateway.MangaSettingsGateway
 import io.legado.app.help.CacheManager
 import io.legado.app.help.DefaultData
-import io.legado.app.help.config.AppConfig
-import io.legado.app.ui.config.readMangaConfig.ReadMangaConfig
 import io.legado.app.help.glide.BlurTransformation
 import io.legado.app.help.glide.ImageLoader
 import io.legado.app.help.glide.OkHttpModelLoader
@@ -36,6 +36,8 @@ import io.legado.app.domain.usecase.CoverAlbumUseCase
 import io.legado.app.utils.BitmapUtils
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
+import io.legado.app.utils.isNightMode
+import io.legado.app.utils.sysConfiguration
 import kotlinx.coroutines.currentCoroutineContext
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -49,11 +51,20 @@ object BookCover : KoinComponent {
     private const val coverRuleConfigKey = "legadoCoverRuleConfig"
     const val configFileName = "coverRule.json"
     private val coverAlbumUseCase: CoverAlbumUseCase by inject()
+    private val shellSettingsGateway: AppShellSettingsGateway by inject()
+    private val coverSettingsGateway: CoverSettingsGateway by inject()
+    private val mangaSettingsGateway: MangaSettingsGateway by inject()
+
+    private val isNightTheme: Boolean
+        get() = when (shellSettingsGateway.currentSettings.themeMode) {
+            "1" -> false
+            "2" -> true
+            else -> sysConfiguration.isNightMode
+        }
 
     val defaultDrawable: Drawable
         @SuppressLint("UseCompatLoadingForDrawables")
         get() {
-            val isNightTheme = AppConfig.isNightTheme
             val paths = coverAlbumUseCase.selectedImagePaths(isNightTheme)
 
             if (paths.isEmpty()) {
@@ -68,7 +79,7 @@ object BookCover : KoinComponent {
 
     fun getRandomDefaultPath(
         seed: Any? = null,
-        isNight: Boolean = AppConfig.isNightTheme
+        isNight: Boolean = isNightTheme
     ): String? {
         val paths = coverAlbumUseCase.selectedImagePaths(isNight)
         if (paths.isEmpty()) return null
@@ -81,7 +92,7 @@ object BookCover : KoinComponent {
 
     fun getRandomDefaultDrawable(
         seed: Any? = null,
-        isNight: Boolean = AppConfig.isNightTheme
+        isNight: Boolean = isNightTheme
     ): Drawable {
         val randomPath = getRandomDefaultPath(seed, isNight)
             ?: return appCtx.resources.getDrawable(R.drawable.image_cover_default, null)
@@ -111,7 +122,7 @@ object BookCover : KoinComponent {
         onLoadFinish: (() -> Unit)? = null,
     ): RequestBuilder<Drawable> {
         val currentDefault = getRandomDefaultDrawable()
-        if (AppConfig.useDefaultCover) {
+        if (coverSettingsGateway.currentSettings.useDefaultCover) {
             return ImageLoader.load(context, currentDefault)
                 .centerCrop()
         }
@@ -175,7 +186,7 @@ object BookCover : KoinComponent {
         if (transformation != null) {
             builder = builder.transform(transformation)
         }
-        builder = if (ReadMangaConfig.disableMangaCrossFade) {
+        builder = if (mangaSettingsGateway.currentSettings.disableMangaCrossFade) {
             builder
         } else {
             builder.transition(DrawableTransitionOptions.withCrossFade())
@@ -214,7 +225,7 @@ object BookCover : KoinComponent {
         val currentDefault = getRandomDefaultDrawable()
         val loadBlur = ImageLoader.load(context, currentDefault)
             .transform(BlurTransformation(25), CenterCrop())
-        if (AppConfig.useDefaultCover) {
+        if (coverSettingsGateway.currentSettings.useDefaultCover) {
             return loadBlur
         }
         var options = RequestOptions().set(OkHttpModelLoader.loadOnlyWifiOption, loadOnlyWifi)

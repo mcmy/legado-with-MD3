@@ -7,7 +7,11 @@ import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.SearchBook
 import io.legado.app.data.entities.readRecord.ReadRecordTimelineDay
+import io.legado.app.domain.model.BookshelfConflict
+import io.legado.app.domain.model.ConflictBookSummary
+import io.legado.app.domain.model.PrivateAccessState
 import io.legado.app.domain.usecase.ChangeSourceMigrationOptions
+import io.legado.app.ui.widget.components.variable.VariableEditorUiState
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
@@ -22,6 +26,7 @@ data class HighlightedTag(
 data class BookInfoUiState(
     val book: BookInfoBookUi? = null,
     val hasChapters: Boolean = false,
+    val tocLoadFailed: Boolean = false,
     val webFiles: List<BookInfoWebFile> = emptyList(),
     val highlightedTags: List<HighlightedTag> = emptyList(),
     val kindLabels: List<String> = emptyList(),
@@ -30,8 +35,12 @@ data class BookInfoUiState(
     val readRecordTotalTime: Long = 0L,
     val readRecordTimelineDays: List<ReadRecordTimelineDay> = emptyList(),
     val inBookshelf: Boolean = false,
-    val bookSource: BookInfoSourceUi? = null,
+    val bookSource: BookSource? = null,
+    val bookSourceUi: BookInfoSourceUi? = null,
     val relatedBooks: ImmutableList<RelatedBooksUi> = persistentListOf(),
+    val characters: ImmutableList<BookInfoCharacterUi> = persistentListOf(),
+    val knowledgeEntries: ImmutableList<BookInfoKnowledgeUi> = persistentListOf(),
+    val recentEvents: ImmutableList<BookInfoEventUi> = persistentListOf(),
     val isTocLoading: Boolean = false,
     val isBusy: Boolean = false,
     val deleteAlertEnabled: Boolean = true,
@@ -39,6 +48,25 @@ data class BookInfoUiState(
     val showAppLogSheet: Boolean = false,
     val sheet: BookInfoSheet = BookInfoSheet.None,
     val dialog: BookInfoDialog? = null,
+    val bookInfoFollowCoverColor: Boolean = true,
+    val bookInfoNetworkCoverBackground: String = "on",
+    val bookInfoDefaultCoverBackground: String = "on",
+    val loadCoverOnlyOnWifi: Boolean = false,
+    val defaultCover: String = "",
+    val defaultCoverDark: String = "",
+    val showMangaUi: Boolean = true,
+    /** 加入书架时发现的疑似重复；非空时由冲突 Sheet 决定共存还是迁移。 */
+    val shelfConflict: BookshelfConflict? = null,
+    val isResolvingShelfConflict: Boolean = false,
+    /** 本书是否私密（单本标记 ∪ 所属私密分组）；菜单里"标记/取消私密"读它 */
+    val bookPrivate: Boolean = false,
+    /** 进入本页时这本书是否需要验证（页面内刚标记私密不会立刻脱敏） */
+    val privateLockedByEntry: Boolean = false,
+    /** 本书为私密书籍且尚未解锁：详情页只显示锁定态 */
+    val privateLocked: Boolean = false,
+    val privateAccess: PrivateAccessState = PrivateAccessState(),
+    /** 应用内密码解锁弹窗（生物不可用或用户选择密码时） */
+    val showPrivatePasswordDialog: Boolean = false,
 )
 
 @Stable
@@ -59,14 +87,43 @@ data class BookInfoBookUi(
     val latestChapterTitle: String?,
     val totalChapterNum: Int,
     val durChapterIndex: Int,
+    val durChapterPos: Int,
     val remark: String?,
-    val displayIntro: String?,
+    val intro: String?,
 )
 
 @Stable
 data class BookInfoSourceUi(
     val sourceUrl: String,
     val hasLogin: Boolean,
+    val hasCustomButton: Boolean,
+)
+
+@Stable
+data class BookInfoCharacterUi(
+    val id: String,
+    val name: String,
+    val avatarUri: String?,
+    val role: String,
+    val tags: String,
+    val summary: String,
+)
+
+@Stable
+data class BookInfoKnowledgeUi(
+    val id: String,
+    val type: String,
+    val title: String,
+    val summary: String,
+)
+
+@Stable
+data class BookInfoEventUi(
+    val id: String,
+    val chapterTitle: String,
+    val eventTimeText: String,
+    val content: String,
+    val characterName: String,
 )
 
 sealed interface BookInfoSheet {
@@ -81,6 +138,7 @@ sealed interface BookInfoSheet {
         val entries: List<String>,
         val openAfterImport: Boolean,
     ) : BookInfoSheet
+    data class Variable(val editor: VariableEditorUiState) : BookInfoSheet
 }
 
 sealed interface BookInfoDialog {
@@ -112,6 +170,8 @@ sealed interface BookInfoIntent {
     data object DismissSheet : BookInfoIntent
     data object DismissDialog : BookInfoIntent
     data object DismissAppLogSheet : BookInfoIntent
+    data class UpdateVariable(val value: String) : BookInfoIntent
+    data object SaveVariable : BookInfoIntent
     data class MenuAction(val action: BookInfoMenuAction) : BookInfoIntent
     data class AuthorClick(val longClick: Boolean) : BookInfoIntent
     data class BookNameClick(val longClick: Boolean) : BookInfoIntent
@@ -140,6 +200,27 @@ sealed interface BookInfoIntent {
         val book: Book,
         val toc: List<BookChapter>,
     ) : BookInfoIntent
+
+    data object DismissShelfConflict : BookInfoIntent
+    data class OpenShelfConflictBook(val summary: ConflictBookSummary) : BookInfoIntent
+    data class CoexistWithShelfConflict(
+        val existingBookUrl: String,
+        val options: ChangeSourceMigrationOptions,
+    ) : BookInfoIntent
+
+    data class MigrateShelfConflict(
+        val existingBookUrl: String,
+        val options: ChangeSourceMigrationOptions,
+    ) : BookInfoIntent
+
+    data class ReplaceConflictingBook(
+        val oldBook: Book,
+        val source: BookSource,
+        val book: Book,
+        val toc: List<BookChapter>,
+        val options: ChangeSourceMigrationOptions,
+    ) : BookInfoIntent
+
     data class SelectWebFile(
         val webFile: BookInfoWebFile,
         val openAfterImport: Boolean,
@@ -155,9 +236,39 @@ sealed interface BookInfoIntent {
 
     data class RelatedBookClick(val book: SearchBook) : BookInfoIntent
     data class RelatedBooksMore(val title: String, val url: String) : BookInfoIntent
+    data class CharacterClick(val characterId: String) : BookInfoIntent
+    data object AddCharacterClick : BookInfoIntent
+    data object CharacterNetworkClick : BookInfoIntent
+    data object CharacterListClick : BookInfoIntent
+    data object KnowledgeListClick : BookInfoIntent
+    data object EventListClick : BookInfoIntent
+    data class SetDefaultBookTreeUri(val value: String) : BookInfoIntent
+
+    /** 简介 HTML 中 `<button>名称@onclick:脚本</button>` 的点击。 */
+    data class IntroButtonClick(val name: String, val click: String) : BookInfoIntent
+
+    /** 简介 HTML 图片携带 {"click":"脚本"} 参数时的点击。 */
+    data class IntroImageClick(val click: String) : BookInfoIntent
+
+    /** 简介 HTML 图片长按。 */
+    data class IntroImageLongClick(val source: String) : BookInfoIntent
+
+    /** 私密书籍未解锁时的验证入口 */
+    data object RequestPrivateUnlock : BookInfoIntent
+    data object ShowPrivatePassword : BookInfoIntent
+    data class SubmitPrivatePassword(val password: String) : BookInfoIntent
+    data object DismissPrivatePassword : BookInfoIntent
 }
 
 sealed interface BookInfoEffect {
+    data class ShowMessage(val message: String) : BookInfoEffect
+
+    /** 交给宿主弹出系统生物验证框（需要 FragmentActivity） */
+    data object RequestBiometricUnlock : BookInfoEffect
+
+    /** 私密功能需要本地密码：引导去设置页 */
+    data object NavigateToLocalPasswordSettings : BookInfoEffect
+
     data class Finish(
         val resultCode: Int? = null,
         val afterTransition: Boolean = false,
@@ -180,13 +291,6 @@ sealed interface BookInfoEffect {
         val book: Book,
         val action: BookInfoCallbackAction,
     ) : BookInfoEffect
-    data class ShowVariableDialog(
-        val title: String,
-        val key: String,
-        val variable: String?,
-        val comment: String,
-    ) : BookInfoEffect
-
     data class NavigateToBookInfo(
         val name: String?,
         val author: String?,
@@ -199,6 +303,35 @@ sealed interface BookInfoEffect {
         val sourceUrl: String,
         val exploreUrl: String?,
     ) : BookInfoEffect
+
+    data class OpenCharacterDetail(
+        val bookUrl: String,
+        val characterId: String?,
+    ) : BookInfoEffect
+
+    data class OpenCharacterNetwork(
+        val bookUrl: String,
+    ) : BookInfoEffect
+
+    data class OpenCharacterList(
+        val bookUrl: String,
+    ) : BookInfoEffect
+
+    data class OpenKnowledgeList(
+        val bookUrl: String,
+    ) : BookInfoEffect
+
+    data class OpenEventList(
+        val bookUrl: String,
+    ) : BookInfoEffect
+
+    /** 简介按钮/图片触发的书源 JS 执行，由宿主（持有 Activity）用 SourceLoginJsExtensions 运行。 */
+    data class RunIntroJs(
+        val name: String,
+        val click: String,
+        val source: BookSource?,
+        val book: Book,
+    ) : BookInfoEffect
 }
 
 sealed interface BookInfoCallbackAction {
@@ -206,9 +339,11 @@ sealed interface BookInfoCallbackAction {
     data class ShareText(val chooserTitle: String, val text: String) : BookInfoCallbackAction
     data class CopyText(val text: String) : BookInfoCallbackAction
     data object ClearCache : BookInfoCallbackAction
+    data object None : BookInfoCallbackAction
 }
 
 enum class BookInfoMenuAction {
+    CustomButton,
     Edit,
     Share,
     Upload,
@@ -226,4 +361,5 @@ enum class BookInfoMenuAction {
     ToggleDeleteAlert,
     ClearCache,
     ShowLog,
+    TogglePrivate,
 }

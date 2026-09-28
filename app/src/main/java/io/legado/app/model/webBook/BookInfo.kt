@@ -121,9 +121,21 @@ object BookInfo {
         coroutineContext.ensureActive()
         Debug.log(bookSource.bookSourceUrl, "┌获取简介")
         try {
-            HtmlFormatter.format(analyzeRule.getString(infoRule.intro)).take(5000).let {
-                if (it.isNotEmpty()) book.intro = it
-                Debug.log(bookSource.bookSourceUrl, "└${it}")
+            // 渲染指令前缀(<usehtml>/<md>/<useweb>)的简介必须原样保留,
+            // 否则 <button>@onclick 等书源交互标记会被清理掉, 上游 BookInfoActivity 同此处理
+            val intro = analyzeRule.getString(infoRule.intro)
+            val introTrimS = intro.trimStart()
+            if (introTrimS.startsWith("<usehtml>") ||
+                introTrimS.startsWith("<md>") ||
+                introTrimS.startsWith("<useweb>")
+            ) {
+                book.intro = introTrimS
+                Debug.log(bookSource.bookSourceUrl, "└${introTrimS}")
+            } else {
+                HtmlFormatter.format(introTrimS).take(5000).let {
+                    if (it.isNotEmpty()) book.intro = it
+                    Debug.log(bookSource.bookSourceUrl, "└${it}")
+                }
             }
         } catch (e: Exception) {
             coroutineContext.ensureActive()

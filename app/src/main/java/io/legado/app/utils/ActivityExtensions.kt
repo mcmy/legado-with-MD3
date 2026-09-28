@@ -21,7 +21,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 import androidx.fragment.app.DialogFragment
 import io.legado.app.R
-import io.legado.app.ui.widget.dialog.TextDialog
 
 inline fun <reified T : DialogFragment> AppCompatActivity.showDialogFragment(
     arguments: Bundle.() -> Unit = {}
@@ -94,7 +93,7 @@ fun Activity.fullScreen() {
 fun Activity.setStatusBarColorAuto(
     @ColorInt color: Int,
     isTransparent: Boolean,
-    fullScreen: Boolean
+    fullScreen: Boolean = true
 ) {
     val isLightBar = ColorUtils.isColorLight(color)
     if (fullScreen) {
@@ -209,11 +208,3 @@ val Activity.navigationBarGravity: Int
         val gravity = (navigationBar?.layoutParams as? FrameLayout.LayoutParams)?.gravity
         return gravity ?: Gravity.BOTTOM
     }
-
-/**
- * 显示目录help下的帮助文档
- */
-fun AppCompatActivity.showHelp(fileName: String) {
-    val mdText = String(assets.open("web/help/md/${fileName}.md").readBytes())
-    showDialogFragment(TextDialog(getString(R.string.help), mdText, TextDialog.Mode.MD))
-}

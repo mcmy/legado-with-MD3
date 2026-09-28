@@ -60,7 +60,7 @@ fun SourceBrowseDetailPage(
     onReorderModules: (List<String>) -> Unit,
     onEditModule: (HomepageModuleManageUi) -> Unit,
     onAddDialogPrefill: (AddDialogPrefill?) -> Unit,
-    onShowAddButtonGroupDialog: () -> Unit,
+    onShowAddKindGroupDialog: () -> Unit,
     browseTab: Int,
     onBrowseTabChange: (Int) -> Unit,
     browseModuleType: String,
@@ -159,6 +159,14 @@ fun SourceBrowseDetailPage(
                             ReorderableSelectionItem(
                                 state = reorderableState,
                                 key = module.id,
+                                reorderIndex = listData.indexOf(module),
+                                reorderItemCount = listData.size,
+                                onMoveItem = { from, to ->
+                                    listData = listData.toMutableList().apply { move(from, to) }
+                                    onReorderModules(
+                                        (listData.map { it.id } + infiniteModules.map { it.id }).distinct()
+                                    )
+                                },
                                 title = module.title,
                                 subtitle = HomepageModuleType.fromKey(module.type).title,
                                 isEnabled = module.isVisible,
@@ -172,11 +180,13 @@ fun SourceBrowseDetailPage(
                                 trailingAction = {
                                     SmallPlainButton(
                                         onClick = { onEditModule(module) },
-                                        icon = Icons.Default.Edit
+                                        icon = Icons.Default.Edit,
+                                        contentDescription = stringResource(R.string.edit)
                                     )
                                     SmallPlainButton(
                                         onClick = { onRequestDeleteModule(module.id) },
-                                        icon = Icons.Default.Delete
+                                        icon = Icons.Default.Delete,
+                                        contentDescription = stringResource(R.string.delete)
                                     )
                                 }
                             )
@@ -214,11 +224,13 @@ fun SourceBrowseDetailPage(
                                     trailingAction = {
                                         SmallPlainButton(
                                             onClick = { onEditModule(module) },
-                                            icon = Icons.Default.Edit
+                                            icon = Icons.Default.Edit,
+                                            contentDescription = stringResource(R.string.edit)
                                         )
                                         SmallPlainButton(
                                             onClick = { onRequestDeleteModule(module.id) },
-                                            icon = Icons.Default.Delete
+                                            icon = Icons.Default.Delete,
+                                            contentDescription = stringResource(R.string.delete)
                                         )
                                     }
                                 )
@@ -281,6 +293,9 @@ fun SourceBrowseDetailPage(
             2 -> {
                 val effectiveTargetSetId = currentSetId
                 val isButtonGroup = browseModuleType == "buttonGroup"
+                val isRanking = browseModuleType == HomepageModuleType.Ranking.key ||
+                        browseModuleType == HomepageModuleType.GridRanking.key
+                val supportsMultipleKinds = isButtonGroup || isRanking
                 Column {
                     val typeList = remember(canSelectInfiniteGlobal) {
                         HomepageModuleType.entries.filter {
@@ -321,7 +336,7 @@ fun SourceBrowseDetailPage(
 
                     SelectionItemCard(
                         title = stringResource(R.string.homepage_select_from_kinds),
-                        subtitle = if (isButtonGroup) {
+                        subtitle = if (supportsMultipleKinds) {
                             if (selectedKindTitles.isEmpty()) stringResource(R.string.homepage_select_multiple_kinds)
                             else stringResource(
                                 R.string.homepage_n_selected,
@@ -333,10 +348,11 @@ fun SourceBrowseDetailPage(
                         containerColor = LegadoTheme.colorScheme.onSheetContent,
                         onToggleSelection = { showKindSelect = true },
                         trailingAction = {
-                            if (isButtonGroup && selectedKindTitles.isNotEmpty()) {
+                            if (supportsMultipleKinds && selectedKindTitles.isNotEmpty()) {
                                 SmallPlainButton(
-                                    onClick = { onShowAddButtonGroupDialog() },
-                                    icon = Icons.Default.Check
+                                    onClick = { onShowAddKindGroupDialog() },
+                                    icon = Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.confirm)
                                 )
                             }
                         }
@@ -346,10 +362,10 @@ fun SourceBrowseDetailPage(
                         show = showKindSelect,
                         onDismissRequest = { showKindSelect = false },
                         sourceUrl = browseUrl,
-                        multiple = isButtonGroup,
+                        multiple = supportsMultipleKinds,
                         initialSelectedTitles = selectedKindTitles.toList(),
                         onSelected = { kinds ->
-                            if (isButtonGroup) {
+                            if (supportsMultipleKinds) {
                                 onSelectedKindTitlesChange(kinds.map { it.title }.toSet())
                             } else {
                                 kinds.firstOrNull()?.let { kind ->

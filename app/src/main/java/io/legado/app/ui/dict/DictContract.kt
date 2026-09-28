@@ -7,9 +7,15 @@ import kotlinx.collections.immutable.persistentListOf
 @Stable
 data class DictUiState(
     val word: String = "",
-    val isLoading: Boolean = false,
     val rules: ImmutableList<DictRuleUi> = persistentListOf(),
     val selectedIndex: Int = 0,
+    val pages: ImmutableList<DictPageUiState> = persistentListOf(),
+    val emptyReason: DictEmptyReason? = null,
+)
+
+@Stable
+data class DictPageUiState(
+    val isLoading: Boolean = false,
     val htmlContent: String = "",
     val emptyReason: DictEmptyReason? = null,
 )
@@ -28,8 +34,10 @@ sealed interface DictEmptyReason {
 sealed interface DictIntent {
     data class Load(val word: String) : DictIntent
     data class SelectRule(val index: Int) : DictIntent
+    data object OpenSelectedRuleInWebView : DictIntent
 }
 
 sealed interface DictEffect {
     data class ShowToast(val message: String) : DictEffect
+    data class OpenWebPage(val title: String, val url: String) : DictEffect
 }

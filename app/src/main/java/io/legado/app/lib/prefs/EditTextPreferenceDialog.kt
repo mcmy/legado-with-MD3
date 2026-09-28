@@ -7,12 +7,13 @@ import android.view.WindowManager
 import androidx.preference.EditTextPreferenceDialogFragmentCompat
 import androidx.preference.PreferenceDialogFragmentCompat
 import io.legado.app.R
-import io.legado.app.help.config.AppConfig
 //import io.legado.app.lib.theme.accentColor
 //import io.legado.app.lib.theme.filletBackground
 
 
 class EditTextPreferenceDialog : EditTextPreferenceDialogFragmentCompat() {
+
+    private val themeSettingsGateway get() = org.koin.core.context.GlobalContext.get().get<io.legado.app.domain.gateway.ThemeSettingsGateway>()
 
     companion object {
 
@@ -41,7 +42,7 @@ class EditTextPreferenceDialog : EditTextPreferenceDialogFragmentCompat() {
 
     override fun onStart() {
         super.onStart()
-        if (AppConfig.isEInkMode) {
+        if (themeSettingsGateway.currentSettings.appTheme == "4") {
             dialog?.window?.let {
                 it.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 val attr = it.attributes
