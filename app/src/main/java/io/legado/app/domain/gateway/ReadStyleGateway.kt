@@ -19,6 +19,7 @@ interface ReadStyleGateway {
      */
     fun notifyModeChanged()
     fun updateCurrentStyle(mutation: ReadStyleMutation)
+    fun setQuickStyleSelected(index: Int, enabled: Boolean)
 
     /**
      * 排版时发现当前字体文件已不存在——清空字体设置并落盘，下次排版回落到系统字体。

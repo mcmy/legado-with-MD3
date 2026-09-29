@@ -90,6 +90,15 @@ export type BookProgress = Pick<
   | 'durChapterTitle'
 >
 
+export type ReadRecordSession = {
+  bookName: string
+  bookAuthor: string
+  bookUrl: string
+  startTime: number
+  endTime: number
+  chapterIndex: number
+}
+
 export type BookChapter = {
   url: string // 章节地址
   title: string // 章节标题

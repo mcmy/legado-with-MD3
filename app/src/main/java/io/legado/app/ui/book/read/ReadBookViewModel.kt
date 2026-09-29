@@ -40,6 +40,7 @@ import io.legado.app.domain.gateway.ReadStyleGateway
 import io.legado.app.domain.gateway.ThemeSettingsGateway
 import io.legado.app.domain.model.readaloud.ReadAloudSessionStatus
 import io.legado.app.domain.model.settings.ReadAloudTimerMode
+import io.legado.app.domain.model.settings.nextQuickStyleIndex
 import io.legado.app.domain.usecase.AiTextFactoryUseCase
 import io.legado.app.domain.usecase.ChangeBookSourceUseCase
 import io.legado.app.domain.usecase.CleanSelectedTextUseCase
@@ -1428,6 +1429,18 @@ class ReadBookViewModel(
             is ReadBookIntent.SaveReadStyleConfig -> styleDelegate.saveCurrentStyle()
             is ReadBookIntent.AddReadStyleConfig -> styleDelegate.addStyle()
             is ReadBookIntent.DeleteCurrentReadStyleConfig -> styleDelegate.deleteCurrentStyle()
+            is ReadBookIntent.SetQuickStyleSelected ->
+                readBookStyleConfigRepository.setQuickStyleSelected(intent.index, intent.enabled)
+            is ReadBookIntent.SwitchQuickReadStyle -> {
+                val styles = readBookStyleConfigRepository.currentState.items
+                val next = nextQuickStyleIndex(
+                    ReadBookConfig.styleSelect,
+                    styles.map { it.quickStyleSelect },
+                )
+                if (next != null && next != ReadBookConfig.styleSelect) {
+                    configUpdateDelegate.handle(ConfigUpdate.StyleSelect(next))
+                }
+            }
             is ReadBookIntent.ApplyPresetTheme -> styleDelegate.applyPresetTheme(intent.presetIndex)
             is ReadBookIntent.OpenBgTextConfig -> styleDelegate.openBgTextConfig(intent.index)
 

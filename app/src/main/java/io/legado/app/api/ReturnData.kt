@@ -20,6 +20,13 @@ class ReturnData {
         return this
     }
 
+    fun setErrorMsg(errorMsg: String, data: Any): ReturnData {
+        this.isSuccess = false
+        this.errorMsg = errorMsg
+        this.data = data
+        return this
+    }
+
     fun setData(data: Any): ReturnData {
         this.isSuccess = true
         this.errorMsg = ""

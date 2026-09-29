@@ -60,6 +60,7 @@ class KtorServer(private val port: Int) {
                 post("/saveBook") { handlePost { BookController.saveBook(it) } }
                 post("/deleteBook") { handlePost { BookController.deleteBook(it) } }
                 post("/saveBookProgress") { handlePost { BookController.saveBookProgress(it) } }
+                post("/saveReadSession") { handlePost { BookController.saveReadSession(it) } }
                 post("/addLocalBook") {
                     WebService.serve()
                     val multipart = call.receiveMultipart()

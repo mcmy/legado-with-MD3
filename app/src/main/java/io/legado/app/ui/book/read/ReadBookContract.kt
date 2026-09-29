@@ -654,6 +654,8 @@ sealed interface ReadBookIntent {
     data object SaveReadStyleConfig : ReadBookIntent
     data object AddReadStyleConfig : ReadBookIntent
     data object DeleteCurrentReadStyleConfig : ReadBookIntent
+    data class SetQuickStyleSelected(val index: Int, val enabled: Boolean) : ReadBookIntent
+    data object SwitchQuickReadStyle : ReadBookIntent
     data class ApplyPresetTheme(val presetIndex: Int) : ReadBookIntent
 
     // Bookshelf

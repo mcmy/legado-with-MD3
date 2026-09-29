@@ -832,6 +832,30 @@ interface BookDao {
     )
     fun upReadProgress(bookUrl: String, durChapterIndex: Int, durChapterPos: Int, durChapterTime: Long)
 
+    @Query(
+        """
+        UPDATE books SET
+            durChapterIndex = :chapterIndex,
+            durChapterPos = :chapterPos,
+            durChapterTitle = :chapterTitle,
+            durChapterTime = :chapterTime
+        WHERE bookUrl = :bookUrl AND (
+            durChapterIndex < :chapterIndex OR
+            (durChapterIndex = :chapterIndex AND durChapterPos < :chapterPos)
+        )
+        """
+    )
+    fun updateProgressIfAhead(
+        bookUrl: String,
+        chapterIndex: Int,
+        chapterPos: Int,
+        chapterTitle: String?,
+        chapterTime: Long,
+    ): Int
+
+    @Query("UPDATE books SET syncTime = :syncTime WHERE bookUrl = :bookUrl")
+    fun updateSyncTime(bookUrl: String, syncTime: Long)
+
     @Query("update books set `group` = :newGroupId where `group` = :oldGroupId")
     fun upGroup(oldGroupId: Long, newGroupId: Long)
 

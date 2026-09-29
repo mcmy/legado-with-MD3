@@ -39,6 +39,7 @@ class ReadConfigJsonRoundTripTest {
             bgType = 2,
             bgStr = "/sdcard/bg/a.jpg",
             bgAlpha = 66,
+            quickStyleSelect = true,
         )
 
         val restored = gson.fromJson(gson.toJson(original), ReadBookConfig.Config::class.java)
@@ -48,6 +49,7 @@ class ReadConfigJsonRoundTripTest {
         assertEquals(0.42f, restored.letterSpacing, 0f)
         assertTrue(restored.textItalic)
         assertEquals("/sdcard/bg/a.jpg", restored.bgStr)
+        assertTrue(restored.quickStyleSelect)
     }
 
     @Test
@@ -82,6 +84,7 @@ class ReadConfigJsonRoundTripTest {
         assertEquals("　　", restored.paragraphIndent)
         assertEquals(12, restored.lineSpacingExtra)
         assertEquals("缺字段应回落到适中挡（2 = 统一基准 360ms）", 2, restored.getPageAnimSpeed())
+        assertEquals(false, restored.quickStyleSelect)
     }
 
     @Test

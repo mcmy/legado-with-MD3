@@ -19,3 +19,10 @@ data class BookProgress(
     )
 
 }
+
+fun BookProgress.comparePositionTo(chapterIndex: Int, chapterPos: Int): Int {
+    return when {
+        durChapterIndex != chapterIndex -> durChapterIndex.compareTo(chapterIndex)
+        else -> durChapterPos.compareTo(chapterPos)
+    }
+}

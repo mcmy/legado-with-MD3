@@ -79,7 +79,6 @@
 </template>
 
 <script setup lang="ts">
-import '@/assets/bookshelf.css'
 import '@/assets/fonts/shelffont.css'
 import { useBookStore } from '@/store'
 import githubUrl from '@/assets/imgs/github.png'

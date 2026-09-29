@@ -9,6 +9,9 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.data.entities.BookSource
+import io.legado.app.data.entities.comparePositionTo
+import io.legado.app.data.entities.readRecord.ReadRecordSession
+import io.legado.app.data.repository.ReadRecordRepository
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.CacheManager
 import io.legado.app.help.book.BookHelp
@@ -28,6 +31,8 @@ import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.stackTraceStr
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import splitties.init.appCtx
 import org.koin.core.context.GlobalContext
 import java.io.File
@@ -37,11 +42,13 @@ import java.util.concurrent.TimeUnit
 object BookController {
 
     private val bookshelfGateway by lazy { GlobalContext.get().get<BookshelfSettingsGateway>() }
+    private val readRecordRepository by lazy { GlobalContext.get().get<ReadRecordRepository>() }
 
     private lateinit var book: Book
     private var bookSource: BookSource? = null
     private var bookUrl: String = ""
     private val defaultCoverCache by lazy { WeakHashMap<Drawable, Bitmap>() }
+    private val saveBookProgressMutex = Mutex()
 
     /**
      * 书架所有书籍
@@ -255,29 +262,115 @@ object BookController {
      */
     suspend fun saveBookProgress(postData: String?): ReturnData {
         val returnData = ReturnData()
-        GSON.fromJsonObject<BookProgress>(postData)
+        val bookProgress = GSON.fromJsonObject<BookProgress>(postData)
             .onFailure { it.printOnDebug() }
-            .getOrNull()?.let { bookProgress ->
-                appDb.bookDao.getBook(bookProgress.name, bookProgress.author)?.let { book ->
-                    book.durChapterIndex = bookProgress.durChapterIndex
-                    book.durChapterPos = bookProgress.durChapterPos
-                    book.durChapterTitle = bookProgress.durChapterTitle
-                    book.durChapterTime = bookProgress.durChapterTime
-                    AppWebDav.uploadBookProgress(bookProgress) {
-                        book.syncTime = System.currentTimeMillis()
-                    }
-                    appDb.bookDao.update(book)
-                    ReadBook.book?.let {
-                        if (it.name == bookProgress.name &&
-                            it.author == bookProgress.author
-                        ) {
-                            ReadBook.webBookProgress = bookProgress
-                        }
-                    }
-                    return returnData.setData("")
+            .getOrNull()
+            ?: return returnData.setErrorMsg("格式不对")
+
+        return saveBookProgressMutex.withLock {
+            val bookDao = appDb.bookDao
+            val book = bookDao.getBook(bookProgress.name, bookProgress.author)
+                ?: return@withLock returnData.setErrorMsg("未找到书籍")
+            val activeBook = ReadBook.book?.takeIf {
+                it.name == bookProgress.name && it.author == bookProgress.author
+            }
+            val localProgress = latestLocalProgress(book, activeBook)
+            val localOrder = bookProgress.comparePositionTo(
+                localProgress.durChapterIndex,
+                localProgress.durChapterPos,
+            )
+            if (localOrder < 0) {
+                return@withLock returnData.setErrorMsg(
+                    WEB_PROGRESS_CONFLICT,
+                    localProgress,
+                )
+            }
+            if (localOrder == 0) {
+                return@withLock returnData.setData(WEB_PROGRESS_UNCHANGED)
+            }
+
+            val updatedRows = bookDao.updateProgressIfAhead(
+                book.bookUrl,
+                bookProgress.durChapterIndex,
+                bookProgress.durChapterPos,
+                bookProgress.durChapterTitle,
+                bookProgress.durChapterTime,
+            )
+            if (updatedRows == 0) {
+                val currentBook = bookDao.getBook(book.bookUrl)
+                    ?: return@withLock returnData.setErrorMsg("未找到书籍")
+                val currentProgress = latestLocalProgress(currentBook, activeBook)
+                val order = bookProgress.comparePositionTo(
+                    currentProgress.durChapterIndex,
+                    currentProgress.durChapterPos,
+                )
+                return@withLock when {
+                    order < 0 -> returnData.setErrorMsg(
+                        WEB_PROGRESS_CONFLICT,
+                        currentProgress,
+                    )
+                    else -> returnData.setData(WEB_PROGRESS_UNCHANGED)
                 }
             }
-        return returnData.setErrorMsg("格式不对")
+
+            activeBook?.let {
+                val activeProgress = latestLocalProgress(book, activeBook)
+                val activeOrder = bookProgress.comparePositionTo(
+                    activeProgress.durChapterIndex,
+                    activeProgress.durChapterPos,
+                )
+                if (activeOrder < 0) {
+                    return@withLock returnData.setErrorMsg(
+                        WEB_PROGRESS_CONFLICT,
+                        activeProgress,
+                    )
+                }
+                if (activeOrder == 0) {
+                    return@withLock returnData.setData(WEB_PROGRESS_UNCHANGED)
+                }
+            }
+
+            AppWebDav.uploadBookProgress(bookProgress) {
+                bookDao.updateSyncTime(book.bookUrl, System.currentTimeMillis())
+            }
+            activeBook?.let {
+                val isStillAhead = bookProgress.comparePositionTo(
+                    ReadBook.durChapterIndex,
+                    ReadBook.durChapterPos,
+                ) > 0
+                if (isStillAhead) {
+                    ReadBook.webBookProgress = bookProgress
+                }
+            }
+            return@withLock returnData.setData(WEB_PROGRESS_UPDATED)
+        }
+    }
+
+    /** 保存 Web 阅读器产生的一个非重叠阅读时段。 */
+    suspend fun saveReadSession(postData: String?): ReturnData {
+        val request = GSON.fromJsonObject<WebReadSessionRequest>(postData)
+            .onFailure { it.printOnDebug() }
+            .getOrNull()
+            ?: return ReturnData().setErrorMsg("格式不对")
+        if (request.bookName.isBlank()) {
+            return ReturnData().setErrorMsg("书名不能为空")
+        }
+        val duration = request.endTime - request.startTime
+        if (duration !in MIN_WEB_READ_SESSION_MS..MAX_WEB_READ_SESSION_MS) {
+            return ReturnData().setErrorMsg("阅读时段无效")
+        }
+        readRecordRepository.saveReadSession(
+            ReadRecordSession(
+                deviceId = "web",
+                bookName = request.bookName,
+                bookAuthor = request.bookAuthor,
+                bookUrl = request.bookUrl,
+                startTime = request.startTime,
+                endTime = request.endTime,
+                words = request.chapterIndex.toLong(),
+            )
+        )
+        return ReturnData().setData("updated")
     }
 
     /**
@@ -324,5 +417,42 @@ object BookController {
             ?: return returnData.setErrorMsg("没有配置")
         return returnData.setData(data)
     }
+
+    private fun latestLocalProgress(book: Book, activeBook: Book?): BookProgress {
+        val databaseProgress = BookProgress(book)
+        if (activeBook == null) return databaseProgress
+        val activeProgress = BookProgress(
+            name = activeBook.name,
+            author = activeBook.author,
+            durChapterIndex = ReadBook.durChapterIndex,
+            durChapterPos = ReadBook.durChapterPos,
+            durChapterTime = activeBook.durChapterTime,
+            durChapterTitle = activeBook.durChapterTitle,
+        )
+        return if (activeProgress.comparePositionTo(
+                databaseProgress.durChapterIndex,
+                databaseProgress.durChapterPos,
+            ) > 0
+        ) {
+            activeProgress
+        } else {
+            databaseProgress
+        }
+    }
+
+    private data class WebReadSessionRequest(
+        val bookName: String,
+        val bookAuthor: String,
+        val bookUrl: String,
+        val startTime: Long,
+        val endTime: Long,
+        val chapterIndex: Int,
+    )
+
+    const val WEB_PROGRESS_CONFLICT = "web_progress_conflict"
+    private const val WEB_PROGRESS_UPDATED = "updated"
+    private const val WEB_PROGRESS_UNCHANGED = "unchanged"
+    private const val MIN_WEB_READ_SESSION_MS = 10_000L
+    private const val MAX_WEB_READ_SESSION_MS = 90_000L
 
 }

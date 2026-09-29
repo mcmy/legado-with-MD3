@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -284,6 +285,33 @@ fun ReadBookMenuBar(
                         onIntent = onIntent,
                         backdrop = backdrop,
                     )
+                }
+                if (state.menuVisible && currentRoute == ReadBookMenuRoute.Main) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(
+                                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        ReadMenuGlassIconButton(
+                            onClick = { onIntent(ReadBookIntent.SwitchQuickReadStyle) },
+                            icon = Icons.Default.AutoAwesome,
+                            colors = menuColors,
+                            backdrop = backdrop,
+                            menuConfig = state.menuConfig,
+                            glassEnabled = readMenuBottomBarButtonLiquidGlassEnabled(
+                                backdrop = backdrop,
+                                menuConfig = state.menuConfig,
+                            ),
+                            iconStyle = 1,
+                            selected = state.styleConfig.styleItems
+                                .getOrNull(state.styleConfig.styleSelect)?.quickStyleSelect == true,
+                            contentDescription = stringResource(R.string.quick_read_style),
+                        )
+                    }
                 }
                 ReadBookMenuSurface(
                     contentTarget = contentTarget,

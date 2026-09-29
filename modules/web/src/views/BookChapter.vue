@@ -192,13 +192,66 @@ let autoPageRaf = 0
 let autoPageLastFrame = 0
 let autoPageResumeTimer: number | undefined
 
+const READ_SESSION_FLUSH_INTERVAL_MS = 60_000
+const MIN_READ_SESSION_MS = 10_000
+const MAX_READ_SESSION_MS = 90_000
+let readSessionStartTime = 0
+let readSessionFlushTimer: number | undefined
+
+const buildReadSession = (startTime: number, endTime: number) => ({
+  bookName: store.readingBook.name,
+  bookAuthor: store.readingBook.author,
+  bookUrl: store.readingBook.bookUrl,
+  startTime,
+  endTime,
+  chapterIndex: chapterIndex.value,
+})
+
+const beginReadSession = () => {
+  if (
+    readSessionStartTime === 0 &&
+    document.visibilityState === 'visible' &&
+    store.showContent &&
+    store.readingBook.name
+  ) {
+    readSessionStartTime = Date.now()
+  }
+}
+
+/**
+ * 将当前可见阅读片段保存为一个不可重叠的 session。
+ * 单段最多记 90 秒，避免设备休眠后定时器恢复时把休眠时间算作阅读。
+ */
+const flushReadSession = () => {
+  const startTime = readSessionStartTime
+  if (startTime === 0) return
+  const now = Date.now()
+  const endTime = Math.min(now, startTime + MAX_READ_SESSION_MS)
+  if (endTime - startTime < MIN_READ_SESSION_MS) return
+  const session = buildReadSession(startTime, endTime)
+  if (store.saveReadSessionWithBeacon(session)) {
+    readSessionStartTime = now
+  }
+}
+
+const stopReadSession = () => {
+  if (readSessionFlushTimer !== undefined) {
+    window.clearInterval(readSessionFlushTimer)
+    readSessionFlushTimer = undefined
+  }
+  flushReadSession()
+  readSessionStartTime = 0
+}
+
 /**
  * 自动翻页速度（毫秒/页）。防御历史配置或手改 JSON：非法值回落到默认 10 秒/页，
  * 避免 0 造成 `innerHeight / 0` 一次性滚到章末。
  */
 const autoPageDurationMs = () => {
   const seconds = Number(store.config.autoPageSpeed)
-  return Math.min(120, Math.max(1, Number.isFinite(seconds) ? seconds : 10)) * 1000
+  return (
+    Math.min(120, Math.max(1, Number.isFinite(seconds) ? seconds : 10)) * 1000
+  )
 }
 
 /**
@@ -206,7 +259,8 @@ const autoPageDurationMs = () => {
  */
 const atChapterEnd = () =>
   document.documentElement.scrollHeight > window.innerHeight + 1 &&
-  window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 1
+  window.innerHeight + window.scrollY >=
+    document.documentElement.scrollHeight - 1
 
 const startAutoPage = () => {
   if (autoPageRaf || !store.config.autoPage) return
@@ -387,6 +441,8 @@ const chapterData = ref<{ index: number; content: string[]; title: string }[]>(
 const noPoint = ref(true)
 const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
   if (reloadChapter) {
+    flushReadSession()
+    readSessionStartTime = 0
     //展示进度条
     store.setShowContent(false)
     //强制滚回顶层
@@ -407,7 +463,10 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
           const urlEncodedBookUrl = encodeURIComponent(bookUrl)
           for (let i = 0; i < content.length; i++) {
             if (!/^\s*<img[^>]*src[^>]+>$/.test(content[i])) {
-              content[i] = content[i].replace(new RegExp('img src="', 'g'), `img src="/image?url=${urlEncodedBookUrl}&path=`);
+              content[i] = content[i].replace(
+                new RegExp('img src="', 'g'),
+                `img src="/image?url=${urlEncodedBookUrl}&path=`,
+              )
             }
           }
           chapterData.value.push({ index, content, title })
@@ -423,6 +482,7 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
         if (!res.data.isSuccess) {
           throw res.data
         }
+        beginReadSession()
       },
       err => {
         const content = ['获取章节内容失败！']
@@ -478,11 +538,14 @@ const saveReadingBookProgressToBrowser = (index: number, pos: number) => {
 const onVisibilityChange = () => {
   const _bookProgress = bookProgress.value
   if (document.visibilityState == 'hidden' && _bookProgress) {
-    store.saveBookProgress()
+    store.saveBookProgressOnPageHide()
   }
   if (document.visibilityState === 'hidden') {
+    flushReadSession()
+    readSessionStartTime = 0
     pauseAutoPage(0)
   } else {
+    beginReadSession()
     resumeAutoPage()
   }
 }
@@ -618,10 +681,15 @@ onMounted(async () => {
     store.loadWebCatalog(book).then(chapters => {
       store.setReadingBook(book)
       getContent(chapterIndex, true, chapterPos)
+      void store.saveBookProgress()
       window.addEventListener('keyup', handleKeyPress)
       window.addEventListener('keydown', ignoreKeyPress)
       // 兼容Safari < 14
       document.addEventListener('visibilitychange', onVisibilityChange)
+      readSessionFlushTimer = window.setInterval(
+        () => flushReadSession(),
+        READ_SESSION_FLUSH_INTERVAL_MS,
+      )
       //监听底部加载
       scrollObserver = new IntersectionObserver(onReachBottom, {
         rootMargin: '-100% 0% 20% 0%',
@@ -640,6 +708,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopReadSession()
   window.removeEventListener('keyup', handleKeyPress)
   window.removeEventListener('keydown', ignoreKeyPress)
   window.removeEventListener('resize', onResize)
@@ -687,6 +756,7 @@ const addToBookShelfConfirm = async () => {
 }
 onBeforeRouteLeave(async (to, from, next) => {
   console.log('onBeforeRouteLeave')
+  stopReadSession()
   // 弹窗时停止响应按键翻页
   window.removeEventListener('keyup', handleKeyPress)
   await addToBookShelfConfirm()
@@ -780,7 +850,8 @@ onBeforeRouteLeave(async (to, from, next) => {
   }
 
   .chapter {
-    font-family: 'Microsoft YaHei', PingFangSC-Regular, HelveticaNeue-Light,
+    font-family:
+      'Microsoft YaHei', PingFangSC-Regular, HelveticaNeue-Light,
       'Helvetica Neue Light', sans-serif;
     text-align: left;
     padding: 0 65px;
@@ -791,7 +862,8 @@ onBeforeRouteLeave(async (to, from, next) => {
     .content {
       font-size: 18px;
       line-height: 1.8;
-      font-family: 'Microsoft YaHei', PingFangSC-Regular, HelveticaNeue-Light,
+      font-family:
+        'Microsoft YaHei', PingFangSC-Regular, HelveticaNeue-Light,
         'Helvetica Neue Light', sans-serif;
 
       .bottom-bar,

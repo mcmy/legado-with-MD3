@@ -185,6 +185,15 @@ fun BgTextConfigSheet(
                 },
             )
 
+            TinySwitchSettingItem(
+                title = stringResource(R.string.quick_read_style),
+                checked = styleConfig.styleItems
+                    .getOrNull(styleConfig.styleSelect)?.quickStyleSelect == true,
+                onCheckedChange = {
+                    onIntent(ReadBookIntent.SetQuickStyleSelected(styleConfig.styleSelect, it))
+                },
+            )
+
             // TODO: Add background image grid from assets
         }
     }

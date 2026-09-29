@@ -17,6 +17,7 @@ data class ReadStyleState(
 
 data class ReadStyleItem(
     val name: String,
+    val quickStyleSelect: Boolean,
     val bgType: Int,
     val bgValue: String,
     val bgTypeNight: Int,

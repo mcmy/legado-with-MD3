@@ -223,6 +223,28 @@ class ReadRecordRepositoryTest {
         }
 
     @Test
+    fun `repeating the same web session does not count reading time twice`() = runBlocking {
+        val webSession = session(
+            bookUrl = "https://web.example/book",
+            start = 1_000,
+            end = 61_000,
+        ).copy(deviceId = "web")
+
+        repository.saveReadSession(webSession)
+        repository.saveReadSession(webSession)
+
+        assertEquals(60_000L, repository.getBookReadTime(targetName, author).first())
+        assertEquals(
+            1,
+            database.readRecordDao.getSessionsByBook(
+                "web",
+                targetName,
+                author,
+            ).size,
+        )
+    }
+
+    @Test
     fun `copy without owned session falls back to unowned legacy sessions`() = runBlocking {
         val copyA = "https://a.example/book"
         database.readRecordDao.insertSession(session(bookUrl = "", start = 1_000, end = 1_200))

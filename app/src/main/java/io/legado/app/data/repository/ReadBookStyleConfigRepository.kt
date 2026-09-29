@@ -81,6 +81,12 @@ class ReadBookStyleConfigRepository(
         publishState()
     }
 
+    override fun setQuickStyleSelected(index: Int, enabled: Boolean) {
+        if (index !in configStore.configsSnapshot().indices) return
+        configStore.updateStyleAt(index) { it.copy(quickStyleSelect = enabled) }
+        save()
+    }
+
     override fun clearMissingTextFont() {
         updateCurrentStyle(ReadStyleMutation.StringValue(ReadStyleStringKey.TextFont, ""))
         save()
@@ -331,6 +337,7 @@ class ReadBookStyleConfigRepository(
         items = configStore.configsSnapshot().map { config ->
             ReadStyleItem(
                 name = config.name,
+                quickStyleSelect = config.quickStyleSelect,
                 bgType = config.bgType,
                 bgValue = config.bgStr,
                 bgTypeNight = config.bgTypeNight,

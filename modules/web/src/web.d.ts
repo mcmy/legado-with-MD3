@@ -8,6 +8,13 @@ export type webReadConfig = {
   jumpDuration: number
   autoPage: boolean
   autoPageSpeed: number
+  customTheme: {
+    enabled: boolean
+    textColor: string
+    bodyBgColor: string
+    contentBgColor: string
+    popupBgColor: string
+  }
   spacing: {
     paragraph: number
     line: number
