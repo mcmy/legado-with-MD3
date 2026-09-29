@@ -968,6 +968,7 @@ onBeforeRouteLeave(async (to, from, next) => {
       width: 100vw !important;
       padding: 0 20px;
       box-sizing: border-box;
+      border: none;
     }
   }
 }
