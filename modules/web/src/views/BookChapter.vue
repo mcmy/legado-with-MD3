@@ -81,10 +81,11 @@
     <div class="chapter" ref="content" :style="chapterTheme">
       <div class="content">
         <div class="top-bar" ref="top"></div>
+        <div ref="leadingSpacer" :style="{ height: `${spacerHeights.before}px` }" aria-hidden="true"></div>
         <div
           v-for="data in chapterData"
           :key="data.index"
-          :chapterIndex="data.index"
+          :data-reader-chapter="data.index"
           ref="chapter"
         >
           <chapter-content
@@ -99,6 +100,7 @@
             v-if="showContent"
           />
         </div>
+        <div ref="trailingSpacer" :style="{ height: `${spacerHeights.after}px` }" aria-hidden="true"></div>
         <div class="loading" ref="loading"></div>
         <div class="bottom-bar" ref="bottom"></div>
       </div>
@@ -114,8 +116,13 @@ import { useLoading } from '@/hooks/loading'
 import { useThrottleFn } from '@vueuse/shared'
 import { isNullOrBlank } from '@/utils/utils'
 import { initXboxGamepad } from '@/utils/xboxGamepad'
+import { createChapterPrefetcher } from '@/utils/chapterPrefetch'
+import {
+  chapterWindowIndices, chapterSpacerHeights, captureChapterAnchor,
+  restoreChapterAnchor, scrollChapterBy, type ScrollAnchor,
+} from '@/utils/chapterWindow'
 
-const content = ref()
+const content = ref<HTMLElement>()
 // loading spinner
 const { isLoading, loadingWrapper } = useLoading(content, '正在获取信息')
 const store = useBookStore()
@@ -171,11 +178,7 @@ watchEffect(() => {
   }
 })
 const loadMore = () => {
-  const index = chapterData.value.slice(-1)[0].index
-  if (catalog.value.length - 1 > index) {
-    getContent(index + 1, false)
-    store.saveBookProgress() // 保存的是上一章的进度，不是预载的本章进度
-  }
+  if (windowReady) refreshChapterWindow(chapterIndex.value)
 }
 // IntersectionObserver回调 底部加载
 const onReachBottom = (entries: IntersectionObserverEntry[]) => {
@@ -435,44 +438,170 @@ const toShelf = () => {
 }
 
 // 获取章节内容
-const chapterData = ref<{ index: number; content: ReaderWebParagraph[]; title: string }[]>(
-  [],
-)
+type DisplayChapter = { index: number; content: ReaderWebParagraph[]; title: string }
+const chapterData = ref<DisplayChapter[]>([])
+const spacerHeights = ref({ before: 0, after: 0 })
+const leadingSpacer = ref<HTMLElement>()
+const trailingSpacer = ref<HTMLElement>()
+const chapterHeights = new Map<number, number>()
+let windowCenter = -1
+let windowReady = false
+let lastAnchor: ScrollAnchor | undefined
+let chapterResizeObserver: ResizeObserver | undefined
+let scrollFrame = 0
+let layoutQueue = Promise.resolve()
+const pendingWindowChapters = new Map<number, Promise<unknown>>()
+
+const measureChapters = () => {
+  for (const element of content.value?.querySelectorAll<HTMLElement>('[data-reader-chapter]') ?? []) {
+    chapterHeights.set(Number(element.dataset.readerChapter), element.getBoundingClientRect().height)
+  }
+}
+
+// Vue's DOM patch and the offset correction complete in the same frame, before paint.
+const updateChapterLayout = (transform: (items: DisplayChapter[]) => DisplayChapter[]) => {
+  const generation = contentGeneration
+  const update = layoutQueue.then(async () => {
+    if (readerDisposed || generation !== contentGeneration) return
+    const anchor = captureChapterAnchor(content.value)
+    measureChapters()
+    const allowed = infiniteLoading.value
+      ? chapterWindowIndices(windowCenter, catalog.value.length) : [windowCenter]
+    chapterData.value = transform(chapterData.value)
+      .filter(item => allowed.includes(item.index)).sort((a, b) => a.index - b.index)
+    const first = chapterData.value[0]?.index ?? windowCenter
+    const last = chapterData.value.slice(-1)[0]?.index ?? windowCenter
+    spacerHeights.value = infiniteLoading.value
+      ? chapterSpacerHeights(chapterHeights, first, last) : { before: 0, after: 0 }
+    await nextTick()
+    if (readerDisposed || generation !== contentGeneration) return
+    restoreChapterAnchor(anchor)
+    measureChapters()
+    chapterResizeObserver?.disconnect()
+    for (const element of content.value?.querySelectorAll<HTMLElement>('[data-reader-chapter]') ?? []) {
+      chapterResizeObserver?.observe(element)
+    }
+    lastAnchor = captureChapterAnchor(content.value)
+  })
+  layoutQueue = update.catch(() => {})
+  return update
+}
+
+const displayChapter = (index: number, data: { title: string; paragraphs: ReaderWebParagraph[] }): DisplayChapter => {
+  const paragraphs = data.paragraphs.map(paragraph => ({ ...paragraph }))
+  for (const paragraph of paragraphs) {
+    if (/<img\b/.test(paragraph.html) && !/^\s*<img[^>]*src[^>]+>$/.test(paragraph.html)) {
+      const document = new DOMParser().parseFromString(paragraph.html, 'text/html')
+      for (const image of document.querySelectorAll('img[src]')) {
+        image.setAttribute('src', API.getProxyImageUrl(
+          store.readingBook.bookUrl, image.getAttribute('src')!, store.config.readWidth,
+        ))
+      }
+      paragraph.html = document.body.innerHTML
+    }
+  }
+  return { index, title: data.title, content: paragraphs }
+}
+
+const refreshChapterWindow = (center: number) => {
+  if (!infiniteLoading.value || !windowReady || readerDisposed || !catalog.value[center]) return
+  windowCenter = center
+  void updateChapterLayout(items => items)
+  const generation = contentGeneration
+  for (const [index, request] of chapterPrefetcher.loadWindow(
+    store.readingBook.bookUrl, center, catalog.value.length,
+  )) {
+    if (chapterData.value.some(item => item.index === index) || pendingWindowChapters.has(index)) continue
+    const pending = request.then(response => {
+      if (readerDisposed || generation !== contentGeneration || !response.data.isSuccess) return
+      if (Math.abs(index - windowCenter) > 2) return
+      return updateChapterLayout(items => items.some(item => item.index === index)
+        ? items : [...items, displayChapter(index, response.data.data)])
+    }).catch(() => {}).finally(() => {
+      if (pendingWindowChapters.get(index) === pending) pendingWindowChapters.delete(index)
+    })
+    pendingWindowChapters.set(index, pending)
+  }
+}
+
+const visibleChapterIndex = () => {
+  for (const element of content.value?.querySelectorAll<HTMLElement>('[data-reader-chapter]') ?? []) {
+    const rect = element.getBoundingClientRect()
+    if (rect.top <= 24 && rect.bottom > 24) return Number(element.dataset.readerChapter)
+  }
+  // A scrollbar jump can land inside a recycled area. Restore the corresponding window.
+  for (const [spacer, before] of [[leadingSpacer.value, true], [trailingSpacer.value, false]] as const) {
+    if (!spacer) continue
+    const rect = spacer.getBoundingClientRect()
+    if (rect.top > 24 || rect.bottom <= 24) continue
+    let offset = 24 - rect.top
+    const first = chapterData.value[0]?.index ?? windowCenter
+    const last = chapterData.value.slice(-1)[0]?.index ?? windowCenter
+    for (const [index, height] of [...chapterHeights].sort(([a], [b]) => a - b)) {
+      if (before ? index >= first : index <= last) continue
+      if (offset < height) return index
+      offset -= height
+    }
+  }
+}
+
+const onReaderScroll = () => {
+  lastAnchor = captureChapterAnchor(content.value)
+  if (scrollFrame || !windowReady) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0
+    const visible = visibleChapterIndex()
+    if (visible !== undefined && visible !== windowCenter) refreshChapterWindow(visible)
+  })
+}
+
+watch(infiniteLoading, enabled => {
+  if (!windowReady) return
+  if (enabled) refreshChapterWindow(chapterIndex.value)
+  else {
+    windowCenter = chapterIndex.value
+    void updateChapterLayout(items => items)
+  }
+})
 const noPoint = ref(true)
+const chapterPrefetcher = createChapterPrefetcher(
+  (bookUrl, index) => API.getBookContent(bookUrl, catalog.value[index].index),
+  response => response.data.isSuccess,
+)
+let contentGeneration = 0
+let readerDisposed = false
 const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
+  if (readerDisposed || !catalog.value[index]) return
   if (reloadChapter) {
+    contentGeneration++
+    windowReady = false
+    windowCenter = index
+    lastAnchor = undefined
+    pendingWindowChapters.clear()
+    chapterResizeObserver?.disconnect()
+    chapterHeights.clear()
+    spacerHeights.value = { before: 0, after: 0 }
     flushReadSession()
     readSessionStartTime = 0
     //展示进度条
     store.setShowContent(false)
     //强制滚回顶层
-    jump(top.value, { duration: 0 })
+    scrollChapterBy(top.value.getBoundingClientRect().top)
     //从目录，按钮切换章节时保存进度 预加载时不保存
     saveReadingBookProgressToBrowser(index, chapterPos)
     chapterData.value = []
   }
   const bookUrl = store.readingBook.bookUrl
-  const { title, index: chapterIndex } = catalog.value[index]
+  const { title } = catalog.value[index]
+  const generation = contentGeneration
+  const isCurrent = () => !readerDisposed && generation === contentGeneration
 
-  loadingWrapper(
-    API.getBookContent(bookUrl, chapterIndex).then(
-      res => {
+  return loadingWrapper(
+    chapterPrefetcher.load(bookUrl, index, catalog.value.length).then(
+      async res => {
+        if (!isCurrent()) return
         if (res.data.isSuccess) {
-          const data = res.data.data
-          const content = data.paragraphs.map(paragraph => ({ ...paragraph }))
-          for (const paragraph of content) {
-            if (/<img\b/.test(paragraph.html) && !/^\s*<img[^>]*src[^>]+>$/.test(paragraph.html)) {
-              const document = new DOMParser().parseFromString(paragraph.html, 'text/html')
-              for (const image of document.querySelectorAll('img[src]')) {
-                image.setAttribute('src', API.getProxyImageUrl(
-                  bookUrl, image.getAttribute('src')!, store.config.readWidth,
-                ))
-              }
-              paragraph.html = document.body.innerHTML
-            }
-          }
-          chapterData.value.push({ index, content, title: data.title })
-          if (reloadChapter) toChapterPos(chapterPos)
+          chapterData.value = [displayChapter(index, res.data.data)]
         } else {
           ElMessage({ message: res.data.errorMsg, type: 'error' })
           const content = [{ html: res.data.errorMsg, start: 0, endExclusive: 0 }]
@@ -484,26 +613,34 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
         if (!res.data.isSuccess) {
           throw res.data
         }
+        if (reloadChapter) await toChapterPos(chapterPos)
+        if (!isCurrent()) return
+        windowReady = true
+        refreshChapterWindow(index)
         beginReadSession()
       },
       err => {
+        if (!isCurrent()) return
         const content = [{ html: '获取章节内容失败！', start: 0, endExclusive: 0 }]
         chapterData.value.push({ index, content, title })
         store.setShowContent(true)
         throw err
       },
     ),
-  )
+  ).catch(() => {
+    // Foreground errors are already displayed above; background requests render nothing.
+  })
 }
 
 // 章节进度跳转和计算
 const chapter = ref()
 const chapterRef = ref()
-const toChapterPos = (pos: number) => {
-  nextTick(() => {
-    if (chapterRef.value.length === 1)
-      chapterRef.value[0].scrollToReadedLength(pos)
-  })
+const toChapterPos = async (pos: number) => {
+  await nextTick()
+  const current = chapterRef.value?.find((item: { $props: { chapterIndex: number } }) =>
+    item.$props.chapterIndex === chapterIndex.value)
+  await current?.scrollToReadedLength(pos)
+  lastAnchor = captureChapterAnchor(content.value)
 }
 
 // 60秒保存一次进度
@@ -513,6 +650,10 @@ const saveBookProgressThrottle = useThrottleFn(
 )
 
 const onReadedLengthChange = (index: number, pos: number) => {
+  if (!windowReady) return
+  const visible = visibleChapterIndex()
+  if (visible !== undefined && visible !== index) return
+  if (index !== windowCenter) refreshChapterWindow(index)
   saveReadingBookProgressToBrowser(index, pos)
   saveBookProgressThrottle()
 }
@@ -651,6 +792,13 @@ const ignoreKeyPress = (event: KeyboardEvent) => {
 }
 
 onMounted(async () => {
+  chapterResizeObserver = new ResizeObserver(() => {
+    if (!windowReady || readerDisposed) return
+    restoreChapterAnchor(lastAnchor)
+    measureChapters()
+    lastAnchor = captureChapterAnchor(content.value)
+  })
+  window.addEventListener('scroll', onReaderScroll, { passive: true })
   await store.loadWebConfig()
   if (store.config.autoPage) startAutoPage()
   window.addEventListener('wheel', onUserWheel, { passive: true })
@@ -710,6 +858,13 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  readerDisposed = true
+  windowReady = false
+  chapterResizeObserver?.disconnect()
+  window.removeEventListener('scroll', onReaderScroll)
+  if (scrollFrame) cancelAnimationFrame(scrollFrame)
+  chapterHeights.clear()
+  chapterPrefetcher.clear()
   stopReadSession()
   window.removeEventListener('keyup', handleKeyPress)
   window.removeEventListener('keydown', ignoreKeyPress)
@@ -777,6 +932,7 @@ onBeforeRouteLeave(async (to, from, next) => {
 }
 
 .chapter-wrapper {
+  overflow-anchor: none;
   padding: 0 4%;
 
   overflow-x: hidden;

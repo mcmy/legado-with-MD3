@@ -21,7 +21,7 @@
 import { isLegadoUrl } from '@/utils/utils'
 import API, { type ReaderWebParagraph } from '@api'
 import { paragraphAtPosition } from '@/utils/chapterProgress'
-import jump from '@/plugins/jump'
+import { scrollChapterBy } from '@/utils/chapterWindow'
 import type { webReadConfig } from '@/web'
 
 const store = useBookStore()
@@ -62,10 +62,8 @@ const scrollToReadedLength = (length: number) => {
   if (length === 0) return
   const paragraphIndex = paragraphAtPosition(props.contents, length)
   if (paragraphIndex === -1) return
-  nextTick(() => {
-    jump(paragraphRef.value![paragraphIndex], {
-      duration: 0,
-    })
+  return nextTick(() => {
+    scrollChapterBy(paragraphRef.value![paragraphIndex].getBoundingClientRect().top)
   })
 }
 defineExpose({
