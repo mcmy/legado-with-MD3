@@ -9,6 +9,7 @@ import io.legado.app.domain.model.AiAvailableModel
 import io.legado.app.domain.model.AiGenerationParams
 import io.legado.app.domain.model.AiModelDraft
 import io.legado.app.domain.model.AiModelConfig
+import io.legado.app.domain.model.AiImageModels
 import io.legado.app.domain.model.AiModelRegistry
 import io.legado.app.domain.model.AiProfileDraft
 import io.legado.app.domain.model.AiPromptTemplate
@@ -46,8 +47,31 @@ class AiProfileRepository(
         aiProfileDao.getModel(id)
     }
 
+    override suspend fun getModelConfig(id: String): AiModelConfig? = withContext(Dispatchers.IO) {
+        val model = aiProfileDao.getModel(id)?.takeIf { it.enabled } ?: return@withContext null
+        val provider = aiProfileDao.getProvider(model.providerId)?.takeIf { it.enabled } ?: return@withContext null
+        model.toConfig(provider)
+    }
+
     override suspend fun getTaskPreset(taskType: String): AiTaskPresetConfig? = withContext(Dispatchers.IO) {
-        aiProfileDao.getDefaultPreset(taskType)?.toConfig()
+        aiProfileDao.getDefaultPreset(taskType)?.followCurrentDefaultModel()?.toConfig()
+    }
+
+    /**
+     * 「我选的 AI」是一个全局选择：只有翻译 / 摘要 / 对话这三行有界面会写模型，
+     * 其余任务类型（分配角色、场景分配、人物识别、语音精炼、选中清洗、书架自动分组、文本工厂…）
+     * 的行是第一次落库时快照的模型，之后没人再改 —— 用户换了默认 AI 却还在调旧的。
+     * 读的时候顺手跟当前默认对齐并写回去，老数据不用重新设一次默认才生效。
+     */
+    private suspend fun AiTaskPreset.followCurrentDefaultModel(): AiTaskPreset {
+        if (id == DEFAULT_TRANSLATE_PRESET_ID || id == DEFAULT_SUMMARY_PRESET_ID || id == DEFAULT_CHAT_PRESET_ID) {
+            return this
+        }
+        val current = aiProfileDao.getPreset(DEFAULT_TRANSLATE_PRESET_ID)?.modelProfileId.orEmpty()
+        if (current.isEmpty() || modelProfileId == current) return this
+        val updated = copy(modelProfileId = current, updatedAt = System.currentTimeMillis())
+        aiProfileDao.insertPreset(updated)
+        return updated
     }
 
     override suspend fun getProviderApiKey(providerId: String): String = withContext(Dispatchers.IO) {
@@ -78,7 +102,7 @@ class AiProfileRepository(
             responsesPath = existingProvider?.responsesPath,
             messagesPath = existingProvider?.messagesPath,
             modelsPath = existingProvider?.modelsPath,
-            customHeadersJson = existingProvider?.customHeadersJson,
+            customHeadersJson = draft.customHeaders.toHeadersJson(),
             enabled = existingProvider?.enabled ?: true,
             createdAt = existingProvider?.createdAt ?: now,
             updatedAt = now
@@ -110,7 +134,11 @@ class AiProfileRepository(
             modelId = draft.modelId,
             contextWindow = draft.contextWindow,
             maxOutputTokens = draft.maxOutputTokens,
-            capabilities = mergeCapabilities(existingModel?.capabilities, draft.modelId),
+            capabilities = draft.capabilities?.plus(AiImageModels.EXPLICIT_CAPABILITIES)?.joinToString(",")
+                ?: existingModel?.takeIf { it.modelId == draft.modelId }?.capabilities
+                ?: if (existingProvider.protocol in AiProtocol.imageProtocols && AiImageModels.inferCapabilities(draft.modelId) == null)
+                    (AiImageModels.outputCapabilities + io.legado.app.domain.model.AiCapability.VISION).joinToString(",")
+                else mergeCapabilities(existingModel?.capabilities, draft.modelId),
             defaultParamsJson = GSON.toJson(params),
             enabled = existingModel?.enabled ?: true,
             sortNumber = existingModel?.sortNumber ?: 0,
@@ -125,9 +153,9 @@ class AiProfileRepository(
         providerId: String,
         models: List<AiAvailableModel>
     ): List<AiModelProfile> = withContext(Dispatchers.IO) {
-        require(aiProfileDao.getProvider(providerId) != null) { "Provider is required" }
+        val provider = aiProfileDao.getProvider(providerId) ?: error("Provider is required")
         val now = System.currentTimeMillis()
-        models.distinctBy { it.id }.map { availableModel ->
+        models.distinctBy { it.id }.filter { provider.protocol !in AiProtocol.imageProtocols || AiImageModels.inferCapabilities(it.id) != null }.map { availableModel ->
             val modelProfileId = stableModelId(providerId, availableModel.id)
             val existingModel = aiProfileDao.getModel(modelProfileId)
             AiModelProfile(
@@ -137,7 +165,7 @@ class AiProfileRepository(
                 modelId = availableModel.id,
                 contextWindow = availableModel.contextWindow.takeIf { it > 0 } ?: existingModel?.contextWindow ?: 0,
                 maxOutputTokens = availableModel.maxOutputTokens.takeIf { it > 0 } ?: existingModel?.maxOutputTokens ?: 0,
-                capabilities = mergeCapabilities(existingModel?.capabilities, availableModel.id),
+                capabilities = existingModel?.capabilities ?: mergeCapabilities(null, availableModel.id),
                 defaultParamsJson = existingModel?.defaultParamsJson ?: GSON.toJson(
                     AiGenerationParams(reasoningLevel = AiReasoningLevel.MEDIUM)
                 ),
@@ -151,6 +179,8 @@ class AiProfileRepository(
 
     override suspend fun setDefaultModel(modelProfileId: String): AiTaskPresetConfig = withContext(Dispatchers.IO) {
         val model = aiProfileDao.getModel(modelProfileId) ?: error("Model is required")
+        val provider = aiProfileDao.getProvider(model.providerId) ?: error("Provider is required")
+        require(AiImageModels.isTextModel(provider.protocol, model.modelId, model.capabilities)) { "Choose a text model for text tasks" }
         val params = parseParams(model.defaultParamsJson)
         saveDefaultPresets(modelProfileId, params)
         aiProfileDao.getPreset(DEFAULT_TRANSLATE_PRESET_ID)?.toConfig()
@@ -181,8 +211,11 @@ class AiProfileRepository(
                 else -> newId("preset")
             }
             val modelsList = aiProfileDao.observeModels().firstOrNull()
+            val providers = aiProfileDao.observeProviders().firstOrNull().orEmpty().associateBy { it.id }
+            val textModels = modelsList.orEmpty().filter { model -> providers[model.providerId]?.let { AiImageModels.isTextModel(it.protocol, model.modelId, model.capabilities) } == true }
             val modelProfileId = existingPreset?.modelProfileId
-                ?: modelsList?.firstOrNull()?.id
+                ?.takeIf { id -> textModels.any { it.id == id } }
+                ?: textModels.firstOrNull()?.id
                 ?: ""
             val currentParams = parseParams(existingPreset?.paramsJson)
             val updatedParams = currentParams.copy(
@@ -230,6 +263,7 @@ class AiProfileRepository(
         val existingProvider = aiProfileDao.getProvider(providerId)
         val modelProfileId = draft.modelProfileId?.takeIf { it.isNotBlank() } ?: newId("model")
         val existingModel = aiProfileDao.getModel(modelProfileId)
+        require(AiImageModels.isTextModel(draft.protocol, draft.modelId, existingModel?.capabilities.orEmpty())) { "Choose a text model for text tasks" }
         val apiKey = draft.apiKey.ifBlank { existingProvider?.apiKey.orEmpty() }
         require(apiKey.isNotBlank()) { "API key is required" }
         val now = System.currentTimeMillis()
@@ -337,11 +371,24 @@ class AiProfileRepository(
                 updatedAt = now
             )
         )
+        // 「我选的 AI」是一个全局选择：其余任务类型的预设行没有任何各自的模型选择界面，
+        // 只写这三行的话，分配角色 / 场景分配 / 人物识别 / 语音精炼 / 选中清洗 /
+        // 书架自动分组 / 文本工厂 会永远停在第一次落库时快照的那个旧模型上。
+        val canonicalIds = setOf(
+            DEFAULT_TRANSLATE_PRESET_ID,
+            DEFAULT_SUMMARY_PRESET_ID,
+            DEFAULT_CHAT_PRESET_ID,
+        )
+        aiProfileDao.observePresets().firstOrNull().orEmpty().forEach { preset ->
+            if (preset.id in canonicalIds || preset.modelProfileId == modelProfileId) return@forEach
+            aiProfileDao.insertPreset(preset.copy(modelProfileId = modelProfileId, updatedAt = now))
+        }
     }
 
     private suspend fun AiTaskPreset.toConfig(): AiTaskPresetConfig? {
         val model = aiProfileDao.getModel(modelProfileId) ?: return null
         val provider = aiProfileDao.getProvider(model.providerId) ?: return null
+        if (!AiImageModels.isTextModel(provider.protocol, model.modelId, model.capabilities)) return null
         val presetParams = parseParams(paramsJson)
         val modelParams = parseParams(model.defaultParamsJson)
         val mergedParams = presetParams.mergeWithFallback(
@@ -381,10 +428,7 @@ class AiProfileRepository(
             modelId = modelId,
             contextWindow = contextWindow,
             maxOutputTokens = maxOutputTokens,
-            capabilities = capabilities.split(',')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .toSet(),
+            capabilities = AiImageModels.capabilities(modelId, capabilities),
             defaultParams = parseParams(defaultParamsJson)
         )
     }
@@ -412,6 +456,10 @@ class AiProfileRepository(
                 .mapValues { it.value.toString() }
         }.getOrDefault(emptyMap())
     }
+
+    /** Serializes custom headers to the `customHeadersJson` column; `null` when there are none. */
+    private fun Map<String, String>.toHeadersJson(): String? =
+        takeIf { it.isNotEmpty() }?.let { GSON.toJson(it) }
 
     private fun mergeCapabilities(existing: String?, modelId: String): String {
         return (existing.orEmpty().split(',') + AiModelRegistry.inferCapabilities(modelId))

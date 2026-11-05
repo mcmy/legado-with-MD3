@@ -10,12 +10,52 @@ import io.legado.app.feature.reader.core.source.ReaderTitleSegmentation
 import io.legado.app.feature.reader.core.style.ReaderCharacterStyle
 import io.legado.app.feature.reader.core.style.ReaderStyleRange
 import io.legado.app.feature.reader.core.style.ReaderStyleTarget
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.coroutines.cancellation.CancellationException
 
 class ReaderChapterBlockMeasurerTest {
+    @Test
+    fun localPresentationKeepsCanonicalBodyAndBgmOrdinalsWhileDrawingRulesAndNumbers() = runBlocking {
+        val fixture = io.legado.app.support.ReaderSemanticFixtures
+        val canonical = io.legado.app.model.localBook.LocalBookSemanticHtml.plainText(
+            org.jsoup.Jsoup.parse(fixture.html).body().outerHtml())
+        val values = io.legado.app.help.book.MixedContentSegments.paragraphs(canonical, "", false)
+        val presentation = checkNotNull(io.legado.app.feature.reader.platform.ReaderLocalPresentationResolver
+            .resolve(fixture.html))
+        val source = ReaderChapterSourceParser.parse(0, "", values, false, true,
+            localPresentation = presentation, bgmScenes = mapOf(1 to ("rain" to "wind")))
+        val result = ReaderChapterBlockMeasurer(shaper, shaper, { null })
+            .measure(source, style.copy(bodyIndentCharacters = 0)) as ReaderChapterMeasureResult.Success
+        val page = ReaderPaginator.paginateBlocks(result.blocks, ReaderPaginationConfig(
+            0, "", 500, 1000, 0f, 0f, 0f, 0f, 10f, 8f)).single()
+        assertEquals(fixture.body, source.semanticContent)
+        assertEquals((0..8).toList(), source.paragraphs.map { it.ordinal })
+        assertEquals(listOf("3.", "8."), page.elements
+            .filterIsInstance<io.legado.app.feature.reader.core.model.ReaderElement.ParagraphMarker>().mapNotNull { it.label })
+        assertEquals(1, result.blocks.filterIsInstance<ReaderMeasuredBlock.Rule>().size)
+        assertTrue(result.blocks.filterIsInstance<ReaderMeasuredBlock.BlankLine>().any { !it.semantic })
+        val linked = page.elements.filterIsInstance<io.legado.app.feature.reader.core.model.ReaderElement.Text>()
+            .first { it.link == "#chapter" }
+        assertEquals(linked, page.elementAt((linked.bounds.left + linked.bounds.right) / 2f,
+            (linked.bounds.top + linked.bounds.bottom) / 2f))
+        val capsules = result.blocks.filterIsInstance<ReaderMeasuredBlock.InlineParagraph>()
+            .flatMap { it.items }.filterIsInstance<ReaderMeasuredInlineItem.BgmScene>()
+        assertEquals(listOf(1), capsules.map { it.paragraphIndex })
+        assertTrue(io.legado.app.feature.reader.core.semantic.ReaderSemanticContract.validate(source).isEmpty())
+        val smallPages = ReaderPaginator.paginateBlocks(result.blocks, ReaderPaginationConfig(
+            0, "", 500, 10, 0f, 0f, 0f, 0f, 10f, 8f))
+        val positions = smallPages.map(io.legado.app.feature.reader.core.navigation.ReaderPageNavigator::pageStart)
+        assertEquals(positions.sorted(), positions)
+        assertTrue(positions.all { it in 0..source.characterCount })
+        assertTrue(smallPages.flatMap { it.elements }.filterIsInstance<io.legado.app.feature.reader.core.model.ReaderElement.Spacer>()
+            .any { it.semanticLength == 0 })
+    }
+
     @Test
     fun profilingKeepsMeasuredBlocksIdenticalWhenMostCharactersHaveNoStyle() = runBlocking {
         val source = ReaderChapterSourceParser.parse(0, "", listOf("甲乙丙丁"), false, false)
@@ -36,6 +76,45 @@ class ReaderChapterBlockMeasurerTest {
         assertEquals(regular.blocks, profiled.blocks)
         assertTrue(metrics.shapingCalls > 0)
         assertTrue(metrics.styleLookups > 0)
+    }
+
+    /**
+     * 旧 `TextChapterLayout` 每段排版前 `currentCoroutineContext().ensureActive()`。取消分页任务后
+     * 必须在段落边界立刻停下：否则任务会把整章算完并一直持有整章对象图（议题 #2396 的 OOM）。
+     */
+    @Test
+    fun cancellingDuringMeasurementStopsAtTheNextParagraphBoundary() = runBlocking {
+        val source = ReaderChapterSource(
+            1, "",
+            listOf(
+                ReaderChapterSourceBlock.Text("甲", 0),
+                ReaderChapterSourceBlock.Text("乙", 2),
+                ReaderChapterSourceBlock.Text("丙", 4),
+            ),
+            6,
+        )
+        val cancelled = Job()
+        val shapedTexts = mutableListOf<String>()
+        val cancellingShaper = ReaderTextShaper { text ->
+            shapedTexts += text
+            // 第一段一量完就取消：后续段落不得再被排版。
+            cancelled.cancel()
+            GlyphClusters(text.map(Char::toString), FloatArray(text.length) { 10f })
+        }
+
+        val failure = runCatching {
+            withContext(cancelled) {
+                ReaderChapterBlockMeasurer(
+                    bodyShaper = cancellingShaper,
+                    titleShaper = cancellingShaper,
+                    imageDimensionsResolver = { null },
+                ).measure(source, style)
+            }
+        }.exceptionOrNull()
+
+        assertTrue("测量应在取消后抛 CancellationException", failure is CancellationException)
+        assertTrue("第一段应已完成排版", shapedTexts.contains("甲"))
+        assertTrue("取消后不应再排版后续段落", "丙" !in shapedTexts)
     }
 
     @Test
@@ -68,7 +147,7 @@ class ReaderChapterBlockMeasurerTest {
             titleShaper = shaper,
             imageDimensionsResolver = { null },
             textShaperFactory = ReaderTextShaperFactory { textStyle ->
-                ReaderTextShaper { text -> GlyphClusters(text.map(Char::toString), List(text.length) { textStyle.fontSizePx }) }
+                ReaderTextShaper { text -> GlyphClusters(text.map(Char::toString), FloatArray(text.length) { textStyle.fontSizePx }) }
             },
         ).measure(source, style.copy(
             titleLineHeightPx = 24f,
@@ -95,7 +174,7 @@ class ReaderChapterBlockMeasurerTest {
         assertEquals(listOf(0, 1), paragraphs.last().items.map { it.chapterPosition })
     }
 
-    private val shaper = ReaderTextShaper { text -> GlyphClusters(text.map(Char::toString), List(text.length) { 10f }) }
+    private val shaper = ReaderTextShaper { text -> GlyphClusters(text.map(Char::toString), FloatArray(text.length) { 10f }) }
     private val style = ReaderChapterMeasureStyle(
         bodyStyle = ReaderTextStyle(1, 10f),
         titleStyle = ReaderTextStyle(2, 20f),
@@ -103,6 +182,45 @@ class ReaderChapterBlockMeasurerTest {
         bodyAlignment = ReaderTextAlignment.JUSTIFY,
         titleAlignment = ReaderTextAlignment.CENTER,
     )
+
+    /** 旧 `setTypeHtml` 路径的最小脚手架：一个 HTML 块 + 假 htmlSourceResolver。 */
+    private suspend fun measureHtml(
+        items: List<ReaderChapterInlineSource>,
+        style: ReaderChapterMeasureStyle,
+        options: ReaderImageOptions?,
+        dimensions: ReaderImageDimensions,
+    ): ReaderChapterMeasureResult.Success = ReaderChapterBlockMeasurer(
+        bodyShaper = shaper,
+        titleShaper = shaper,
+        imageDimensionsResolver = { dimensions },
+        imageOptionsResolver = { _, _ -> options },
+        htmlSourceResolver = ReaderHtmlSourceResolver { _, _ -> listOf(ReaderHtmlParagraph(items)) },
+    ).measure(
+        ReaderChapterSource(1, "", listOf(ReaderChapterSourceBlock.Html("<img>", 5)), 6),
+        style,
+    ) as ReaderChapterMeasureResult.Success
+
+    @Test
+    fun scalesReviewBubbleInlineSlotByPackageScale() = runBlocking {
+        val items = listOf(ReaderChapterInlineSource.Image("bubble://paragraph?num=12", 0))
+        suspend fun inlineWidth(scale: Float): Float {
+            val options = ReaderImageOptions(
+                layoutMode = ReaderImageLayoutMode.INLINE,
+                horizontalAlignment = ReaderTextAlignment.CENTER,
+                inlinePlaceholder = ReaderInlineImagePlaceholder.REVIEW,
+                inlineWidthScale = scale,
+            )
+            return measureHtml(items, style, options, ReaderImageDimensions(10f, 10f))
+                .blocks.filterIsInstance<ReaderMeasuredBlock.InlineParagraph>()
+                .flatMap { it.items }
+                .filterIsInstance<ReaderMeasuredInlineItem.Image>()
+                .single()
+                .widthPx
+        }
+        // 占位字 advance 是 10f（见 shaper）；包内 sizeScale 必须真正改变槽宽。
+        assertEquals(10f, inlineWidth(1f), 0f)
+        assertEquals(20f, inlineWidth(2f), 0f)
+    }
 
     @Test
     fun measuresTextAndImagesWithoutLegacyLayoutModels() = runBlocking {
@@ -238,6 +356,70 @@ class ReaderChapterBlockMeasurerTest {
         assertEquals(28f, image.intrinsicHeightPx, 0f)
     }
 
+    /**
+     * 旧 `TextChapterLayout` 的书级文字嵌入分支不解析单图 JSON：独立图块与行内图一样按占位字
+     * 排版，单图 `"style":"FULL"` 也不能把它升级成整图。
+     */
+    @Test
+    fun `book level text mode lays standalone image blocks out inline`() = runBlocking {
+        val source = ReaderChapterSource(
+            1, "", listOf(
+                ReaderChapterSourceBlock.Image("banner", 0),
+            ), 1
+        )
+        val result = ReaderChapterBlockMeasurer(
+            bodyShaper = shaper,
+            titleShaper = shaper,
+            imageDimensionsResolver = { ReaderImageDimensions(100f, 50f) },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(ReaderImageLayoutMode.FULL_WIDTH) },
+        ).measure(
+            source,
+            style.copy(imageLayoutMode = ReaderImageLayoutMode.INLINE),
+        ) as ReaderChapterMeasureResult.Success
+
+        val paragraph = result.blocks.single() as ReaderMeasuredBlock.InlineParagraph
+        val image = paragraph.items.single() as ReaderMeasuredInlineItem.Image
+        // 占位宽 = 袮（本测试 shaper 统一给 10f），高按原图比例 100×50 → 5f。
+        assertEquals(10f, image.widthPx, 0f)
+        assertEquals(5f, image.heightPx, 0f)
+    }
+
+    /**
+     * 旧 `setTypeHtml` 不受书级 `imgStyleText` 短路：书级样式只是"单图 style 缺失"时的 fallback，
+     * 单图 `"style":"FULL"` 仍能把 HTML 段落里的图抬成整图。
+     */
+    @Test
+    fun `html block image overrides the book level text mode`() = runBlocking {
+        val result = measureHtml(
+            items = listOf(ReaderChapterInlineSource.Image("banner,{\"style\":\"full\"}", 5)),
+            style = style.copy(imageLayoutMode = ReaderImageLayoutMode.INLINE),
+            options = ReaderImageOptions(ReaderImageLayoutMode.FULL_WIDTH),
+            dimensions = ReaderImageDimensions(100f, 50f),
+        )
+
+        val image = result.blocks.single() as ReaderMeasuredBlock.Image
+        assertEquals(ReaderImageScaleMode.FIT_WIDTH, image.scaleMode)
+        assertEquals(100f, image.intrinsicWidthPx, 0f)
+    }
+
+    /**
+     * 旧 `setTypeHtml` 对**没有 `,{...}`** 的图直接 `setTypeImage(imageStyle)`：不做 <80px 自动
+     * 行内，小图也按整图排版（书级 TEXT 也落到 `setTypeImage` 的 else 分支）。
+     */
+    @Test
+    fun `html block image without options never auto inlines as one character`() = runBlocking {
+        val result = measureHtml(
+            items = listOf(ReaderChapterInlineSource.Image("plain.png", 5)),
+            style = style.copy(imageLayoutMode = ReaderImageLayoutMode.INLINE),
+            options = null,
+            dimensions = ReaderImageDimensions(12f, 12f),
+        )
+
+        val image = result.blocks.single() as ReaderMeasuredBlock.Image
+        assertEquals(12f, image.intrinsicWidthPx, 0f)
+        assertEquals(ReaderImageScaleMode.CONTAIN_NO_UPSCALE, image.scaleMode)
+    }
+
     @Test
     fun convertsResolvedHtmlStylesIntoCanvasTextStyles() = runBlocking {
         val source = ReaderChapterSource(1, "", listOf(ReaderChapterSourceBlock.Html("<b>x</b>", 5)), 7)
@@ -246,7 +428,7 @@ class ReaderChapterBlockMeasurerTest {
             titleShaper = shaper,
             imageDimensionsResolver = { null },
             textShaperFactory = ReaderTextShaperFactory { textStyle ->
-                ReaderTextShaper { text -> GlyphClusters(listOf(text), listOf(textStyle.fontSizePx)) }
+                ReaderTextShaper { text -> GlyphClusters(listOf(text), floatArrayOf(textStyle.fontSizePx)) }
             },
             htmlSourceResolver = ReaderHtmlSourceResolver { _, position -> listOf(ReaderHtmlParagraph(listOf(
                 ReaderChapterInlineSource.Text(
@@ -301,20 +483,75 @@ class ReaderChapterBlockMeasurerTest {
         assertEquals(1.5f, blank.lineSpacingMultiplier, 0f)
     }
 
-    @Test fun htmlParagraphDoesNotInheritPlainBodyFirstLineIndent() = runBlocking {
-        val source = ReaderChapterSource(1, "", listOf(ReaderChapterSourceBlock.Html("x", 0)), 1)
+    @Test fun bodyParagraphsUseReaderIndentAndAlignmentAcrossPresentationPaths() = runBlocking {
+        for ((css, sourceAlignment) in listOf(
+            "" to null, "left" to ReaderTextAlignment.START, "justify" to ReaderTextAlignment.JUSTIFY,
+            "center" to ReaderTextAlignment.CENTER, "right" to ReaderTextAlignment.END,
+        )) {
+            val presentation = io.legado.app.feature.reader.platform.ReaderLocalPresentationResolver.resolve(
+                "<p style='text-align:$css'>正文</p>")
+            val local = ReaderChapterSourceParser.parse(0, "", listOf("正文"), false, true,
+                localPresentation = presentation)
+            val legacy = ReaderChapterSource(1, "", listOf(ReaderChapterSourceBlock.Html("x", 0)), 2)
+            val measurer = ReaderChapterBlockMeasurer(shaper, shaper, { null },
+                htmlSourceResolver = ReaderHtmlSourceResolver { _, position -> listOf(
+                    ReaderHtmlParagraph(listOf(ReaderChapterInlineSource.Text("正文", position)),
+                        alignment = sourceAlignment),
+                ) })
+            for (bodyAlignment in listOf(ReaderTextAlignment.START, ReaderTextAlignment.JUSTIFY)) {
+                for (source in listOf(local, legacy)) {
+                    val expectedAlignment = when (css) {
+                        "center" -> ReaderTextAlignment.CENTER
+                        "right" -> ReaderTextAlignment.END
+                        else -> bodyAlignment
+                    }
+                    val paragraph = (measurer.measure(source, style.copy(bodyAlignment = bodyAlignment))
+                        as ReaderChapterMeasureResult.Success).blocks.single() as ReaderMeasuredBlock.InlineParagraph
+                    val keepsIndent = css != "center" && css != "right"
+                    val case = "$css / $bodyAlignment / ${source.blocks.first()::class.simpleName}"
+                    assertEquals(case, expectedAlignment, paragraph.alignment)
+                    assertEquals(case, if (keepsIndent) 2 else 0, paragraph.indentCharacters)
+                    assertEquals(case, if (keepsIndent) 20f else 0f, paragraph.indentWidthPx!!, 0f)
+                }
+            }
+            assertEquals("正文\n", local.semanticContent)
+            assertEquals(listOf(0), local.paragraphs.map { it.ordinal })
+        }
+    }
+
+    @Test fun htmlHeadingAndQuoteKeepTheirOwnIndent() = runBlocking {
+        val source = ReaderChapterSource(
+            1, "", listOf(ReaderChapterSourceBlock.Html("x", 0)), 1,
+        )
         val result = ReaderChapterBlockMeasurer(
             bodyShaper = shaper,
             titleShaper = shaper,
             imageDimensionsResolver = { null },
             htmlSourceResolver = ReaderHtmlSourceResolver { _, position -> listOf(
-                ReaderHtmlParagraph(listOf(ReaderChapterInlineSource.Text("正文", position))),
+                ReaderHtmlParagraph(
+                    items = listOf(ReaderChapterInlineSource.Text("标题", position)),
+                    alignment = ReaderTextAlignment.START,
+                    preserveBodyIndent = false,
+                ),
+                ReaderHtmlParagraph(
+                    items = listOf(ReaderChapterInlineSource.Text("引文", position + 3)),
+                    firstLineMarginPx = 24f,
+                    restLineMarginPx = 24f,
+                    decorations = listOf(ReaderParagraphDecoration(
+                        ReaderParagraphDecorationKind.QUOTE, null, 2f,
+                    )),
+                    preserveBodyIndent = false,
+                ),
             ) },
         ).measure(source, style.copy(bodyIndentCharacters = 2)) as ReaderChapterMeasureResult.Success
 
-        val html = result.blocks.single() as ReaderMeasuredBlock.InlineParagraph
-        assertEquals(0, html.indentCharacters)
-        assertEquals(0f, html.indentWidthPx!!, 0f)
+        val paragraphs = result.blocks.filterIsInstance<ReaderMeasuredBlock.InlineParagraph>()
+        assertEquals(2, paragraphs.size)
+        assertEquals(ReaderTextAlignment.START, paragraphs[0].alignment)
+        assertEquals(0, paragraphs[0].indentCharacters)
+        assertEquals(0f, paragraphs[0].indentWidthPx!!, 0f)
+        assertEquals(0, paragraphs[1].indentCharacters)
+        assertEquals(24f, paragraphs[1].indentWidthPx!!, 0f)
     }
 
     @Test fun htmlParagraphCarriesBlockMarginsAndAlignmentIntoCanvasLayout() = runBlocking {
@@ -343,7 +580,7 @@ class ReaderChapterBlockMeasurerTest {
     @Test
     fun carriesPerFontLineMetricsIntoInlineGlyphs() = runBlocking {
         val metricShaper = object : ReaderTextShaper {
-            override fun shape(text: String) = GlyphClusters(listOf(text), listOf(10f))
+            override fun shape(text: String) = GlyphClusters(listOf(text), floatArrayOf(10f))
             override val fontLineMetrics = ReaderFontLineMetrics(26f, 17f)
         }
         val source = ReaderChapterSource(
@@ -371,7 +608,7 @@ class ReaderChapterBlockMeasurerTest {
     @Test
     fun convertsHtmlBaselineSpansUsingActualFontAscentAndDescent() = runBlocking {
         val metricShaper = object : ReaderTextShaper {
-            override fun shape(text: String) = GlyphClusters(listOf(text), listOf(10f))
+            override fun shape(text: String) = GlyphClusters(listOf(text), floatArrayOf(10f))
             override val fontLineMetrics = ReaderFontLineMetrics(
                 heightPx = 20f,
                 baselineOffsetPx = 16f,
@@ -417,7 +654,7 @@ class ReaderChapterBlockMeasurerTest {
             imageDimensionsResolver = {
                 dimensionResolves++; ReaderImageDimensions(12f, 12f)
             },
-            imageOptionsResolver = { src ->
+            imageOptionsResolver = { src, _ ->
                 if ("\"click\"" in src) ReaderImageOptions(action = "showCmt(1)") else null
             },
         ).measure(source, style.copy(excludeActionImages = true)) as ReaderChapterMeasureResult.Success
@@ -442,7 +679,7 @@ class ReaderChapterBlockMeasurerTest {
             bodyShaper = shaper,
             titleShaper = shaper,
             imageDimensionsResolver = { ReaderImageDimensions(12f, 12f) },
-            imageOptionsResolver = { ReaderImageOptions(action = "js") },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(action = "js") },
         ).measure(source, style) as ReaderChapterMeasureResult.Success
         assertEquals(
             1,
@@ -464,7 +701,7 @@ class ReaderChapterBlockMeasurerTest {
             imageDimensionsResolver = {
                 dimensionResolves++; ReaderImageDimensions(300f, 300f)
             },
-            imageOptionsResolver = { ReaderImageOptions(action = "js") },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(action = "js") },
         ).measure(source, style.copy(excludeActionImages = true)) as ReaderChapterMeasureResult.Success
 
         assertTrue(result.blocks.none { it is ReaderMeasuredBlock.Image })
@@ -484,7 +721,7 @@ class ReaderChapterBlockMeasurerTest {
             bodyShaper = shaper,
             titleShaper = shaper,
             imageDimensionsResolver = { ReaderImageDimensions(12f, 12f) },
-            imageOptionsResolver = { ReaderImageOptions(action = "js") },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(action = "js") },
         ).measure(source, style.copy(excludeActionImages = true)) as ReaderChapterMeasureResult.Success
 
         assertTrue(result.blocks.isEmpty())
@@ -504,7 +741,7 @@ class ReaderChapterBlockMeasurerTest {
             bodyShaper = shaper,
             titleShaper = shaper,
             imageDimensionsResolver = { ReaderImageDimensions(12f, 12f) },
-            imageOptionsResolver = { ReaderImageOptions(action = "js") },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(action = "js") },
         ).measure(source, style.copy(excludeActionImages = true)) as ReaderChapterMeasureResult.Success
 
         assertTrue(result.blocks.isEmpty())
@@ -524,7 +761,7 @@ class ReaderChapterBlockMeasurerTest {
             bodyShaper = shaper,
             titleShaper = shaper,
             imageDimensionsResolver = { ReaderImageDimensions(12f, 12f) },
-            imageOptionsResolver = { ReaderImageOptions(action = "js") },
+            imageOptionsResolver = { _, _ -> ReaderImageOptions(action = "js") },
         ).measure(source, style.copy(excludeActionImages = true)) as ReaderChapterMeasureResult.Success
 
         val paragraphs = result.blocks.filterIsInstance<ReaderMeasuredBlock.InlineParagraph>()

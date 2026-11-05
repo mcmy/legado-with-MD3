@@ -1,6 +1,5 @@
 package io.legado.app.ui.book.toc
 
-import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -36,6 +35,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.BookmarkAdd
@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
@@ -53,8 +54,6 @@ import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingToolbarDefaults.ScreenOffset
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -90,7 +89,6 @@ import io.legado.app.R
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.Bookmark
 import io.legado.app.help.book.isLocal
-import io.legado.app.ui.book.toc.rule.TxtTocRuleActivity
 import io.legado.app.ui.replace.ReplaceEditRoute
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveContentPaddingOnlyVertical
@@ -98,6 +96,7 @@ import io.legado.app.ui.theme.adaptiveHorizontalPadding
 import io.legado.app.ui.widget.components.ActionItem
 import io.legado.app.ui.widget.components.AppFloatingActionButtonMenu
 import io.legado.app.ui.widget.components.AppScaffold
+import io.legado.app.ui.widget.components.ChapterStatusIcons
 import io.legado.app.ui.widget.components.CollapsibleHeader
 import io.legado.app.ui.widget.components.EmptyMessage
 import io.legado.app.ui.widget.components.FabMenuItem
@@ -110,6 +109,7 @@ import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.card.TextCard
 import io.legado.app.ui.widget.components.divider.PillDivider
 import io.legado.app.ui.widget.components.divider.PillHeaderDivider
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
 import io.legado.app.ui.widget.components.list.TopFloatingStickyItem
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
@@ -138,6 +138,11 @@ fun TocRouteScreen(
     onChapterClick: (Int) -> Unit,
     onOpenReplaceRule: (ReplaceEditRoute?) -> Unit,
     onBookmarkClick: (chapterIndex: Int, chapterPos: Int) -> Unit,
+    /**
+     * 「本地目录规则」入口：宿主导航到规则列表的选择模式，选好后由宿主的
+     * `ConsumeBookPageResult` 回灌 `TocIntent.SaveTocRegex`。
+     */
+    onPickLocalTocRule: (String?) -> Unit,
 ) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -146,15 +151,6 @@ fun TocRouteScreen(
         contract = ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
         uri?.let { viewModel.onIntent(TocIntent.ExportBookmarks(it, pendingExportMarkdown)) }
-    }
-    val tocRegexLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            viewModel.onIntent(
-                TocIntent.SaveTocRegex(result.data?.getStringExtra("tocRegex").orEmpty())
-            )
-        }
     }
     LaunchedEffect(bookUrl) {
         bookUrl?.let { viewModel.onIntent(TocIntent.LoadBook(it)) }
@@ -174,11 +170,7 @@ fun TocRouteScreen(
         onChapterClick = onChapterClick,
         onOpenReplaceRule = onOpenReplaceRule,
         onBookmarkClick = onBookmarkClick,
-        onEditLocalTocRule = { regex ->
-            tocRegexLauncher.launch(
-                Intent(context, TxtTocRuleActivity::class.java).putExtra("tocRegex", regex)
-            )
-        },
+        onEditLocalTocRule = onPickLocalTocRule,
         onExportBookmarks = { isMarkdown, fileName ->
             pendingExportMarkdown = isMarkdown
             exportLauncher.launch(fileName)
@@ -234,6 +226,8 @@ fun TocScreen(
     val invertSelectionText = stringResource(R.string.invert_selection)
     val selectFollowingText = stringResource(R.string.select_following)
     val addBookmarkText = stringResource(R.string.bookmark_add)
+    val deleteAssignmentText = stringResource(R.string.cast_assignment_delete)
+    val deleteAudioText = stringResource(R.string.read_aloud_audio_download_delete)
     val bookmarkDefaultFileName = stringResource(R.string.bookmark)
 
     val topBarTitle = remember(
@@ -332,7 +326,9 @@ fun TocScreen(
         state.selectedIds,
         invertSelectionText,
         selectFollowingText,
-        addBookmarkText
+        addBookmarkText,
+        deleteAssignmentText,
+        deleteAudioText
     ) {
         listOf(
             ActionItem(
@@ -349,6 +345,16 @@ fun TocScreen(
                 text = addBookmarkText,
                 icon = Icons.Default.BookmarkAdd,
                 onClick = { onIntent(TocIntent.AddBookmarksForSelected) }
+            ),
+            ActionItem(
+                text = deleteAssignmentText,
+                icon = Icons.Default.Groups,
+                onClick = { onIntent(TocIntent.DeleteAssignmentsForSelected) }
+            ),
+            ActionItem(
+                text = deleteAudioText,
+                icon = Icons.Default.Download,
+                onClick = { onIntent(TocIntent.DeleteAudioDownloadsForSelected) }
             )
         )
     }
@@ -858,6 +864,9 @@ fun ChapterItem(
     val downloadingDescription = stringResource(R.string.a11y_downloading)
     val downloadFailedDescription = stringResource(R.string.a11y_download_failed)
     val notDownloadedDescription = stringResource(R.string.a11y_not_downloaded)
+    val assignmentStateDescription = stringResource(R.string.cast_assignment_state)
+    val audioDownloadStateDescription =
+        stringResource(R.string.read_aloud_audio_download_state)
     val wordCountDescription = item.wordCount?.let {
         stringResource(R.string.a11y_word_count, it)
     }
@@ -875,6 +884,8 @@ fun ChapterItem(
         if (item.isVip && !item.isPay) add(lockedDescription)
         if (showWordCount) wordCountDescription?.let(::add)
         downloadStateDescription?.let(::add)
+        if (item.hasCastAssignment) add(assignmentStateDescription)
+        if (item.hasAudioDownload) add(audioDownloadStateDescription)
     }.joinToString(", ")
     val canDownload = item.downloadState == DownloadState.NONE ||
             item.downloadState == DownloadState.ERROR
@@ -909,7 +920,7 @@ fun ChapterItem(
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (item.isVip && !item.isPay) {
-                        Icon(
+                        AppIcon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = null,
                             tint = LegadoTheme.colorScheme.error,
@@ -948,12 +959,19 @@ fun ChapterItem(
                     }
                 }
 
+            ChapterStatusIcons(
+                item = item,
+                iconSize = 16.dp,
+                spacing = 4.dp,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+
             if (showStatusIcon) {
                 Box(
                     modifier = Modifier
                         .padding(start = 8.dp)
                         .wrapContentSize()
-                        .clip(MaterialTheme.shapes.medium)
+                        .clip(RoundedCornerShape(12.dp))
                         .then(
                             if (canDownload) {
                                 Modifier
@@ -1179,7 +1197,7 @@ private fun StatusIcon(
             }
 
             "DUR" -> {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Rounded.LocationOn,
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
@@ -1211,7 +1229,7 @@ private fun StatusIcon(
             }
 
             "SUCCESS_ICON" -> {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
@@ -1220,7 +1238,7 @@ private fun StatusIcon(
             }
 
             "ERROR" -> {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),
@@ -1229,7 +1247,7 @@ private fun StatusIcon(
             }
 
             else -> {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Outlined.DownloadForOffline,
                     contentDescription = null,
                     modifier = Modifier.size(24.dp),

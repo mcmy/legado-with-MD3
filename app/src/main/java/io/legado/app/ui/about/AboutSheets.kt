@@ -30,37 +30,6 @@ import io.legado.app.ui.widget.components.text.MarkdownBlock
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MarkdownSheet(
-    show: Boolean,
-    title: String,
-    content: String,
-    onDismissRequest: () -> Unit,
-    endAction: @Composable (() -> Unit)? = null,
-) {
-    AppModalBottomSheet(
-        show = show,
-        onDismissRequest = onDismissRequest,
-        title = title,
-        endAction = endAction,
-    ) {
-        SelectionContainer {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                MarkdownBlock(
-                    content = content,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.heightIn(min = 16.dp))
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 fun UpdateSheet(
     show: Boolean,
     updateInfo: AppUpdate.UpdateInfo,
@@ -78,10 +47,13 @@ fun UpdateSheet(
         show = show,
         onDismissRequest = onDismissRequest,
         title = title,
+        animateContentSize = false,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .weight(1f, fill = false)
+                .heightIn(max = 560.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             if (mode == UpdateMode.UPDATE) {
@@ -155,22 +127,23 @@ fun UpdateSheet(
 
             val updateLog = updateInfo.updateLog
             if (updateLog.isNotBlank()) {
-                MarkdownBlock(
-                    content = updateLog,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                SelectionContainer {
+                    MarkdownBlock(
+                        content = updateLog,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
-            if (mode == UpdateMode.UPDATE) {
-                Spacer(modifier = Modifier.height(16.dp))
-                PrimaryButton(
-                    onClick = onStartDownload,
-                    text = stringResource(R.string.about_update_action),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-
+        if (mode == UpdateMode.UPDATE) {
             Spacer(modifier = Modifier.height(16.dp))
+            PrimaryButton(
+                onClick = onStartDownload,
+                text = stringResource(R.string.about_update_action),
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

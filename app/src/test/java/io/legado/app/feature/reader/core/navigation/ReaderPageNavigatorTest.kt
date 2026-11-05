@@ -7,17 +7,149 @@ import io.legado.app.feature.reader.core.model.ReaderPageWindow
 import io.legado.app.feature.reader.core.model.ReaderRect
 import io.legado.app.feature.reader.core.model.ReaderTextStyle
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderPageNavigatorTest {
+    @Test
+    fun persistedPageTextUsesCanonicalRangesAndExcludesTitlesAndDecorativeBlankLines() {
+        val first = textPage(0, 0, "甲")
+        val title = (first.elements.single() as ReaderElement.Text).copy(value = "标题", emphasized = true)
+        val pages = listOf(first.copy(text = "标题\n甲\n\n", elements = listOf(title) + first.elements),
+            textPage(1, 2, "乙").copy(text = "乙\n\n"))
+        assertEquals("甲\n", ReaderPageNavigator.pageContext(pages, 0, "甲\n乙\n")?.text)
+        assertEquals("乙", ReaderPageNavigator.pageContext(pages, 1, "甲\n乙\n")?.text)
+        assertEquals(2, ReaderPageNavigator.pageContext(pages, 0, "甲\n乙\n")?.endPosition)
+    }
+
+    @Test
+    fun canonicalPageTextKeepsUtf16BoundariesAndHandlesEmptyBodies() {
+        val pages = listOf(textPage(0, 1, "😀"), textPage(1, 3, "B"))
+        assertEquals("😀", ReaderPageNavigator.pageContext(pages, 0, "A😀B\n")?.text)
+        assertEquals("", ReaderPageNavigator.pageContext(pages, 0, "")?.text)
+    }
     private fun page(index: Int, start: Int, chapterIndex: Int = 4) = ReaderPage(
         id = ReaderPageId(chapterIndex, index), chapterTitle = "", text = "字",
         widthPx = 100, heightPx = 100, contentTopPx = 0f, contentBottomPx = 100f,
         elements = listOf(ReaderElement.Text(ReaderRect(0f, 0f, 10f, 10f), 8f, "字", ReaderTextStyle(0, 10f), false, false, chapterPosition = start)),
         revision = 1,
     )
+
+    private fun textPage(index: Int, start: Int, text: String): ReaderPage {
+        val page = page(index, start)
+        return page.copy(elements = listOf((page.elements.single() as ReaderElement.Text).copy(value = text)))
+    }
+
+    @Test
+    fun reopeningAtNextPageStartDoesNotPublishThePreviousStreamedPage() {
+        val previous = textPage(0, 0, "x".repeat(20))
+        assertFalse(ReaderPageNavigator.containsChapterPosition(previous, 20))
+        assertNull(ReaderPageNavigator.locateReadyPage(listOf(previous), 4, 20, true))
+        val next = textPage(1, 20, "x".repeat(20))
+        assertTrue(ReaderPageNavigator.containsChapterPosition(next, 20))
+        assertEquals(1, ReaderPageNavigator.locateReadyPage(listOf(previous, next), 4, 20, true))
+    }
+
+    @Test
+    fun partialChapterDoesNotClampUnlaidSavedPositionToItsLastReadyPage() {
+        val pages = listOf(textPage(0, 0, "x".repeat(20)), textPage(1, 20, "x".repeat(20)))
+        assertNull(ReaderPageNavigator.locateReadyPage(pages, 4, 100, true))
+        assertEquals(1, ReaderPageNavigator.locateReadyPage(pages, 4, 100, false))
+    }
+
+    @Test
+    fun titleCoordinatesCannotMakeAnEarlyPageCoverALaterBodyPosition() {
+        val bodyPage = textPage(0, 0, "x".repeat(20))
+        val title = (bodyPage.elements.single() as ReaderElement.Text)
+            .copy(value = "title".repeat(20), emphasized = true)
+        val titledPage = bodyPage.copy(elements = bodyPage.elements + title)
+        assertFalse(ReaderPageNavigator.containsChapterPosition(titledPage, 80))
+        assertNull(ReaderPageNavigator.locateReadyPage(listOf(titledPage), 4, 80, true))
+    }
+
+    @Test
+    fun separatorGapBelongsToPreviousPageOnceFollowingPageIsReady() {
+        val pages = listOf(textPage(0, 0, "x".repeat(20)), textPage(1, 22, "x".repeat(20)))
+        assertEquals(0, ReaderPageNavigator.locateReadyPage(pages, 4, 21, true))
+    }
+
+    @Test
+    fun missingCurrentChapterCannotBeReplacedWithAnAdjacentChapter() {
+        assertNull(ReaderPageNavigator.locateReadyPage(listOf(textPage(0, 0, "x")), 5, 0, true))
+    }
+
+    @Test
+    fun advancingThroughManyChaptersKeepsOnlyAdjacentLayouts() {
+        val pages =
+            (0..100).flatMap { chapter -> listOf(page(0, 0, chapter), page(1, 20, chapter)) }
+        val retained = ReaderPageNavigator.retainChapterWindow(pages, 80, 80)
+        assertEquals(setOf(79, 80, 81), retained.map { it.id.chapterIndex }.toSet())
+        assertEquals(6, retained.size)
+        assertEquals(3, ReaderPageNavigator.rebasePageIndex(retained, ReaderPageId(80, 1)))
+    }
+
+    @Test
+    fun scrollLookaheadKeepsTheChapterAfterAShortPageAcrossReversal() {
+        val pages = (0..5).map { page(0, 0, it) }
+        val forward = ReaderPageNavigator.retainChapterWindow(pages, 2, 2, forwardChapterCount = 2)
+        val back = ReaderPageNavigator.retainChapterWindow(forward, 1, 1, forwardChapterCount = 2)
+        val current = ReaderPageNavigator.rebasePageIndex(back, ReaderPageId(1, 0))!!
+        val window = ReaderPageNavigator.window(back, current)
+
+        assertEquals(ReaderPageId(2, 0), window.next?.id)
+        assertEquals(ReaderPageId(3, 0), window.nextPlus?.id)
+        assertEquals(listOf(1, 2, 3), back.map { it.id.chapterIndex })
+    }
+
+    @Test
+    fun loadingHandoffRetainsDisplayedChapterUntilTargetBecomesVisible() {
+        val pages = (0..10).map { page(0, 0, it) }
+        val retained = ReaderPageNavigator.retainChapterWindow(pages, 8, 4)
+        assertEquals(setOf(4, 7, 8, 9), retained.map { it.id.chapterIndex }.toSet())
+        assertEquals(
+            setOf(7, 8, 9), ReaderPageNavigator.retainChapterWindow(retained, 8, 8)
+            .map { it.id.chapterIndex }.toSet()
+        )
+    }
+
+    @Test
+    fun streamedReplacementKeepsPageIdentityInsteadOfOldListIndex() {
+        val visible = page(0, 0, chapterIndex = 5)
+        val replacement = visible.copy(revision = 2)
+        val pages = listOf(page(0, 0, 4), page(1, 20, 4), replacement, page(0, 0, 6))
+        val index = ReaderPageNavigator.rebasePageIndex(pages, visible.id)
+        assertEquals(2, index)
+        assertEquals(visible.id, pages[index!!].id)
+    }
+
+    @Test
+    fun removingPreviousPartialChapterDoesNotAdvanceCurrentChapter() {
+        val visible = page(1, 20, 5)
+        val pages = listOf(page(0, 0, 5), visible, page(0, 0, 6))
+        assertEquals(1, ReaderPageNavigator.rebasePageIndex(pages, visible.id))
+        assertNull(ReaderPageNavigator.rebasePageIndex(pages, page(0, 0, 4).id))
+    }
+
+    @Test
+    fun synchronousTurnStaysVisibleUntilHostEchoAndExternalNavigationWins() {
+        val base = ReaderPageWindow(current = page(0, 0))
+        val next = ReaderPageWindow(current = page(1, 20))
+        val jumped = ReaderPageWindow(current = page(0, 0, 9))
+        val rewrappedBase = ReaderPageWindow(current = page(0, 0))
+        assertEquals(next, ReaderPageNavigator.resolveWindow(base, base, next))
+        assertEquals(next, ReaderPageNavigator.resolveWindow(next, base, next))
+        assertEquals(next, ReaderPageNavigator.resolveWindow(rewrappedBase, base, next))
+        assertEquals(jumped, ReaderPageNavigator.resolveWindow(jumped, base, next))
+    }
+
+    @Test
+    fun consecutiveSynchronousTurnsCanPrecedeHostCollection() {
+        val host = ReaderPageWindow(current = page(0, 0))
+        val next = ReaderPageWindow(current = page(2, 40))
+        assertEquals(next, ReaderPageNavigator.resolveWindow(host, host, next))
+    }
 
     @Test
     fun locatesByChapterPositionAndBuildsWindow() {
@@ -27,6 +159,88 @@ class ReaderPageNavigatorTest {
         assertEquals(1, index)
         assertEquals(0, window.previous?.id?.pageIndex)
         assertEquals(2, window.next?.id?.pageIndex)
+    }
+
+    @Test
+    fun previousChapterPaginationCompletingAfterChapterAdvanceKeepsCurrentChapter() {
+        val currentPage = page(index = 1, start = 40, chapterIndex = 5)
+        val pages = listOf(
+            page(index = 0, start = 0, chapterIndex = 4),
+            page(index = 1, start = 30, chapterIndex = 4),
+            page(index = 2, start = 60, chapterIndex = 4),
+            page(index = 0, start = 0, chapterIndex = 5),
+            currentPage,
+        )
+
+        val index = ReaderPageNavigator.locateAfterPagination(
+            pages, chapterIndex = 5, chapterPosition = 55, previousPageId = currentPage.id,
+        )
+
+        assertEquals(currentPage.id, index?.let { pages[it].id })
+    }
+
+    @Test
+    fun nextChapterPaginationCompletingAfterPlaybackStopsKeepsFinishedChapter() {
+        val finishedPage = page(index = 1, start = 40, chapterIndex = 5)
+        val pages = listOf(
+            page(index = 0, start = 0, chapterIndex = 5),
+            finishedPage,
+            page(index = 0, start = 0, chapterIndex = 6),
+            page(index = 1, start = 30, chapterIndex = 6),
+        )
+
+        val index = ReaderPageNavigator.locateAfterPagination(
+            pages, chapterIndex = 5, chapterPosition = 59, previousPageId = finishedPage.id,
+        )
+
+        assertEquals(finishedPage.id, index?.let { pages[it].id })
+    }
+
+    @Test
+    fun lateCurrentChapterPaginationReplacesThePreviousChapterFallback() {
+        val previousPage = page(index = 1, start = 40, chapterIndex = 4)
+        val currentPage = page(index = 1, start = 50, chapterIndex = 5)
+        val pages = listOf(
+            page(index = 0, start = 0, chapterIndex = 4), previousPage,
+            page(index = 0, start = 0, chapterIndex = 5), currentPage,
+        )
+
+        val index = ReaderPageNavigator.locateAfterPagination(
+            pages, chapterIndex = 5, chapterPosition = 55, previousPageId = previousPage.id,
+        )
+
+        assertEquals(currentPage.id, index?.let { pages[it].id })
+    }
+
+    @Test
+    fun missingCurrentChapterKeepsVisiblePageIdentityWhenPrecedingPagesAreInserted() {
+        val visiblePage = page(index = 1, start = 40, chapterIndex = 4)
+        val pages = listOf(
+            page(index = 0, start = 0, chapterIndex = 3),
+            page(index = 1, start = 30, chapterIndex = 3),
+            page(index = 0, start = 0, chapterIndex = 4),
+            visiblePage,
+        )
+
+        val index = ReaderPageNavigator.locateAfterPagination(
+            pages, chapterIndex = 5, chapterPosition = 0, previousPageId = visiblePage.id,
+        )
+
+        assertEquals(3, index)
+        assertEquals(visiblePage.id, index?.let { pages[it].id })
+    }
+
+    @Test
+    fun missingCurrentAndPreviousPageDoesNotPublishTheFirstChapter() {
+        val pages = listOf(page(index = 0, start = 0, chapterIndex = 3))
+
+        assertNull(ReaderPageNavigator.locateAfterPagination(
+            pages, chapterIndex = 5, chapterPosition = 0,
+            previousPageId = ReaderPageId(chapterIndex = 4, pageIndex = 1),
+        ))
+        assertNull(ReaderPageNavigator.locateAfterPagination(
+            emptyList(), chapterIndex = 5, chapterPosition = 0, previousPageId = null,
+        ))
     }
 
     @Test

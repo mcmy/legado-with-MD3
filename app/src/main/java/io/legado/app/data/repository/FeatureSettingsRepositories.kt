@@ -153,6 +153,7 @@ internal fun Preferences.toDownloadCacheSettings(): DownloadCacheSettings =
         bitmapCacheSize = compatDsInt(PreferKey.bitmapCacheSize) ?: 50,
         imageRetainNum = compatDsInt(PreferKey.imageRetainNum) ?: 0,
         preDownloadNum = compatDsInt(PreferKey.preDownloadNum) ?: 10,
+        preDownloadNumPrev = compatDsInt(PreferKey.preDownloadNumPrev) ?: 0,
         threadCount = compatDsInt(PreferKey.threadCount) ?: 16,
         cacheBookThreadCount = compatDsInt(PreferKey.cacheBookThreadCount) ?: 16,
         userAgent = compatDsString(PreferKey.userAgent).orEmpty().ifBlank {
@@ -167,6 +168,7 @@ internal fun DownloadCacheSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.bitmapCacheSize to bitmapCacheSize,
     PreferKey.imageRetainNum to imageRetainNum,
     PreferKey.preDownloadNum to preDownloadNum,
+    PreferKey.preDownloadNumPrev to preDownloadNumPrev,
     PreferKey.threadCount to threadCount,
     PreferKey.cacheBookThreadCount to cacheBookThreadCount,
     PreferKey.userAgent to userAgent,
@@ -176,6 +178,7 @@ internal fun DownloadCacheSettings.toPrefMap(): Map<String, Any?> = mapOf(
 internal fun Preferences.toCoverSettings(): CoverSettings = CoverSettings(
     loadOnlyOnWifi = compatDsBoolean(PreferKey.loadCoverOnlyWifi) ?: false,
     useDefaultCover = compatDsBoolean(PreferKey.useDefaultCover) ?: false,
+    restrictCoverRatio = compatDsBoolean(PreferKey.coverRestrictRatio) ?: true,
     showShadow = compatDsBoolean(PreferKey.coverShowShadow) ?: false,
     showStroke = compatDsBoolean(PreferKey.coverShowStroke) ?: true,
     useDefaultColor = compatDsBoolean(PreferKey.coverDefaultColor) ?: true,
@@ -196,6 +199,7 @@ internal fun Preferences.toCoverSettings(): CoverSettings = CoverSettings(
 internal fun CoverSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.loadCoverOnlyWifi to loadOnlyOnWifi,
     PreferKey.useDefaultCover to useDefaultCover,
+    PreferKey.coverRestrictRatio to restrictCoverRatio,
     PreferKey.coverShowShadow to showShadow,
     PreferKey.coverShowStroke to showStroke,
     PreferKey.coverDefaultColor to useDefaultColor,
@@ -287,11 +291,13 @@ internal fun Preferences.toAppShellSettings(): AppShellSettings = AppShellSettin
     showStatusBar = compatDsBoolean(PreferKey.showStatusBar) ?: true,
     swipeAnimation = compatDsBoolean(PreferKey.swipeAnimation) ?: true,
     predictiveBackEnabled = compatDsBoolean(PreferKey.isPredictiveBackEnabled) ?: true,
+    readerSharedElementEnabled = compatDsBoolean(PreferKey.readerSharedElementEnabled) ?: true,
     showBottomView = compatDsBoolean(PreferKey.showBottomView) ?: true,
     useFloatingBottomBar = compatDsBoolean(PreferKey.useFloatingBottomBar) ?: false,
     useFloatingBottomBarLiquidGlass =
         compatDsBoolean(PreferKey.useFloatingBottomBarLiquidGlass) ?: false,
     tabletInterface = compatDsString(PreferKey.tabletInterface) ?: "auto",
+    multiPaneMode = compatDsString(PreferKey.multiPaneMode) ?: "auto",
     labelVisibilityMode = compatDsString(PreferKey.labelVisibilityMode) ?: "auto",
     defaultHomePage = compatDsString(PreferKey.defaultHomePage) ?: "bookshelf",
     mainNavigationOrder = compatDsString(PreferKey.mainNavigationOrder)
@@ -320,10 +326,12 @@ internal fun AppShellSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.showStatusBar to showStatusBar,
     PreferKey.swipeAnimation to swipeAnimation,
     PreferKey.isPredictiveBackEnabled to predictiveBackEnabled,
+    PreferKey.readerSharedElementEnabled to readerSharedElementEnabled,
     PreferKey.showBottomView to showBottomView,
     PreferKey.useFloatingBottomBar to useFloatingBottomBar,
     PreferKey.useFloatingBottomBarLiquidGlass to useFloatingBottomBarLiquidGlass,
     PreferKey.tabletInterface to tabletInterface,
+    PreferKey.multiPaneMode to multiPaneMode,
     PreferKey.labelVisibilityMode to labelVisibilityMode,
     PreferKey.defaultHomePage to defaultHomePage,
     PreferKey.mainNavigationOrder to mainNavigationOrder,
@@ -392,6 +400,8 @@ internal fun Preferences.toThemeSettings(): ThemeSettings = ThemeSettings(
         compatDsString(PreferKey.bookInfoNetworkCoverBackground) ?: "on",
     bookInfoDefaultCoverBackground =
         compatDsString(PreferKey.bookInfoDefaultCoverBackground) ?: "on",
+    bookInfoAuthorSearchFallback =
+        compatDsBoolean(PreferKey.bookInfoAuthorSearchFallback) ?: false,
     bookInfoInputColor = compatDsInt(PreferKey.bookInfoInputColor) ?: 0,
     backgroundImageLight = compatDsString(PreferKey.bgImage),
     backgroundImageDark = compatDsString(PreferKey.bgImageN),
@@ -471,6 +481,7 @@ internal fun ThemeSettings.toGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.bookInfoFollowCoverColor to bookInfoFollowCoverColor,
     PreferKey.bookInfoNetworkCoverBackground to bookInfoNetworkCoverBackground,
     PreferKey.bookInfoDefaultCoverBackground to bookInfoDefaultCoverBackground,
+    PreferKey.bookInfoAuthorSearchFallback to bookInfoAuthorSearchFallback,
     PreferKey.bgImage to backgroundImageLight,
     PreferKey.bgImageN to backgroundImageDark,
     PreferKey.bgImageBlurring to backgroundImageBlurring,
@@ -502,7 +513,8 @@ internal fun Preferences.toOtherSettings(): OtherSettings {
     val rawSourceEditMaxLine = compatDsInt(PreferKey.sourceEditMaxLine) ?: Int.MAX_VALUE
     return OtherSettings(
         updateToVariant = compatDsString(PreferKey.updateToVariant) ?: "official_version",
-        autoCheckUpdateOnStart = compatDsBoolean(PreferKey.autoCheckUpdateOnStart) ?: false,
+        updateEndpoint = compatDsString(PreferKey.updateEndpoint) ?: "auto",
+        autoCheckUpdateOnStart = compatDsBoolean(PreferKey.autoCheckUpdateOnStart) ?: true,
         webServiceAutoStart = compatDsBoolean(PreferKey.webServiceAutoStart) ?: false,
         autoRefresh = compatDsBoolean(PreferKey.autoRefresh) ?: false,
         defaultToRead = compatDsBoolean(PreferKey.defaultToRead) ?: false,
@@ -526,11 +538,13 @@ internal fun Preferences.toOtherSettings(): OtherSettings {
         importKeepGroup = compatDsBoolean(PreferKey.importKeepGroup) ?: false,
         importKeepEnable = compatDsBoolean(PreferKey.importKeepEnable) ?: false,
         fontSort = compatDsInt(PreferKey.fontSort) ?: 0,
+        blockSourceBrowser = compatDsBoolean(PreferKey.blockSourceBrowser) ?: false,
     )
 }
 
 internal fun OtherSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.updateToVariant to updateToVariant,
+    PreferKey.updateEndpoint to updateEndpoint,
     PreferKey.autoCheckUpdateOnStart to autoCheckUpdateOnStart,
     PreferKey.webServiceAutoStart to webServiceAutoStart,
     PreferKey.autoRefresh to autoRefresh,
@@ -555,6 +569,7 @@ internal fun OtherSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.importKeepGroup to importKeepGroup,
     PreferKey.importKeepEnable to importKeepEnable,
     PreferKey.fontSort to fontSort,
+    PreferKey.blockSourceBrowser to blockSourceBrowser,
 )
 
 class OtherSettingsRepository : OtherSettingsGateway {

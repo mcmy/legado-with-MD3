@@ -3,7 +3,7 @@ package io.legado.app.feature.reader.core.layout
 /** Platform-free Chinese line breaking. Widths are supplied by a platform text measurer. */
 class ChineseLineBreaker(
     private val clusters: List<String>,
-    private val widthsPx: List<Float>,
+    private val widthsPx: FloatArray,
     private val indentCharacters: Int,
     widthPx: Int,
     private val ideographWidthPx: Float,
@@ -15,6 +15,7 @@ class ChineseLineBreaker(
     private val widths = mutableListOf<Float>()
     private val widthLimit = widthPx + letterSpacingPx
     private val firstWidthLimit = firstLineWidthPx + letterSpacingPx
+    private val symmetricRoles = ByteArray(clusters.size)
 
     val lineStarts get() = starts.toIntArray()
     val lineClusterStarts get() = clusterStarts.toIntArray()
@@ -23,8 +24,49 @@ class ChineseLineBreaker(
 
     init {
         require(clusters.size == widthsPx.size)
+        classifySymmetricMarks()
         breakLines()
     }
+
+    /** Straight quotes and pipes have the same glyph at both ends; punctuation sets cannot tell them apart. */
+    private fun classifySymmetricMarks() {
+        val opened = mutableSetOf<String>()
+        clusters.forEachIndexed { index, mark ->
+            if (mark !in symmetricMarks) return@forEachIndexed
+            val previous = clusters.getOrNull(index - 1)
+            val next = clusters.getOrNull(index + 1)
+            // Keep contractions and unquoted possessives in their Latin word, including inside 'dialogue'.
+            if (mark == "'" && previous?.isLatinWordPart() == true &&
+                (next?.isLatinWordPart() == true || mark !in opened)
+            ) return@forEachIndexed
+
+            if (opened.remove(mark)) {
+                symmetricRoles[index] = CLOSE
+            } else if (next != null && !isWordSpace(next) &&
+                (previous == null || isWordSpace(previous) || isOpeningAt(index - 1) || previous in closing)
+            ) {
+                symmetricRoles[index] = OPEN
+                opened += mark
+            } else if (previous != null && !isWordSpace(previous) &&
+                (next == null || isWordSpace(next) || next in closing)
+            ) {
+                // Dialogue can continue from another paragraph, so an unmatched final mark still closes.
+                symmetricRoles[index] = CLOSE
+            }
+        }
+    }
+
+    private fun isOpeningAt(index: Int): Boolean = index in clusters.indices &&
+            (clusters[index] in opening || symmetricRoles[index] == OPEN)
+
+    private fun isClosingAt(index: Int): Boolean = index in clusters.indices &&
+            (clusters[index] in closing || symmetricRoles[index] == CLOSE)
+
+    /** Used again during pagination so refinement cannot undo a contextual quote boundary. */
+    internal fun isForbiddenBreakAt(index: Int): Boolean = index in 1 until clusters.size &&
+            (isForbiddenBreak(clusters[index - 1], clusters[index]) ||
+                    (symmetricRoles[index] == CLOSE && clusters[index - 1] != clusters[index]) ||
+                    symmetricRoles[index - 1] == OPEN)
 
     private fun breakLines() {
         if (clusters.isEmpty()) return
@@ -38,7 +80,11 @@ class ChineseLineBreaker(
             var carriedClusters = 0
             var hungLine = false
             val currentWidthLimit = if (widths.isEmpty()) firstWidthLimit else widthLimit
-            if (lineWidth > currentWidthLimit) {
+            // 行首不留词间空格：本行已经放下内容时，溢出到这里的空格留在本行行尾（尾随空格
+            // 不可见），由紧随其后的词首字符触发正常的整词回退断行。若在这里直接断行，
+            // 空格会被整块携带到下一行，英文正文每次断在词间都会在行首多出一个空格。
+            val keepSpaceAtLineEnd = isWordSpace(cluster) && index > clusterStarts.last()
+            if (lineWidth > currentWidthLimit && !keepSpaceAtLineEnd) {
                 val lineStart = clusterStarts.last()
                 fun carryFrom(candidate: Int) {
                     val start = safeBreakStart(candidate, lineStart)
@@ -57,18 +103,19 @@ class ChineseLineBreaker(
                 fun compressibleAt(at: Int): Boolean =
                     at in widthsPx.indices && widthsPx[at] < ideographWidthPx
 
-                val previousClosing = index > 0 && clusters[index - 1] in closing
-                val previousOpening = index > 0 && clusters[index - 1] in opening
-                val secondPreviousOpening = index > 1 && clusters[index - 2] in opening
-                val nextClosing = index < clusters.lastIndex && clusters[index + 1] in closing
+                val currentClosing = isClosingAt(index)
+                val previousClosing = isClosingAt(index - 1)
+                val previousOpening = isOpeningAt(index - 1)
+                val secondPreviousOpening = isOpeningAt(index - 2)
+                val nextClosing = isClosingAt(index + 1)
                 val compressibleAround = when {
                     previousOpening && secondPreviousOpening ->
                         compressibleAt(index - 1) || compressibleAt(index - 2)
 
-                    cluster in closing && previousClosing ->
+                    currentClosing && previousClosing ->
                         compressibleAt(index) || compressibleAt(index - 1)
 
-                    cluster in closing && secondPreviousOpening ->
+                    currentClosing && secondPreviousOpening ->
                         compressibleAt(index) || compressibleAt(index - 2)
 
                     else -> false
@@ -76,10 +123,18 @@ class ChineseLineBreaker(
                 // 悬挂条件同时排除了「下一字仍是行尾标点」——旧版此时会 reCheck 成回退。
                 val hangs = index > 0 && !compressibleAround && !nextClosing &&
                         ((previousOpening && secondPreviousOpening) ||
-                                (cluster in closing && (previousClosing || secondPreviousOpening)))
+                                (currentClosing && (previousClosing || secondPreviousOpening)))
                 var mode = when {
+                    // Keep the closing mark attached even when the source has a space before it (#2483).
+                    // Pagination tightens the resulting natural width back inside the content bounds.
+                    symmetricRoles[index] == CLOSE && index > lineStart &&
+                            isWordSpace(clusters[index - 1]) -> Mode.HANG
                     hangs -> Mode.HANG
-                    index > 0 && (previousOpening || cluster in closing) -> Mode.PULL_PREVIOUS
+                    // 同一标点连打（`Yes！！！！！”` 里那一串）整块比行尾剩余空间宽时就地断行、
+                    // 本行填满：串内相邻两个标点之间是合法断点。不同收尾标点之间（`。”`）
+                    // 归下面的 PULL_PREVIOUS 回退管。
+                    index > 0 && currentClosing && clusters[index - 1] == cluster -> Mode.NORMAL
+                    index > 0 && (previousOpening || currentClosing) -> Mode.PULL_PREVIOUS
                     else -> Mode.NORMAL
                 }
                 var rewindClusters = 0
@@ -92,7 +147,7 @@ class ChineseLineBreaker(
                         if (candidate != index) {
                             rewindClusters++
                         }
-                        if (clusters[candidate] !in closing && clusters[candidate - 1] !in opening) {
+                        if (!isClosingAt(candidate) && !isOpeningAt(candidate - 1)) {
                             mode = Mode.REWIND
                             break
                         }
@@ -142,15 +197,18 @@ class ChineseLineBreaker(
     /**
      * Keeps a candidate line start from splitting a Latin word that fits on a fresh line.
      *
-     * 回退到词首不得制造新的避头尾违规：词首前一个 cluster 若是开引号/开括号（`opening`），
-     * 回退会让它留在行尾——正是 [isForbiddenBreak] 判定的非法断点（`ReaderPaginator` 的
-     * 收窄回退也依赖该谓词）。此时退回原有断点，宁可保留旧的中文字符级断行，也不制造违规。
+     * 词首（或断点本身）前紧贴开引号/开括号时，只回退到词首会把开标点留在行尾——正是
+     * [isForbiddenBreak] 判定的非法断点。此时连开标点（含连续多个，如 `“(`）一起回退：
+     * 开标点落在下一行行首合法，单词也得以整词保留（#2449：`[Energy]` 被拆成
+     * `[E|nergy`）。开标点串一直贴到本行行首时无处再退——再退本行就空了且断点非法——
+     * 保留原断点，按字符回退（同超长词）。
      */
     private fun safeBreakStart(candidate: Int, lineStart: Int): Int {
-        val wordStart = latinWordStartBefore(candidate) ?: return candidate
-        if (wordStart <= lineStart) return candidate
-        if (clusters[wordStart - 1] in opening) return candidate
-        return wordStart
+        val start = latinWordStartBefore(candidate) ?: candidate
+        if (start <= lineStart) return candidate
+        var breakStart = start
+        while (breakStart > lineStart + 1 && isOpeningAt(breakStart - 1)) breakStart--
+        return if (isOpeningAt(breakStart - 1)) candidate else breakStart
     }
 
     /**
@@ -196,8 +254,21 @@ class ChineseLineBreaker(
     private enum class Mode { NORMAL, PULL_PREVIOUS, REWIND, HANG }
 
     companion object {
+        private const val OPEN: Byte = 1
+        private const val CLOSE: Byte = 2
+        private val symmetricMarks = setOf("\"", "'", "|", "`")
+
+        /**
+         * 避头尾：收尾标点不落行首、开引号不留行尾。
+         * 唯一例外是**同一个标点连打**（`！！！` 中间），见 [breakLines] 里那条 `Mode.NORMAL`；
+         * [ReaderPaginationSession] 收窄行尾时依赖同一谓词，两边必须同口径。
+         */
         internal fun isForbiddenBreak(previous: String, next: String): Boolean =
-            next in closing || previous in opening
+            (next in closing && previous != next) || previous in opening
+
+        /** 词间空格（含不换行空格、全角空格等）：断行时只能留在行尾，不能出现在行首。 */
+        internal fun isWordSpace(cluster: String): Boolean =
+            cluster.isNotEmpty() && cluster.all { it.isWhitespace() || Character.isSpaceChar(it) }
 
         private val closing = setOf(
             "！", "，", "。", "、", "；", "：", "？", "”", "’", "）", "］", "｝", "》",

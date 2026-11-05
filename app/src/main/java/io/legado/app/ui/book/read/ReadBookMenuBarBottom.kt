@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,10 +40,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kyant.backdrop.Backdrop
 import io.legado.app.R
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppVerticalSlider
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -59,16 +62,19 @@ internal fun MenuBottomBar(
     labelColor: Color = LegadoTheme.colorScheme.onSurface,
     progressBarBehavior: String,
     onBrightnessPreview: (Int) -> Unit,
+    seekState: StateFlow<ReadSeekUiState>,
 ) {
-    val seekMax = state.seekMax.coerceAtLeast(0)
+    // 只在本作用域收集定位流：翻页/拖动进度条不会再把整屏拖起来重组（见 ReadSeekUiState）。
+    val seek by seekState.collectAsStateWithLifecycle()
+    val seekMax = seek.seekMax.coerceAtLeast(0)
     val sliderMax = seekMax.toFloat().coerceAtLeast(1f)
     var sliderValue by remember {
         mutableFloatStateOf(
-            state.seekProgress.coerceIn(0, seekMax).toFloat()
+            seek.seekProgress.coerceIn(0, seekMax).toFloat()
         )
     }
     var sliderDragging by remember { mutableStateOf(false) }
-    var previewPageIndex by remember { mutableIntStateOf(state.seekProgress.coerceIn(0, seekMax)) }
+    var previewPageIndex by remember { mutableIntStateOf(seek.seekProgress.coerceIn(0, seekMax)) }
     val toolButtonsBottomPadding = if (buttonGlassEnabled) 6.dp else 0.dp
     val contentBottomPadding = if (bottomPadding > toolButtonsBottomPadding) {
         bottomPadding - toolButtonsBottomPadding
@@ -112,8 +118,8 @@ internal fun MenuBottomBar(
         }
     }
 
-    LaunchedEffect(state.seekProgress, seekMax, progressBarBehavior) {
-        val progress = state.seekProgress.coerceIn(0, seekMax)
+    LaunchedEffect(seek.seekProgress, seekMax, progressBarBehavior) {
+        val progress = seek.seekProgress.coerceIn(0, seekMax)
         previewPageIndex = progress
         if (progressBarBehavior == "page" || !sliderDragging) {
             sliderValue = progress.toFloat()
@@ -205,14 +211,20 @@ internal fun MenuBottomBar(
         Spacer(Modifier.height(12.dp))
 
         // Tool buttons
+        // isActive 是这里的快照，开关态必须进 key 列表，否则点击后高亮不刷新
         val toolButtons = remember(
             context,
             state.menuConfig.bottomBarButtons,
             state.menuConfig.readMenuCustomIcons,
+            state.isLocalBook,
+            state.isLocalTxt,
+            state.bookSource,
             state.isReadAloudRunning,
             state.isAutoPage,
             state.translationMode,
             state.useReplaceRule,
+            state.useMultiSpeaker,
+            state.multiRoleCast,
             eyeProtectionEnabled,
         ) {
             loadToolButtons(
@@ -227,6 +239,13 @@ internal fun MenuBottomBar(
         val pageSize = (itemsPerRow * rowCount).coerceAtLeast(1)
         val pageCount = ceil(toolButtons.size / pageSize.toFloat()).roundToInt().coerceAtLeast(1)
         val pagerState = rememberPagerState(pageCount = { pageCount })
+
+        // 按钮会随书变化（换源/下载等只对在线书显示），页数可能变少，把停留页收进合法范围
+        LaunchedEffect(pageCount) {
+            if (pagerState.currentPage > pageCount - 1) {
+                pagerState.scrollToPage(pageCount - 1)
+            }
+        }
 
         HorizontalPager(
             state = pagerState,
@@ -248,15 +267,21 @@ internal fun MenuBottomBar(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         rowButtons.forEach { button ->
-                            ToolButtonItem(
-                                button = button,
-                                state = state,
-                                colors = colors,
-                                backdrop = backdrop,
-                                glassEnabled = buttonGlassEnabled,
-                                labelColor = labelColor,
-                                modifier = Modifier.width(if (buttonGlassEnabled) 48.dp else 40.dp),
-                            )
+                            // 按 id 记槽位：按钮列表随书/配置变化时，长按展开态不会错配
+                            key(button.id) {
+                                ToolButtonItem(
+                                    button = button,
+                                    state = state,
+                                    colors = colors,
+                                    backdrop = backdrop,
+                                    glassEnabled = buttonGlassEnabled,
+                                    labelColor = labelColor,
+                                    onIntent = onIntent,
+                                    modifier = Modifier.width(
+                                        if (buttonGlassEnabled) 48.dp else 40.dp
+                                    ),
+                                )
+                            }
                         }
                     }
                 }

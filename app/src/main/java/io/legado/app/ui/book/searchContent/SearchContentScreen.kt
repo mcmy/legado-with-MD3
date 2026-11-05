@@ -1,5 +1,6 @@
 package io.legado.app.ui.book.searchContent
 
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
@@ -52,7 +53,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.legado.app.R
+import io.legado.app.data.repository.SearchContentChangedException
 import io.legado.app.data.entities.SearchContentHistory
+import io.legado.app.ui.main.LocalSearchOverlayAnimation
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.adaptiveHorizontalPadding
 import io.legado.app.ui.widget.components.AppFloatingActionButton
@@ -73,13 +76,19 @@ import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarAnimatedActionButton
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
+/**
+ * 搜索正文是压在阅读界面之上的叠层目的地；进出动画由导航 Scene 管理。
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SearchContentRouteScreen(
     onBack: () -> Unit,
+    isTopRoute: Boolean = true,
+    predictiveBackEnabled: Boolean = true,
     autoFocus: Boolean = true,
     viewModel: SearchContentViewModel = koinViewModel()
 ) {
@@ -93,6 +102,22 @@ fun SearchContentRouteScreen(
     }
     DisposableEffect(viewModel) {
         onDispose { viewModel.onIntent(SearchContentIntent.LeaveSearch) }
+    }
+    val overlayAnimation = LocalSearchOverlayAnimation.current
+    val backScope = rememberCoroutineScope()
+    // Nav3 场景持有进退场状态；页面只把系统手势进度送给当前场景，完成后再退栈。
+    PredictiveBackHandler(enabled = isTopRoute) { events ->
+        try {
+            events.collect { event ->
+                if (predictiveBackEnabled) overlayAnimation?.previewBack(event.progress)
+            }
+            onBack()
+        } catch (cancelled: CancellationException) {
+            if (predictiveBackEnabled && isTopRoute) {
+                backScope.launch { overlayAnimation?.cancelPreview() }
+            }
+            throw cancelled
+        }
     }
     SearchContentScreen(
         state = state,
@@ -158,7 +183,9 @@ fun SearchContentScreen(
 
     val contentState = when {
         error != null -> SearchContentState.Error(error)
-        isSearching -> SearchContentState.Loading
+        // 仓库逐章 emit 增量结果：只有还没有任何结果时才让加载态占住列表区，
+        // 否则边搜边出的结果会被 Loading 一直挡住，直到整本扫完才显示。
+        isSearching && searchResults.isEmpty() -> SearchContentState.Loading
         searchQuery.isBlank() -> SearchContentState.History
         searchResults.isEmpty() -> SearchContentState.EmptyResult
         else -> null
@@ -267,8 +294,13 @@ fun SearchContentScreen(
             ) { state ->
                 when (state) {
                     is SearchContentState.Error -> {
+                        val message = if (state.throwable is SearchContentChangedException) {
+                            stringResource(R.string.search_content_changed)
+                        } else {
+                            state.throwable.localizedMessage ?: "发生未知错误"
+                        }
                         EmptyMessage(
-                            message = state.throwable.localizedMessage ?: "发生未知错误",
+                            message = message,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .wrapContentSize()

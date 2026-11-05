@@ -12,18 +12,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Toc
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleanHands
+import androidx.compose.material.icons.filled.Comment
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DisplaySettings
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.FindReplace
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -38,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.legado.app.R
@@ -50,6 +57,8 @@ import io.legado.app.ui.book.read.ReadBookIntent
 import io.legado.app.ui.book.read.ReadBookMenuRoute
 import io.legado.app.ui.book.read.ReadBookSheet
 import io.legado.app.ui.book.read.ReadBookUiState
+import io.legado.app.ui.book.read.isReadMenuActionApplicable
+import io.legado.app.ui.book.read.readMenuActionScopeLabelRes
 import io.legado.app.ui.widget.components.ConfigListEntry
 import io.legado.app.ui.widget.components.ReorderableConfigList
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
@@ -144,6 +153,8 @@ private fun MoreActionsPager(
         val rowCount = if (actions.size > 4) 2 else 1
         HorizontalPager(
             state = pagerState,
+            // 页数很少，手势频繁停在边界；保留平台 stretch 过冲会在松手后反向回弹。
+            overscrollEffect = null,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(
@@ -269,10 +280,17 @@ private fun MoreActionsConfigContent(
     onCancel: () -> Unit,
     onSave: (List<ReadBookButtonConfigItem>) -> Unit,
 ) {
+    val context = LocalContext.current
     val meta = specs.associateBy { it.id }
     val entries = items.mapNotNull { item ->
         meta[item.id]?.let { spec ->
-            ConfigListEntry(item.id, item.enabled, spec.icon, spec.label)
+            ConfigListEntry(
+                id = item.id,
+                enabled = item.enabled,
+                icon = spec.icon,
+                label = spec.label,
+                subtitle = readMenuActionScopeLabelRes(item.id)?.let(context::getString),
+            )
         }
     }
 
@@ -292,28 +310,61 @@ private fun moreActionSpecs(
     onIntent: (ReadBookIntent) -> Unit,
     dispatch: (ReadBookIntent) -> Unit,
 ): List<MoreActionSpec> = listOf(
+    // 换源/刷新/下载/目录规则/编码这类的适用条件统一走按钮注册表，
+    // 免得同一本书在这里能看见、在底栏却被过滤掉（反之亦然）。
     MoreActionSpec(
         "source_custom_button", stringResource(R.string.custom_button), Icons.Default.Extension,
-        applicable = state.bookSource?.customButton == true,
+        applicable = isReadMenuActionApplicable("source_custom_button", state),
         onClick = { dispatch(ReadBookIntent.SourceCustomButton(false)) },
+    ),
+    // 书源四项：顶栏那行在开胶囊或「精简顶部按钮」时不可达，这里作为兜底入口
+    MoreActionSpec(
+        "source_login", stringResource(R.string.login), Icons.AutoMirrored.Filled.Login,
+        applicable = isReadMenuActionApplicable("source_login", state),
+        onClick = { dispatch(ReadBookIntent.ShowLogin) },
+    ),
+    MoreActionSpec(
+        "source_pay", stringResource(R.string.chapter_pay), Icons.Default.Payment,
+        applicable = isReadMenuActionApplicable("source_pay", state),
+        onClick = { dispatch(ReadBookIntent.PayAction) },
+    ),
+    MoreActionSpec(
+        "edit_source", stringResource(R.string.edit_source), Icons.Default.Edit,
+        applicable = isReadMenuActionApplicable("edit_source", state),
+        onClick = { dispatch(ReadBookIntent.OpenSourceEdit) },
+    ),
+    MoreActionSpec(
+        "disable_source", stringResource(R.string.disable_source), Icons.Default.Block,
+        applicable = isReadMenuActionApplicable("disable_source", state),
+        onClick = { dispatch(ReadBookIntent.DisableSource) },
     ),
     MoreActionSpec(
         "change_source", stringResource(R.string.change_origin), Icons.Default.SwapHoriz,
-        applicable = !state.isLocalBook, onClick = { dispatch(ReadBookIntent.MenuChangeSource) }),
+        applicable = isReadMenuActionApplicable("change_source", state),
+        onClick = { dispatch(ReadBookIntent.MenuChangeSource) }),
     MoreActionSpec(
         "refresh", stringResource(R.string.menu_refresh), Icons.Default.Refresh,
-        applicable = !state.isLocalBook, onClick = { dispatch(ReadBookIntent.MenuRefreshDur) }),
+        applicable = isReadMenuActionApplicable("refresh", state),
+        onClick = { dispatch(ReadBookIntent.MenuRefreshDur) }),
     MoreActionSpec(
         "download", stringResource(R.string.offline_cache), Icons.Default.CloudDownload,
-        applicable = !state.isLocalBook,
+        applicable = isReadMenuActionApplicable("download", state),
         onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.Download)) }),
     MoreActionSpec(
+        "audio_download",
+        stringResource(R.string.read_aloud_audio_download_entry), Icons.Default.Download,
+        onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.AudioDownload)) }),
+    MoreActionSpec(
         "toc_rule", stringResource(R.string.txt_toc_rule), Icons.AutoMirrored.Filled.Toc,
-        applicable = state.isLocalTxt, onClick = { dispatch(ReadBookIntent.MenuTocRegex) }),
+        applicable = isReadMenuActionApplicable("toc_rule", state),
+        onClick = { dispatch(ReadBookIntent.MenuTocRegex) }),
     MoreActionSpec(
         "charset", stringResource(R.string.set_charset), Icons.Default.Translate,
-        applicable = state.isLocalBook,
+        applicable = isReadMenuActionApplicable("charset", state),
         onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.Charset)) }),
+    MoreActionSpec(
+        "ai_chat", stringResource(R.string.ai_chat), Icons.AutoMirrored.Filled.Chat,
+        onClick = { dispatch(ReadBookIntent.OpenAiChat) }),
     MoreActionSpec(
         "edit_content", stringResource(R.string.edit_content), Icons.Default.Edit,
         onClick = { dispatch(ReadBookIntent.OpenContentEdit) }),
@@ -354,12 +405,15 @@ private fun moreActionSpecs(
         onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.SimulatedReading)) }),
     MoreActionSpec(
         "get_progress", stringResource(R.string.get_book_progress), Icons.Default.Sync,
-        applicable = state.isReadingProgressSyncConfigured,
+        applicable = state.inBookshelf && state.isReadingProgressSyncConfigured,
         onClick = { dispatch(ReadBookIntent.MenuGetProgress) }),
     MoreActionSpec(
         "cover_progress", stringResource(R.string.cover_book_progress), Icons.Default.Sync,
-        applicable = state.isReadingProgressSyncConfigured,
+        applicable = state.inBookshelf && state.isReadingProgressSyncConfigured,
         onClick = { dispatch(ReadBookIntent.MenuCoverProgress) }),
+    MoreActionSpec(
+        "bubble_style", stringResource(R.string.bubble_config), Icons.Default.Comment,
+        onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.BubbleStyle)) }),
     MoreActionSpec(
         "bottom_button_config", stringResource(R.string.config_btn), Icons.Default.Settings,
         onClick = { onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.ToolButtonConfig)) }),
@@ -403,6 +457,9 @@ private fun PageAnimDropdown(
         R.string.page_anim_cover to PageAnim.coverPageAnim,
         R.string.page_anim_slide to PageAnim.slidePageAnim,
         R.string.page_anim_simulation to PageAnim.simulationPageAnim,
+        R.string.page_anim_ios_curl to PageAnim.iosCurlPageAnim,
+        R.string.page_anim_google_curl to PageAnim.googleCurlPageAnim,
+        R.string.page_anim_parallax to PageAnim.parallaxPageAnim,
         R.string.page_anim_scroll to PageAnim.scrollPageAnim,
         R.string.page_anim_fade to PageAnim.fadePageAnim,
         R.string.page_anim_none to PageAnim.noAnim,

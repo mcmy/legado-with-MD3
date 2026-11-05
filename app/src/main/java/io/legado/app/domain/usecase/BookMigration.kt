@@ -59,7 +59,11 @@ internal fun Book.migrateInto(
         target.customIntro = customIntro
         target.remark = remark
     }
+    if (options.migrateAuthor) {
+        target.author = author
+    }
     target.canUpdate = canUpdate
+    target.disableReadRecord = disableReadRecord
     if (config.fixedType) {
         target.type = type
     }
@@ -94,6 +98,9 @@ internal fun Book.copyMigratableFieldsTo(
     if (options.migrateRemark) {
         target.customIntro = customIntro
         target.remark = remark
+    }
+    if (options.migrateAuthor) {
+        target.author = author
     }
     if (options.migrateReadConfig) {
         target.readConfig = readConfig

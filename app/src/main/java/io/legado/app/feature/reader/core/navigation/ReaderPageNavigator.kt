@@ -2,8 +2,9 @@ package io.legado.app.feature.reader.core.navigation
 
 import io.legado.app.feature.reader.core.model.ReaderElement
 import io.legado.app.feature.reader.core.model.ReaderPage
+import io.legado.app.feature.reader.core.model.ReaderPageId
 import io.legado.app.feature.reader.core.model.ReaderPageWindow
-import io.legado.app.feature.reader.core.navigation.ReaderPageNavigator.locate
+import io.legado.app.feature.reader.core.semantic.ReaderSemanticLocation
 
 data class ReaderNavigationResult(
     val pageIndex: Int,
@@ -28,6 +29,29 @@ data class ReaderPageContext(
 )
 
 object ReaderPageNavigator {
+    /** Page-table insertions, removals and same-id replacements must not reuse an old index. */
+    fun rebasePageIndex(pages: List<ReaderPage>, previousPageId: ReaderPageId?): Int? =
+        previousPageId?.let { id -> pages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
+
+    /** Retain prefetched chapter layouts and the displayed chapter during a loading handoff. */
+    fun retainChapterWindow(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        displayedChapterIndex: Int?,
+        forwardChapterCount: Int = 1,
+    ): List<ReaderPage> = pages.filter {
+        it.id.chapterIndex in chapterIndex - 1..chapterIndex + forwardChapterCount ||
+                it.id.chapterIndex == displayedChapterIndex
+    }
+
+    /** Keep a synchronous turn result visible until the host acknowledges or replaces it. */
+    fun resolveWindow(
+        host: ReaderPageWindow,
+        pendingBase: ReaderPageWindow?,
+        pending: ReaderPageWindow?,
+    ): ReaderPageWindow =
+        if (pending != null && (host === pendingBase || host === pending || (pendingBase?.current != null && host.current?.id == pendingBase.current.id))) pending else host
+
     fun bodyParagraphAt(pages: List<ReaderPage>, chapterIndex: Int, chapterPosition: Int): Int? = pages
         .asSequence()
         .filter { it.id.chapterIndex == chapterIndex }
@@ -119,6 +143,50 @@ object ReaderPageNavigator {
     fun locate(pages: List<ReaderPage>, chapterIndex: Int, chapterPosition: Int): Int =
         locateOrNull(pages, chapterIndex, chapterPosition) ?: 0
 
+    /** A streamed last page cannot stand in for a saved position that has not been laid out yet. */
+    fun locateReadyPage(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        chapterPosition: Int,
+        chapterStreaming: Boolean,
+    ): Int? {
+        val index = locateOrNull(pages, chapterIndex, chapterPosition) ?: return null
+        val hasFollowingPage = pages.getOrNull(index + 1)?.id?.chapterIndex == chapterIndex
+        return index.takeIf {
+            !chapterStreaming || hasFollowingPage || containsChapterPosition(
+                pages[index],
+                chapterPosition
+            )
+        }
+    }
+
+    /** Body positions are half-open; titles use a separate coordinate space. */
+    fun containsChapterPosition(page: ReaderPage, chapterPosition: Int): Boolean {
+        // Allocation-free scan: same min/max semantics as the previous mapNotNull version.
+        var start = Int.MAX_VALUE
+        var endInclusive = Int.MIN_VALUE
+        for (element in page.elements) {
+            val range = elementRange(element) ?: continue
+            if (range.first < start) start = range.first
+            if (range.last > endInclusive) endInclusive = range.last
+        }
+        if (endInclusive == Int.MIN_VALUE) return false
+        return chapterPosition in start..endInclusive
+    }
+
+    /**
+     * Pagination may finish for a chapter that is no longer current. Follow the reading
+     * anchor, or keep the previously visible page while the current chapter is still loading.
+     * Page identity is required for the fallback: inserting preceding pages changes indexes.
+     */
+    fun locateAfterPagination(
+        pages: List<ReaderPage>,
+        chapterIndex: Int,
+        chapterPosition: Int,
+        previousPageId: ReaderPageId?,
+    ): Int? = locateOrNull(pages, chapterIndex, chapterPosition)
+        ?: previousPageId?.let { id -> pages.indexOfFirst { it.id == id }.takeIf { it >= 0 } }
+
     fun chapterPosition(pages: List<ReaderPage>, pageIndex: Int): ReaderChapterPagePosition? {
         val page = pages.getOrNull(pageIndex) ?: return null
         val chapterIndex = page.id.chapterIndex
@@ -140,18 +208,36 @@ object ReaderPageNavigator {
         return chapterPages[chapterPageIndex.coerceIn(chapterPages.indices)].index
     }
 
-    fun pageContext(pages: List<ReaderPage>, pageIndex: Int): ReaderPageContext? {
+    fun pageContext(pages: List<ReaderPage>, pageIndex: Int, canonicalBody: String? = null): ReaderPageContext? {
         val page = pages.getOrNull(pageIndex) ?: return null
-        val positions = page.elements.mapNotNull(::elementRange)
-        if (positions.isEmpty() && page.elements.none { it is ReaderElement.Text && it.emphasized }) return null
-        val start = positions.minOfOrNull { it.first } ?: 0
-        val contentEnd = positions.maxOfOrNull { it.last + 1 } ?: 0
-        val nextPageStart = pages.getOrNull(pageIndex + 1)
+        // Allocation-free scan: same min/max semantics as the previous mapNotNull version.
+        var hasPosition = false
+        var start = 0
+        var contentEnd = 0
+        for (element in page.elements) {
+            val range = elementRange(element) ?: continue
+            if (!hasPosition) {
+                hasPosition = true
+                start = range.first
+                contentEnd = range.last + 1
+            } else {
+                if (range.first < start) start = range.first
+                if (range.last + 1 > contentEnd) contentEnd = range.last + 1
+            }
+        }
+        if (!hasPosition && page.elements.none { it is ReaderElement.Text && it.emphasized }) return null
+        var nextPageStart: Int? = null
+        pages.getOrNull(pageIndex + 1)
             ?.takeIf { it.id.chapterIndex == page.id.chapterIndex }
-            ?.elements
-            ?.mapNotNull(::elementRange)
-            ?.minOfOrNull { it.first }
-            ?.takeIf { it > start }
+            ?.let { nextPage ->
+                for (element in nextPage.elements) {
+                    val range = elementRange(element) ?: continue
+                    if (nextPageStart == null || range.first < nextPageStart!!) {
+                        nextPageStart = range.first
+                    }
+                }
+            }
+        nextPageStart = nextPageStart?.takeIf { it > start }
         val firstBodyParagraph = page.elements.asSequence()
             .filterIsInstance<ReaderElement.Text>()
             .filterNot { it.emphasized }
@@ -160,12 +246,18 @@ object ReaderPageNavigator {
             .minByOrNull { paragraph ->
                 paragraph.minOf { it.chapterPosition }
             }
+        // Geometry locates the range; persisted text comes from the body, never title/decorative rows.
+        val bodyText = canonicalBody?.let { body ->
+            val from = ReaderSemanticLocation.clampOffset(body, start)
+            val until = ReaderSemanticLocation.clampOffset(body, nextPageStart ?: contentEnd).coerceAtLeast(from)
+            body.substring(from, until)
+        }
         return ReaderPageContext(
             chapterIndex = page.id.chapterIndex,
             chapterTitle = page.chapterTitle,
             startPosition = start,
             endPosition = nextPageStart ?: contentEnd.coerceAtLeast(start + 1),
-            text = page.text,
+            text = bodyText ?: page.text,
             contentStartPosition = firstBodyParagraph?.minOf { it.chapterPosition },
             anchorText = firstBodyParagraph
                 ?.joinToString(separator = "") { it.value }
@@ -180,14 +272,21 @@ object ReaderPageNavigator {
      * 旧 View 的 `TextPage.chapterPosition = textLines.first().chapterPosition` 建立在两者同空间的
      * 前提上，迁移后不再等价。
      */
-    fun pageStart(page: ReaderPage): Int = page.elements.mapNotNull(::elementRange)
-        .minOfOrNull { it.first } ?: 0
+    fun pageStart(page: ReaderPage): Int {
+        // Allocation-free scan: same min semantics as the previous mapNotNull version.
+        var start = Int.MAX_VALUE
+        for (element in page.elements) {
+            val range = elementRange(element) ?: continue
+            if (range.first < start) start = range.first
+        }
+        return if (start == Int.MAX_VALUE) 0 else start
+    }
 
     private fun elementRange(element: ReaderElement): IntRange? = when (element) {
         is ReaderElement.Text -> if (element.emphasized) null else element.chapterPosition until
             (element.chapterPosition + element.value.length.coerceAtLeast(1))
         is ReaderElement.Image -> element.chapterPosition..element.chapterPosition
-        is ReaderElement.Spacer -> element.chapterPosition..element.chapterPosition
+        is ReaderElement.Spacer -> element.chapterPosition until element.chapterPosition + element.semanticLength
         else -> null
     }
 }

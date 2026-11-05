@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +36,8 @@ import io.legado.app.domain.model.settings.BookshelfSettings
 import io.legado.app.ui.config.themeConfig.LabelColorManageSheet
 import io.legado.app.ui.config.themeConfig.TagColorPair
 import io.legado.app.ui.theme.LegadoTheme
+import io.legado.app.ui.widget.components.alert.AppAlertDialog
+import io.legado.app.ui.widget.components.checkBox.CheckboxItem
 import io.legado.app.ui.widget.components.dialog.ColorPickerSheet
 import io.legado.app.ui.widget.components.divider.PillDivider
 import io.legado.app.ui.widget.components.divider.PillHeaderDivider
@@ -62,6 +65,7 @@ fun BookshelfConfigSheet(
     var showLabelColorManage by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
     var showColorPickerDark by remember { mutableStateOf(false) }
+    var showTagContentDialog by rememberSaveable { mutableStateOf(false) }
 
     AppModalBottomSheet(
         title = stringResource(R.string.bookshelf_layout),
@@ -153,7 +157,10 @@ fun BookshelfConfigSheet(
                         }
                     )
 
-                    AnimatedVisibility(visible = folderLayoutMode == 1) {
+                    // 分组网格与书籍网格共用「固定列数」开关：关闭时列数由封面宽度推出，此滑杆不生效
+                    AnimatedVisibility(
+                        visible = folderLayoutMode == 1 && settings.bookshelfGridFixedColumns
+                    ) {
                         val folderGridCount =
                             if (isLandscape) settings.bookshelfFolderLayoutGridLandscape
                             else settings.bookshelfFolderLayoutGridPortrait
@@ -278,21 +285,70 @@ fun BookshelfConfigSheet(
 
                     val gridCount =
                         if (isLandscape) settings.bookshelfLayoutGridLandscape else settings.bookshelfLayoutGridPortrait
-                    CompactSliderSettingItem(
-                        title = stringResource(R.string.number_rows_columns),
-                        value = gridCount.toFloat(),
-                        valueRange = 1f..15f,
-                        steps = 14,
-                        onValueChange = { value ->
-                            onUpdate {
-                                if (isLandscape) {
-                                    it.copy(bookshelfLayoutGridLandscape = value.toInt())
+                    CompactSwitchSettingItem(
+                        title = stringResource(R.string.bookshelf_grid_fixed_columns),
+                        description = stringResource(R.string.bookshelf_grid_fixed_columns_summary),
+                        checked = settings.bookshelfGridFixedColumns,
+                        color = LegadoTheme.colorScheme.surface,
+                        onCheckedChange = { checked ->
+                            onUpdate { current ->
+                                // 两个开关至少要开一个：都关掉就没有决定尺寸的基准
+                                val next = current.copy(bookshelfGridFixedColumns = checked)
+                                if (!next.bookshelfGridFixedColumns && !next.bookshelfGridFixedCoverWidth) {
+                                    next.copy(bookshelfGridFixedCoverWidth = true)
                                 } else {
-                                    it.copy(bookshelfLayoutGridPortrait = value.toInt())
+                                    next
                                 }
                             }
                         }
                     )
+
+                    AnimatedVisibility(visible = settings.bookshelfGridFixedColumns) {
+                        CompactSliderSettingItem(
+                            title = stringResource(R.string.number_rows_columns),
+                            value = gridCount.toFloat(),
+                            valueRange = 1f..15f,
+                            steps = 14,
+                            onValueChange = { value ->
+                                onUpdate {
+                                    if (isLandscape) {
+                                        it.copy(bookshelfLayoutGridLandscape = value.toInt())
+                                    } else {
+                                        it.copy(bookshelfLayoutGridPortrait = value.toInt())
+                                    }
+                                }
+                            }
+                        )
+                    }
+
+                    CompactSwitchSettingItem(
+                        title = stringResource(R.string.bookshelf_grid_fixed_cover_width),
+                        description = stringResource(R.string.bookshelf_grid_fixed_cover_width_summary),
+                        checked = settings.bookshelfGridFixedCoverWidth,
+                        color = LegadoTheme.colorScheme.surface,
+                        onCheckedChange = { checked ->
+                            onUpdate { current ->
+                                val next = current.copy(bookshelfGridFixedCoverWidth = checked)
+                                if (!next.bookshelfGridFixedColumns && !next.bookshelfGridFixedCoverWidth) {
+                                    next.copy(bookshelfGridFixedColumns = true)
+                                } else {
+                                    next
+                                }
+                            }
+                        }
+                    )
+
+                    AnimatedVisibility(visible = settings.bookshelfGridFixedCoverWidth) {
+                        CompactSliderSettingItem(
+                            title = stringResource(R.string.grid_cover_width),
+                            value = settings.bookshelfGridCoverWidth.toFloat(),
+                            valueRange = 40f..150f,
+                            steps = 110,
+                            onValueChange = { value ->
+                                onUpdate { it.copy(bookshelfGridCoverWidth = value.toInt()) }
+                            }
+                        )
+                    }
 
                     CompactSwitchSettingItem(
                         title = stringResource(R.string.compact_title_font),
@@ -309,16 +365,6 @@ fun BookshelfConfigSheet(
                         color = LegadoTheme.colorScheme.surface,
                         onCheckedChange = { value ->
                             onUpdate { it.copy(bookshelfTitleCenter = value) }
-                        }
-                    )
-
-                    CompactSliderSettingItem(
-                        title = stringResource(R.string.grid_cover_width),
-                        value = settings.bookshelfGridCoverWidth.toFloat(),
-                        valueRange = 40f..150f,
-                        steps = 110,
-                        onValueChange = { value ->
-                            onUpdate { it.copy(bookshelfGridCoverWidth = value.toInt()) }
                         }
                     )
                 }
@@ -495,6 +541,21 @@ fun BookshelfConfigSheet(
                                 Column(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
+                                    val selectedTagSources = listOfNotNull(
+                                        stringResource(R.string.bookshelf_tag_custom)
+                                            .takeIf { settings.bookshelfShowCustomTags },
+                                        stringResource(R.string.source_categories)
+                                            .takeIf { settings.bookshelfShowSourceTags },
+                                        stringResource(R.string.bookshelf_tag_word_count)
+                                            .takeIf { settings.bookshelfShowWordCount },
+                                    )
+                                    CompactClickableSettingItem(
+                                        title = stringResource(R.string.bookshelf_tag_content),
+                                        description = selectedTagSources.joinToString(" · ")
+                                            .ifEmpty { stringResource(R.string.bookshelf_tag_none) },
+                                        color = LegadoTheme.colorScheme.surface,
+                                        onClick = { showTagContentDialog = true },
+                                    )
                                     CompactSwitchSettingItem(
                                         title = stringResource(R.string.custom_tag_colors),
                                         checked = enableCustomTagColors,
@@ -596,6 +657,7 @@ fun BookshelfConfigSheet(
 
             CompactSwitchSettingItem(
                 title = stringResource(R.string.search_filter_first),
+                description = stringResource(R.string.bookshelf_search_button_hint),
                 checked = settings.bookshelfSearchActionDirectToSearch,
                 color = LegadoTheme.colorScheme.surface,
                 onCheckedChange = { value ->
@@ -636,6 +698,14 @@ fun BookshelfConfigSheet(
 
         }
 
+        if (showTagContentDialog) {
+            BookshelfTagContentDialog(
+                settings = settings,
+                onUpdate = onUpdate,
+                onDismissRequest = { showTagContentDialog = false },
+            )
+        }
+
         LabelColorManageSheet(
             show = showLabelColorManage,
             themeColor = themeColor,
@@ -662,4 +732,53 @@ fun BookshelfConfigSheet(
             }
         )
     }
+}
+
+@Composable
+private fun BookshelfTagContentDialog(
+    settings: BookshelfSettings,
+    onUpdate: ((BookshelfSettings) -> BookshelfSettings) -> Unit,
+    onDismissRequest: () -> Unit,
+) {
+    var showCustomTags by rememberSaveable { mutableStateOf(settings.bookshelfShowCustomTags) }
+    var showSourceTags by rememberSaveable { mutableStateOf(settings.bookshelfShowSourceTags) }
+    var showWordCount by rememberSaveable { mutableStateOf(settings.bookshelfShowWordCount) }
+
+    AppAlertDialog(
+        show = true,
+        onDismissRequest = onDismissRequest,
+        title = stringResource(R.string.bookshelf_tag_content),
+        content = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CheckboxItem(
+                    title = stringResource(R.string.bookshelf_tag_custom),
+                    checked = showCustomTags,
+                    onCheckedChange = { showCustomTags = it },
+                )
+                CheckboxItem(
+                    title = stringResource(R.string.source_categories),
+                    checked = showSourceTags,
+                    onCheckedChange = { showSourceTags = it },
+                )
+                CheckboxItem(
+                    title = stringResource(R.string.bookshelf_tag_word_count),
+                    checked = showWordCount,
+                    onCheckedChange = { showWordCount = it },
+                )
+            }
+        },
+        confirmText = stringResource(R.string.ok),
+        onConfirm = {
+            onUpdate {
+                it.copy(
+                    bookshelfShowCustomTags = showCustomTags,
+                    bookshelfShowSourceTags = showSourceTags,
+                    bookshelfShowWordCount = showWordCount,
+                )
+            }
+            onDismissRequest()
+        },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = onDismissRequest,
+    )
 }

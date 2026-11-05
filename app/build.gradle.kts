@@ -4,6 +4,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.android.application)
+    alias(libs.plugins.aboutlibraries.android)
     alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.room)
@@ -13,6 +14,12 @@ plugins {
 }
 
 apply(from = "download.gradle")
+
+aboutLibraries {
+    collect {
+        configPath = file("aboutlibraries")
+    }
+}
 
 
 val versionPropsFile = file("version.properties")
@@ -32,7 +39,9 @@ val enableAbiSplits = providers.gradleProperty("enableAbiSplits")
     .getOrElse(true)
 
 android {
+    // Compose 1.13.0-beta01 的 AAR 元数据要求 compileSdk >= 37.1（android-37.0 会被 checkAarMetadata 拒绝）。
     compileSdk = 37
+    compileSdkMinor = 1
     namespace = "io.legado.app"
 
     signingConfigs {
@@ -128,11 +137,24 @@ android {
         }
     }
 
-    flavorDimensions += "mode"
+    // 维度顺序决定变体名：appCoreDebug / appComicDebug。
+    flavorDimensions += listOf("mode", "engine")
     productFlavors {
         create("app") {
             dimension = "mode"
             manifestPlaceholders["APP_CHANNEL_VALUE"] = "app"
+        }
+        // 基础产品：不含本地推理运行时与内置模型；云端 OCR、AI 识图/翻译保持可用。
+        create("core") {
+            dimension = "engine"
+            buildConfigField("boolean", "MANGA_LOCAL_ENGINE", "false")
+        }
+        // 漫画增强版：内置 ML Kit、ONNX Runtime、气泡模型和本地引擎装配。
+        // 产品标记与变体名统一用 comic，不再叫 full——它相对 core 多的就是漫画本地翻译能力。
+        create("comic") {
+            dimension = "engine"
+            buildConfigField("boolean", "MANGA_LOCAL_ENGINE", "true")
+            proguardFile("proguard-manga-engine.pro")
         }
     }
 
@@ -193,6 +215,8 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
     androidTestImplementation(libs.bundles.androidTest)
     implementation(libs.kotlin.stdlib)
     implementation(libs.kotlinx.collections.immutable)
@@ -215,7 +239,10 @@ dependencies {
     implementation(libs.lifecycle.service)
     implementation(libs.media.media)
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.datasource.okhttp)
+    implementation(libs.media3.ui)
     implementation(libs.splitties.appctx)
     implementation(libs.splitties.systemservices)
     implementation(libs.splitties.views)
@@ -269,9 +296,18 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.activity.compose)
     implementation(libs.androidx.compose.ui)
+    // Compose 整条线对齐（版本见 gradle/libs.versions.toml 的 composeTrain）：
+    // platform(compose-bom) 不具强制力，material3 的传递依赖会把整线抬到缺少
+    // b/549552303 修复的 alpha 版本，因此这些构件需要显式声明版本。
+    implementation(libs.androidx.compose.runtime)
+    implementation(libs.androidx.compose.ui.text)
+    implementation(libs.androidx.compose.ui.util)
+    implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.material.ripple)
     implementation(libs.androidx.compose.ui.tooling.preview)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.aboutlibraries.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
@@ -280,6 +316,13 @@ dependencies {
     implementation(libs.telephoto.zoomable.image.coil3)
     implementation(libs.accompanist.webview)
     implementation(libs.kotlinx.coroutines.android)
+    // Bundled recognizers work without Google Play Services or first-use downloads.
+    // 仅 comic（漫画增强版）内置；core 用 UnavailableMangaLocalEngine 装配，依赖图里不得出现这些库。
+    "comicImplementation"(libs.onnxruntime.android)
+    "comicImplementation"("com.google.mlkit:text-recognition:${libs.versions.mlkitText.get()}")
+    "comicImplementation"("com.google.mlkit:text-recognition-japanese:${libs.versions.mlkitText.get()}")
+    "comicImplementation"("com.google.mlkit:text-recognition-chinese:${libs.versions.mlkitText.get()}")
+    "comicImplementation"("com.google.mlkit:text-recognition-korean:${libs.versions.mlkitText.get()}")
     implementation(libs.kotlinx.datetime)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
@@ -289,7 +332,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.viewbinding)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
-    // 直接声明并抬高 navigationevent 版本，覆盖 navigation3 传递依赖的 1.1.2（预测式返回崩溃）
+    // 显式保持 navigationevent 1.2 系列，保留已分离输入的预测式返回崩溃修复。
     implementation(libs.androidx.navigationevent)
     implementation(libs.androidx.navigationevent.compose)
     implementation(libs.androidx.compose.adaptive)
@@ -306,7 +349,7 @@ dependencies {
     implementation(libs.reorderable)
     implementation(libs.material.kolor)
     implementation(libs.haze.core)
-    implementation(libs.haze.materials)
+    implementation(libs.haze.blur)
     implementation(libs.miuix.ui.android)
     implementation(libs.miuix.preference.android)
     implementation(libs.miuix.icons.android)
@@ -316,4 +359,13 @@ dependencies {
     implementation(libs.backdrop)
     implementation(libs.lyricViewx)
     implementation(libs.timber)
+}
+
+// 每个测试类独占一个 JVM，并且不并行 fork。Robolectric + Compose 动画这一批用例靠推进主线程
+// shadow looper 判定长按阈值与预测式返回的时序：前一个类留下的调度队列会让后一个类推不到阈值；
+// 多个 fork 并发抢 CPU 时，动画协程赶不上断言（`progress` 停在起始值、`running=false`），
+// 同一套代码会在不同批次的类上随机报错。隔离与串行是这类用例成立的前提。
+tasks.withType<Test>().configureEach {
+    forkEvery = 1
+    maxParallelForks = 1
 }

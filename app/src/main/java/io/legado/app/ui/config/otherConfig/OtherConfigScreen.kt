@@ -68,6 +68,15 @@ fun OtherConfigScreen(
                     onValueChange = { onIntent(OtherConfigIntent.UpdateToVariantChanged(it)) }
                 )
 
+                DropdownListSettingItem(
+                    title = stringResource(R.string.update_endpoint_title),
+                    description = stringResource(R.string.update_endpoint_summary),
+                    selectedValue = state.updateEndpoint,
+                    displayEntries = stringArrayResource(R.array.update_endpoint),
+                    entryValues = stringArrayResource(R.array.update_endpoint_value),
+                    onValueChange = { onIntent(OtherConfigIntent.UpdateEndpointChanged(it)) }
+                )
+
                 SwitchSettingItem(
                     title = stringResource(R.string.auto_check_update_on_start_title),
                     description = stringResource(R.string.auto_check_update_on_start_summary),
@@ -156,14 +165,18 @@ fun OtherConfigScreen(
                     onCheckedChange = { onIntent(OtherConfigIntent.ShowAddToShelfAlertChanged(it)) }
                 )
 
-                SwitchSettingItem(
-                    title = stringResource(R.string.show_manga_ui),
-                    checked = state.showMangaUi,
-                    onCheckedChange = { onIntent(OtherConfigIntent.ShowMangaUiChanged(it)) }
-                )
             }
 
                 SplicedColumnGroup(title = stringResource(R.string.other_setting)) {
+
+                    ClickableSettingItem(
+                        title = stringResource(R.string.background_battery_optimization_title),
+                        description = stringResource(
+                            if (state.isBatteryIgnored) R.string.battery_optimization_status_ignored
+                            else R.string.battery_optimization_status_not_ignored
+                        ),
+                        onClick = { onIntent(OtherConfigIntent.ShowOverlay(OtherConfigOverlay.BatteryOptimizationGuide)) }
+                    )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.web_service_wake_lock),
@@ -196,6 +209,13 @@ fun OtherConfigScreen(
                     description = stringResource(R.string.clear_webview_data_summary),
                     onClick = { onIntent(OtherConfigIntent.ShowOverlay(OtherConfigOverlay.ClearWebViewConfirmation)) }
                 )
+
+                    SwitchSettingItem(
+                        title = stringResource(R.string.block_source_browser),
+                        description = stringResource(R.string.block_source_browser_summary),
+                        checked = state.blockSourceBrowser,
+                        onCheckedChange = { onIntent(OtherConfigIntent.BlockSourceBrowserChanged(it)) }
+                    )
 
                 SwitchSettingItem(
                     title = stringResource(R.string.add_to_text_context_menu_t),

@@ -11,6 +11,8 @@ data class ReadAloudVoice(
     val managedBy: String = MANAGED_BY_USER,
     val enabled: Boolean = true,
     val available: Boolean = true,
+    /** 用户主动排除：不进候选、不参与选音，但行要留着，见实体上的说明。 */
+    val excluded: Boolean = false,
     val revision: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
@@ -21,6 +23,14 @@ data class ReadAloudVoice(
         const val ENGINE_CLOUD = "cloud_tts"
         const val MANAGED_BY_USER = "user"
         const val MANAGED_BY_CONFIGURED_TTS = "configured_tts"
+
+        /**
+         * 源自带目录：从 httpTTS 源的 `speakersJson` / `emotionsJson` 导入的音色。
+         *
+         * 单独一个取值，是为了不和 [MANAGED_BY_CONFIGURED_TTS] 混在一次回收里——
+         * 后者每次同步都以「当前引擎列表」为全集，会把源自带的目录行整批删掉。
+         */
+        const val MANAGED_BY_HTTP_SOURCE_CATALOG = "http_source_catalog"
     }
 }
 
@@ -97,6 +107,13 @@ data class ChapterSpeechSegment(
     val characterId: String? = null,
     val characterName: String = "",
     val emotion: String = "",
+    /**
+     * 只作用于这一段的变声器预设名（正文胶囊那一栏设的），空 = 跟随角色全局。
+     *
+     * 由 `CastSpeechOverlay` 从分配表抄进播放单元：朗读侧只拿得到单元，
+     * 让它带着名字下来就不用再去猜「这句是章内第几个引号」。
+     */
+    val voiceEffect: String = "",
     val confidence: Float = 0f,
     val source: SpeechResolutionSource,
     val userLocked: Boolean = false,
@@ -122,11 +139,24 @@ data class SpeechSegmentDraft(
     val source: SpeechResolutionSource = SpeechResolutionSource.Rule,
 )
 
+/** 配置解析出的声线；不从正文正则覆盖后的片段反推旁白配置。 */
+data class SpeechVoiceSelection(
+    val voice: ReadAloudVoice? = null,
+    val fallbackVoices: List<ReadAloudVoice> = emptyList(),
+)
+
 data class SpeechPlanItem(
     val segment: ChapterSpeechSegment,
     val voice: ReadAloudVoice?,
     val fallbackVoices: List<ReadAloudVoice>,
     val characterPerformance: CharacterPerformanceProfile? = null,
+    /**
+     * 正则角色「命中不念、改放音频」带下来的音效串，格式契约见
+     * [io.legado.app.help.readaloud.cast.RegexCastSplitter] 底部（多条换行分隔、可带 `#千分位`）。
+     * 生产方 CastSpeechOverlay，消费方 [ReadAloudPlaybackQueue.from] → BaseReadAloudService.takeCueSounds。
+     * 空 = 不放。
+     */
+    val soundEffect: String = "",
 )
 
 data class ChapterSpeechAnalysisResult(

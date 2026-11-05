@@ -65,8 +65,13 @@ sealed interface MangaReaderItemUi {
         val pageIndex: Int,
         val pageCount: Int,
         val chapterName: String,
+        val chapterSubject: String,
         val loadState: MangaPageLoadState = MangaPageLoadState.Queued,
         val retryRevision: Int = 0,
+        /** Derived raster, leaving source identity and load callbacks unchanged. */
+        val translatedImageUrl: String? = null,
+        /** Original data is available, including data-only prefetch before display. */
+        val sourceReady: Boolean = false,
     ) : MangaReaderItemUi
 
     @Stable
@@ -95,7 +100,13 @@ sealed interface MangaReaderItemUi {
 @Stable
 sealed interface MangaPageLoadState {
     data object Queued : MangaPageLoadState
-    data object Loading : MangaPageLoadState
+
+    /**
+     * @param progress 下载百分比 0..100；服务端未返回 Content-Length 时为 null，
+     * 此时 UI 退回不确定进度（只转圈，不显示数字）。
+     */
+    data class Loading(val progress: Int? = null) : MangaPageLoadState
+
     data object Ready : MangaPageLoadState
     data class Failed(val message: String?) : MangaPageLoadState
 }
@@ -126,6 +137,7 @@ data class MangaReaderSettings(
     val longPressEnabled: Boolean = true,
     val preDownloadCount: Int = 10,
     val chapterPrefetchCount: Int = 0,
+    val previousChapterPrefetchCount: Int = 0,
     val autoOfflineCache: Boolean = false,
     val autoReadSpeed: Int = 3,
     val volumeKeyPage: Boolean = false,
@@ -211,6 +223,7 @@ sealed interface MangaReaderIntent {
     data object OpenSourceEdit : MangaReaderIntent
     data class SourceCustomButton(val longClick: Boolean) : MangaReaderIntent
     data object BackPressed : MangaReaderIntent
+    data object CloseReader : MangaReaderIntent
     data object ToggleMenu : MangaReaderIntent
     data object HideMenu : MangaReaderIntent
     data object Retry : MangaReaderIntent
@@ -225,6 +238,10 @@ sealed interface MangaReaderIntent {
     data object CloseSettings : MangaReaderIntent
     data object OpenSourceActions : MangaReaderIntent
     data object OpenCacheActions : MangaReaderIntent
+
+    /** 从设置面板「全局」页打开九宫格点击区域 sheet，不关闭设置面板。 */
+    data object OpenClickActions : MangaReaderIntent
+
     data class CacheChapters(val selection: MangaCacheSelection) : MangaReaderIntent
     data object ToggleAutoRead : MangaReaderIntent
     data object DismissSheet : MangaReaderIntent
@@ -235,9 +252,14 @@ sealed interface MangaReaderIntent {
     data class UpdateMenuPaletteStyle(val value: String) : MangaReaderIntent
     data class UpdateClickAction(val index: Int, val action: Int) : MangaReaderIntent
     data class RetryChapter(val chapterIndex: Int) : MangaReaderIntent
-    data class PageLoadStarted(val key: String) : MangaReaderIntent
-    data class PageLoadSucceeded(val key: String) : MangaReaderIntent
-    data class PageLoadFailed(val key: String, val message: String?) : MangaReaderIntent
+    data class RequestAdjacentChapter(val chapterIndex: Int) : MangaReaderIntent
+    data class PageLoadStarted(val requestId: MangaPageRequestId, val force: Boolean = false) :
+        MangaReaderIntent
+
+    data class PageLoadSucceeded(val requestId: MangaPageRequestId) : MangaReaderIntent
+    data class PageSourceLoaded(val requestId: MangaPageRequestId) : MangaReaderIntent
+    data class PageLoadFailed(val requestId: MangaPageRequestId, val message: String?) :
+        MangaReaderIntent
     data class RetryPage(val key: String) : MangaReaderIntent
     data class RetryFailedPagesInChapter(val chapterIndex: Int) : MangaReaderIntent
     data class PageStep(val direction: Int) : MangaReaderIntent
@@ -262,6 +284,7 @@ sealed interface MangaReaderIntent {
         val companionBeforePage: Boolean = false,
     ) : MangaReaderIntent
 
+    data class SaveTranslatedImage(val url: String) : MangaReaderIntent
     data class ExecutePageAction(val action: MangaPageAction) : MangaReaderIntent
     data class MessageShown(val id: Long) : MangaReaderIntent
 }
@@ -271,6 +294,10 @@ sealed interface MangaReaderSheet {
     data object ChangeSource : MangaReaderSheet
     data object SourceActions : MangaReaderSheet
     data object CacheActions : MangaReaderSheet
+
+    /** 九宫格点击区域：入口在设置面板「全局」页，不再占用设置分类 tab。 */
+    data object ClickActions : MangaReaderSheet
+
     data class PageActions(
         val pageKey: String,
         val companionPageKey: String? = null,
@@ -282,7 +309,7 @@ enum class MangaPageAction { SAVE, SAVE_SPREAD, SHARE, SHARE_SPREAD, COPY, COPY_
 
 enum class MangaCacheSelection { CURRENT, FOLLOWING, ALL }
 
-enum class MangaReaderSettingsCategory { READER, FOOTER, MENU, FILTER, CLICK_ACTIONS, AUTO_READ }
+enum class MangaReaderSettingsCategory { READER, FOOTER, MENU, FILTER, AUTO_READ }
 
 sealed interface MangaReaderDialog {
     data object AddToShelf : MangaReaderDialog
@@ -311,6 +338,7 @@ enum class MangaReaderSettingKey {
     LONG_PRESS,
     PRE_DOWNLOAD,
     CHAPTER_PREFETCH,
+    CHAPTER_PREFETCH_PREV,
     AUTO_OFFLINE_CACHE,
     AUTO_READ_SPEED,
     VOLUME_KEY_PAGE,
@@ -366,3 +394,27 @@ sealed interface MangaReaderEffect {
     data class ShareImage(val filePath: String) : MangaReaderEffect
     data class CopyImage(val filePath: String) : MangaReaderEffect
 }
+
+/** 加载回调必须同时匹配书籍、页面与重试代次。 */
+@Stable
+data class MangaPageRequestId(val bookUrl: String, val key: String, val retryRevision: Int)
+
+internal val MangaReaderItemUi.Page.requestId: MangaPageRequestId
+    get() = MangaPageRequestId(bookUrl, key, retryRevision)
+
+internal fun MangaReaderItemUi.Page.reduceImageLoad(
+    requestId: MangaPageRequestId,
+    next: MangaPageLoadState,
+    force: Boolean = false,
+): MangaReaderItemUi.Page {
+    if (this.requestId != requestId) return this
+    if (!force && next is MangaPageLoadState.Loading && loadState == MangaPageLoadState.Ready) return this
+    val reduced = if (next is MangaPageLoadState.Loading) {
+        next.copy(progress = (loadState as? MangaPageLoadState.Loading)?.progress ?: next.progress)
+    } else next
+    val ready = sourceReady || next == MangaPageLoadState.Ready
+    return if (loadState == reduced && ready == sourceReady) this else copy(loadState = reduced, sourceReady = ready)
+}
+
+internal fun MangaReaderItemUi.Page.reduceSourceLoaded(requestId: MangaPageRequestId): MangaReaderItemUi.Page =
+    if (this.requestId == requestId && !sourceReady) copy(sourceReady = true) else this

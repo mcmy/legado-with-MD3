@@ -1,7 +1,7 @@
 package io.legado.app.feature.reader
 
 import android.graphics.Paint
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import io.legado.app.feature.reader.core.model.ReaderElement
 import io.legado.app.feature.reader.core.model.ReaderPage
 import io.legado.app.feature.reader.core.model.ReaderTextStyle
@@ -23,11 +23,12 @@ internal class ScrollPageDrawData(val page: ReaderPage) {
         textElements.map { it.style }.distinct().associateWith(ReaderAndroidPaintFactory::create)
     val textBackgrounds = page.textBackgroundRuns()
     val textBackgroundBands: List<ReaderBackgroundBand> = textElements.mergeBackgroundBounds()
-    val textBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    // 背景图不许开抗锯齿：九宫格相邻两格各画一条半覆盖的边会合成出一条透底的切割线。
+    val textBackgroundPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     val decorationDrawCache = ReaderPageDecorationDrawCache.create(page)
 
     /** Text-background bitmaps are owned by ReaderTextBackgroundLoader's byte-bounded LRU. */
-    val textBackgroundRevision = mutableStateOf(0)
+    val textBackgroundRevision = mutableIntStateOf(0)
 }
 
 /**

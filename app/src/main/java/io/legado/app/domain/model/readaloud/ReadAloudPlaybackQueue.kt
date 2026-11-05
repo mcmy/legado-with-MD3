@@ -10,6 +10,17 @@ data class ReadAloudPlaybackCue(
     val roleType: SpeechRoleType,
     val characterId: String?,
     val emotion: String = "",
+    /** 这一段的变声器预设名（空 = 跟随角色全局），见 [ChapterSpeechSegment.voiceEffect]。 */
+    val voiceEffect: String = "",
+    /**
+     * 这一单元起播时要并行放的音效串（正则角色里「命中不念、改放音效」那一种），
+     * 由 [from] 从 SpeechPlanItem.soundEffect 原样带下，格式契约见
+     * [io.legado.app.help.readaloud.cast.RegexCastSplitter]。
+     * 解析端 BaseReadAloudService.takeCueSounds；消费方 HttpReadAloudService.scheduleCueSounds
+     * （媒体时钟定位）与 TTSReadAloudService.playCueSounds（立即响），第三条音轨不抢焦点。
+     * 空 = 不放。
+     */
+    val soundEffect: String = "",
     val characterPerformance: CharacterPerformanceProfile? = null,
     val isChapterTitle: Boolean = false,
 ) {
@@ -35,11 +46,14 @@ data class ReadAloudPlaybackInfo(
     val engineName: String = "",
     val characterName: String = "",
     val roleType: SpeechRoleType = SpeechRoleType.Narrator,
+    val chapterTitle: String = "",
+    val chapterIndex: Int = -1,
 )
 
 /** Position-based playback queue independent from reader pagination. */
 class ReadAloudPlaybackQueue private constructor(
     val cues: List<ReadAloudPlaybackCue>,
+    private val narration: SpeechVoiceSelection = SpeechVoiceSelection(),
 ) {
 
     val isEmpty: Boolean get() = cues.isEmpty()
@@ -88,19 +102,22 @@ class ReadAloudPlaybackQueue private constructor(
             chapterStart = 0,
             chapterEnd = 0,
             paragraphIndex = -1,
-            voice = null,
-            fallbackVoices = emptyList(),
+            voice = narration.voice,
+            fallbackVoices = narration.fallbackVoices,
             roleType = SpeechRoleType.Narrator,
             characterId = null,
             isChapterTitle = true,
         )
-        return ReadAloudPlaybackQueue(listOf(titleCue) + cues)
+        return ReadAloudPlaybackQueue(listOf(titleCue) + cues, narration)
     }
 
     companion object {
         val Empty = ReadAloudPlaybackQueue(emptyList())
 
-        fun from(plan: List<SpeechPlanItem>): ReadAloudPlaybackQueue {
+        fun from(
+            plan: List<SpeechPlanItem>,
+            narration: SpeechVoiceSelection = SpeechVoiceSelection(),
+        ): ReadAloudPlaybackQueue {
             if (plan.isEmpty()) return Empty
             val cues = plan.map { item ->
                 val segment = item.segment
@@ -114,13 +131,15 @@ class ReadAloudPlaybackQueue private constructor(
                     roleType = segment.roleType,
                     characterId = segment.characterId,
                     emotion = segment.emotion,
+                    voiceEffect = segment.voiceEffect,
+                    soundEffect = item.soundEffect,
                     characterPerformance = item.characterPerformance,
                 )
             }.sortedWith(compareBy(ReadAloudPlaybackCue::chapterStart, ReadAloudPlaybackCue::chapterEnd))
             require(cues.zipWithNext().none { (left, right) -> left.chapterEnd > right.chapterStart }) {
                 "Playback cues must not overlap"
             }
-            return ReadAloudPlaybackQueue(cues)
+            return ReadAloudPlaybackQueue(cues, narration)
         }
     }
 }

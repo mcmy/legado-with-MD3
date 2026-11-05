@@ -1,6 +1,7 @@
 package io.legado.app.data.repository
 
 import io.legado.app.constant.PreferKey
+import io.legado.app.data.entities.BookGroup
 import io.legado.app.domain.model.settings.BookshelfSettings
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -8,8 +9,22 @@ import org.junit.Test
 class BookshelfSettingsMappingTest {
 
     @Test
-    fun `Bookshelf 48 键写读映射逐字段对应`() {
-        assertEquals(48, BookshelfSettings().toPrefMap().size)
+    fun `旧分组 ID 可读取但写入使用独立键`() {
+        val legacy = mapOf(PreferKey.saveTabPosition to 987654321L).toTestPreferences()
+        val settings = legacy.toBookshelfSettings()
+
+        assertEquals(987654321L, settings.saveTabPosition)
+        assertEquals(987654321L, settings.toPrefMap()[PreferKey.bookshelfSelectedGroupId])
+        assertEquals(false, settings.toPrefMap().containsKey(PreferKey.saveTabPosition))
+        assertEquals(BookGroup.IdAll,
+            mapOf(PreferKey.saveTabPosition to 2).toTestPreferences()
+                .toBookshelfSettings().saveTabPosition
+        )
+    }
+
+    @Test
+    fun `Bookshelf 53 键写读映射逐字段对应`() {
+        assertEquals(53, BookshelfSettings().toPrefMap().size)
         bookshelfMappingSamples().forEach { expected ->
             assertEquals(expected.expectedPrefMap(), expected.toPrefMap())
             assertEquals(
@@ -30,6 +45,38 @@ class BookshelfSettingsMappingTest {
 
         assertEquals(mapOf(PreferKey.hideEmptyGroups to true), values)
     }
+
+    @Test
+    fun `旧配置默认显示所有标签来源`() {
+        val settings = emptyMap<String, Any?>().toTestPreferences().toBookshelfSettings()
+        assertEquals(true, settings.bookshelfShowCustomTags)
+        assertEquals(true, settings.bookshelfShowSourceTags)
+        assertEquals(true, settings.bookshelfShowWordCount)
+    }
+
+    @Test
+    fun `标签来源通过原子路径一起保存且不改变总开关`() {
+        val values = captureAtomicUpdateValues(
+            current = BookshelfSettings(),
+            read = { it.toBookshelfSettings() },
+            toPrefMap = BookshelfSettings::toPrefMap,
+            transform = {
+                it.copy(
+                    bookshelfShowCustomTags = false,
+                    bookshelfShowSourceTags = false,
+                    bookshelfShowWordCount = false,
+                )
+            },
+        )
+        assertEquals(
+            mapOf(
+                PreferKey.bookshelfShowCustomTags to false,
+                PreferKey.bookshelfShowSourceTags to false,
+                PreferKey.bookshelfShowWordCount to false,
+            ),
+            values,
+        )
+    }
 }
 
 private fun bookshelfMappingSamples(): List<BookshelfSettings> {
@@ -46,6 +93,9 @@ private fun bookshelfMappingSamples(): List<BookshelfSettings> {
         showBookIntro = false,
         bookshelfShowIntro = false,
         bookshelfShowTag = false,
+        bookshelfShowCustomTags = false,
+        bookshelfShowSourceTags = false,
+        bookshelfShowWordCount = false,
         bookshelfShowLatestChapter = false,
         bookshelfIntroMaxLines = 104,
         showWaitUpCount = false,
@@ -79,6 +129,8 @@ private fun bookshelfMappingSamples(): List<BookshelfSettings> {
         bookshelfGroupCoverCount = 123,
         bookshelfListCoverWidth = 124,
         bookshelfGridCoverWidth = 125,
+        bookshelfGridFixedColumns = false,
+        bookshelfGridFixedCoverWidth = false,
         bookshelfSearchActionDirectToSearch = false,
         autoRefreshBook = false,
         saveTabPosition = 987654321L,
@@ -94,6 +146,9 @@ private fun bookshelfMappingSamples(): List<BookshelfSettings> {
         base.copy(showBookIntro = true),
         base.copy(bookshelfShowIntro = true),
         base.copy(bookshelfShowTag = true),
+        base.copy(bookshelfShowCustomTags = true),
+        base.copy(bookshelfShowSourceTags = true),
+        base.copy(bookshelfShowWordCount = true),
         base.copy(bookshelfShowLatestChapter = true),
         base.copy(showWaitUpCount = true),
         base.copy(showBookshelfFastScroller = true),
@@ -105,6 +160,8 @@ private fun bookshelfMappingSamples(): List<BookshelfSettings> {
         base.copy(bookshelfTitleSmallFont = true),
         base.copy(bookshelfTitleCenter = true),
         base.copy(bookshelfCoverShadow = true),
+        base.copy(bookshelfGridFixedColumns = true),
+        base.copy(bookshelfGridFixedCoverWidth = true),
         base.copy(bookshelfSearchActionDirectToSearch = true),
         base.copy(autoRefreshBook = true),
     )
@@ -123,6 +180,9 @@ private fun BookshelfSettings.expectedPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.showBookIntro to showBookIntro,
     PreferKey.bookshelfShowIntro to bookshelfShowIntro,
     PreferKey.bookshelfShowTag to bookshelfShowTag,
+    PreferKey.bookshelfShowCustomTags to bookshelfShowCustomTags,
+    PreferKey.bookshelfShowSourceTags to bookshelfShowSourceTags,
+    PreferKey.bookshelfShowWordCount to bookshelfShowWordCount,
     PreferKey.bookshelfShowLatestChapter to bookshelfShowLatestChapter,
     PreferKey.bookshelfIntroMaxLines to bookshelfIntroMaxLines,
     PreferKey.showWaitUpCount to showWaitUpCount,
@@ -156,7 +216,9 @@ private fun BookshelfSettings.expectedPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.bookshelfGroupCoverCount to bookshelfGroupCoverCount,
     PreferKey.bookshelfListCoverWidth to bookshelfListCoverWidth,
     PreferKey.bookshelfGridCoverWidth to bookshelfGridCoverWidth,
+    PreferKey.bookshelfGridFixedColumns to bookshelfGridFixedColumns,
+    PreferKey.bookshelfGridFixedCoverWidth to bookshelfGridFixedCoverWidth,
     PreferKey.bookshelfSearchActionDirectToSearch to bookshelfSearchActionDirectToSearch,
     PreferKey.autoRefresh to autoRefreshBook,
-    PreferKey.saveTabPosition to saveTabPosition,
+    PreferKey.bookshelfSelectedGroupId to saveTabPosition,
 )

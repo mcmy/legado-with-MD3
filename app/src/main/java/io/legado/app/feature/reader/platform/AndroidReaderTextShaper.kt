@@ -54,6 +54,11 @@ object ReaderAndroidPaintFactory {
                     appCtx.contentResolver.openFileDescriptor(path.toUri(), "r")?.use {
                         Typeface.Builder(it.fileDescriptor).build()
                     }
+                // 应用私有字体目录里的字体 uri 是 file:// 形式，直接交给 File(path) 会被
+                // 当成不存在的相对路径，选中字体后静默回落默认字体。
+                path.startsWith("file://", ignoreCase = true) ->
+                    path.toUri().path?.let { File(it).takeIf(File::isFile) }
+                        ?.let { Typeface.Builder(it).build() }
                 path.isNotBlank() && File(path).isFile -> Typeface.Builder(File(path)).build()
                 else -> null
             }
@@ -92,7 +97,7 @@ class AndroidReaderTextShaper(paint: TextPaint) : ReaderTextShaper {
     }
 
     override fun shape(text: String): GlyphClusters {
-        if (text.isEmpty()) return GlyphClusters(emptyList(), emptyList())
+        if (text.isEmpty()) return GlyphClusters(emptyList(), FloatArray(0))
         val widths = FloatArray(text.length)
         paint.getTextWidths(text, widths)
         return clusterGlyphs(text, widths)

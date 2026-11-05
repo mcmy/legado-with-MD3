@@ -5,6 +5,7 @@ import io.legado.app.domain.gateway.AiStreamEvent
 import io.legado.app.domain.model.AiAvailableModel
 import io.legado.app.domain.model.AiGenerateRequest
 import io.legado.app.domain.model.AiGenerateResponse
+import io.legado.app.domain.model.AiHttpException
 import io.legado.app.domain.model.AiMessage
 import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiProtocol
@@ -56,26 +57,24 @@ class OpenAiChatHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities)) {
-            params.reasoningLevel.effortFor(provider)?.let {
-                body["reasoning_effort"] = it
-            }
-        }
-        body.applyZhipuThinking(provider, request.model.modelId, params.reasoningLevel)
+        body.applyChatReasoning(request)
 
         return retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            val response = aiOkHttpClient.newCallStrResponse {
+            val response = request.httpClient().newCallStrResponse {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val json = GSON.fromJson(response.body, OpenAiChatResponse::class.java)
             val message = json?.choices?.firstOrNull()?.message
@@ -110,28 +109,26 @@ class OpenAiChatHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities)) {
-            params.reasoningLevel.effortFor(provider)?.let {
-                body["reasoning_effort"] = it
-            }
-        }
-        body.applyZhipuThinking(provider, request.model.modelId, params.reasoningLevel)
+        body.applyChatReasoning(request)
 
         // For streaming, we retry before establishing the SSE connection.
         // Once streaming starts, errors are not retried (partial output would be confusing).
         val response = retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            aiOkHttpClient.newCallResponse {
+            request.httpClient().newCallResponse {
                 url(provider.baseUrl + provider.chatPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }.also {
                 if (!it.isSuccessful) {
-                    throw Exception("HTTP ${it.code}: ${it.message}")
+                    throw AiHttpException(it.code, it.httpErrorMessage())
                 }
             }
         }
@@ -182,14 +179,17 @@ class OpenAiChatHandler : AiProtocolHandler {
             val response = okHttpClient.newCallStrResponse {
                 url(modelsUrl)
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = null,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val json = GSON.fromJson(response.body, OpenAiModelsResponse::class.java)
             json?.data.toAvailableModels()
@@ -254,7 +254,10 @@ internal fun List<AiMessage>.toOpenAiChatMessages(): List<Map<String, Any?>> {
                     )
                 }
             }
-            else -> mapOf("role" to message.role, "content" to message.content)
+            else -> mapOf("role" to message.role, "content" to if (message.images.isEmpty()) message.content else buildList {
+                add(mapOf("type" to "text", "text" to message.content))
+                message.images.forEach { add(mapOf("type" to "image_url", "image_url" to mapOf("url" to it.dataUrl))) }
+            })
         }
     }
 }

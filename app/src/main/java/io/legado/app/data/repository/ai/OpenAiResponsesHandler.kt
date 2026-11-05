@@ -3,9 +3,9 @@ package io.legado.app.data.repository.ai
 import com.google.gson.JsonObject
 import io.legado.app.domain.gateway.AiStreamEvent
 import io.legado.app.domain.model.AiAvailableModel
-import io.legado.app.domain.model.AiCapability
 import io.legado.app.domain.model.AiGenerateRequest
 import io.legado.app.domain.model.AiGenerateResponse
+import io.legado.app.domain.model.AiHttpException
 import io.legado.app.domain.model.AiMessage
 import io.legado.app.domain.model.AiMessageRole
 import io.legado.app.domain.model.AiProtocol
@@ -58,28 +58,24 @@ class OpenAiResponsesHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_output_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities)) {
-            body["reasoning"] = buildMap<String, Any> {
-                put("summary", "auto")
-                params.reasoningLevel.effortFor(provider)?.let {
-                    put("effort", it)
-                }
-            }
-        }
+        body.applyResponsesReasoning(request)
 
         return retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            val response = aiOkHttpClient.newCallStrResponse {
+            val response = request.httpClient().newCallStrResponse {
                 url(provider.baseUrl + provider.responsesPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val root = GSON.fromJson(response.body, JsonObject::class.java)
             val text = root?.getString("output_text") ?: root.extractResponsesOutputText()
@@ -110,28 +106,24 @@ class OpenAiResponsesHandler : AiProtocolHandler {
         params.temperature?.let { body["temperature"] = it }
         params.maxOutputTokens?.let { body["max_output_tokens"] = it }
         params.topP?.let { body["top_p"] = it }
-        if (hasReasoningCapability(request.model.capabilities)) {
-            body["reasoning"] = buildMap<String, Any> {
-                put("summary", "auto")
-                params.reasoningLevel.effortFor(provider)?.let {
-                    put("effort", it)
-                }
-            }
-        }
+        body.applyResponsesReasoning(request)
 
         val response = retryWithBackoff(maxAttempts = 3, keyRotator = keyRotator) {
-            aiOkHttpClient.newCallResponse {
+            request.httpClient().newCallResponse {
                 url(provider.baseUrl + provider.responsesPath)
                 postJson(GSON.toJson(body))
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = request.sessionId,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }.also {
                 if (!it.isSuccessful) {
-                    throw Exception("HTTP ${it.code}: ${it.message}")
+                    throw AiHttpException(it.code, it.httpErrorMessage())
                 }
             }
         }
@@ -238,14 +230,17 @@ class OpenAiResponsesHandler : AiProtocolHandler {
             val response = okHttpClient.newCallStrResponse {
                 url(modelsUrl)
                 addHeaders(
-                    provider.headers + provider.customHeaders + mapOf(
-                        "Authorization" to "Bearer ${keyRotator.currentKey}",
-                        "Content-Type" to "application/json"
+                    provider.aiRequestHeaders(
+                        sessionId = null,
+                        protocolHeaders = mapOf(
+                            "Authorization" to "Bearer ${keyRotator.currentKey}",
+                            "Content-Type" to "application/json"
+                        )
                     )
                 )
             }
             if (!response.isSuccessful()) {
-                throw Exception("HTTP ${response.code()}: ${response.message()}")
+                throw AiHttpException(response.code(), response.httpErrorMessage())
             }
             val json = GSON.fromJson(response.body, OpenAiModelsResponse::class.java)
             json?.data.toAvailableModels()
@@ -279,7 +274,10 @@ internal fun List<AiMessage>.toOpenAiResponsesInput(): List<Map<String, Any?>> {
                 }
                 listOfNotNull(textMessage) + toolCalls
             }
-            else -> listOf(mapOf("role" to message.role, "content" to message.content))
+            else -> listOf(mapOf("role" to message.role, "content" to if (message.images.isEmpty()) message.content else buildList {
+                add(mapOf("type" to "input_text", "text" to message.content))
+                message.images.forEach { add(mapOf("type" to "input_image", "image_url" to it.dataUrl)) }
+            }))
         }
     }
 }

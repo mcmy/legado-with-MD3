@@ -3,6 +3,7 @@ package io.legado.app.ui.browser
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
 import android.webkit.WebChromeClient
@@ -38,6 +39,7 @@ import io.legado.app.R
 import io.legado.app.constant.AppConst
 import io.legado.app.help.http.CookieManager
 import io.legado.app.help.http.CookieStore
+import io.legado.app.help.http.handleRenderProcessGone
 import io.legado.app.help.source.SourceVerificationHelp
 import io.legado.app.model.Download
 import io.legado.app.ui.association.OnLineImportActivity
@@ -54,7 +56,8 @@ import io.legado.app.utils.sendToClip
 import java.net.URLDecoder
 import android.webkit.CookieManager as AndroidCookieManager
 
-@SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError")
+// MissingOnRenderProcessGone：该规则按 Java PSI 查构造调用，看不到 Kotlin 匿名对象里的 override。
+@SuppressLint("SetJavaScriptEnabled", "WebViewClientOnReceivedSslError", "MissingOnRenderProcessGone")
 @Composable
 fun WebViewRouteScreen(
     intent: Intent,
@@ -96,12 +99,20 @@ fun WebViewRouteScreen(
         viewModel.saveVerificationResult(currentWebView, ::finishScreen)
     }
 
+    fun handleBack() {
+        if (viewModel.sourceVerificationEnable) {
+            finishWithVerification()
+        } else {
+            finishScreen()
+        }
+    }
+
     BackHandler {
         when {
             webView?.canGoBack() == true && (webView?.copyBackForwardList()?.size
                 ?: 0) > 1 -> webView?.goBack()
 
-            else -> finishScreen()
+            else -> handleBack()
         }
     }
 
@@ -115,7 +126,7 @@ fun WebViewRouteScreen(
                 title = pageTitle ?: viewModel.sourceName.ifBlank {
                     intent.getStringExtra("title") ?: loadingText
                 },
-                navigationIcon = { TopBarNavigationButton(onClick = ::finishScreen) },
+                navigationIcon = { TopBarNavigationButton(onClick = ::handleBack) },
                 actions = {
                     TopBarActionButton(
                         onClick = { webView?.reload() },
@@ -192,6 +203,12 @@ fun WebViewRouteScreen(
                                     view: WebView,
                                     url: String,
                                 ): Boolean = handleUrl(Uri.parse(url))
+
+                                // 渲染进程被系统回收时默认会连带杀掉宿主进程
+                                override fun onRenderProcessGone(
+                                    view: WebView,
+                                    detail: RenderProcessGoneDetail,
+                                ): Boolean = view.handleRenderProcessGone()
 
                                 private fun handleUrl(uri: Uri): Boolean {
                                     return when (uri.scheme) {

@@ -1,7 +1,5 @@
 package io.legado.app.ui.book.read.sheet
 
-import android.app.Activity
-import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -33,27 +31,23 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Login
-import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.DownloadForOffline
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FindReplace
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Numbers
-import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.DownloadForOffline
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -84,8 +78,8 @@ import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.Bookmark
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.isLocalTxt
+import io.legado.app.ui.book.read.ReadMenuSourceDropdown
 import io.legado.app.ui.book.toc.DownloadState
-import io.legado.app.ui.book.toc.TocActivity
 import io.legado.app.ui.book.toc.TocBookmarkItemUi
 import io.legado.app.ui.book.toc.TocEffect
 import io.legado.app.ui.book.toc.TocIntent
@@ -93,17 +87,17 @@ import io.legado.app.ui.book.toc.TocItemUi
 import io.legado.app.ui.book.toc.TocMarkingItemUi
 import io.legado.app.ui.book.toc.TocUiState
 import io.legado.app.ui.book.toc.TocViewModel
-import io.legado.app.ui.book.toc.rule.preview.TxtTocRulePreviewActivity
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.widget.components.AppFloatingActionButtonMenu
+import io.legado.app.ui.widget.components.ChapterStatusIcons
 import io.legado.app.ui.widget.components.EmptyMessage
 import io.legado.app.ui.widget.components.FabMenuItem
 import io.legado.app.ui.widget.components.bookmark.BookmarkEditSheet
 import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.image.cover.CoilBookCover
 import io.legado.app.ui.widget.components.lazylist.FastScrollLazyColumn
-import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.modalBottomSheet.AppModalBottomSheet
@@ -134,7 +128,7 @@ fun ReaderBookSheetRoute(
     onChapterClick: (chapterIndex: Int, chapterPos: Int) -> Unit,
     currentChapterIndex: Int? = null,
     onOpenFullBookInfo: () -> Unit,
-    onOpenFullToc: (() -> Unit)? = null,
+    onOpenFullToc: (initialPage: Int) -> Unit,
     /** 书签页跳转：携带完整书签供跳转前校验。 */
     onBookmarkNavigate: (Bookmark) -> Unit = { _ -> },
     /** 笔记页跳转：携带完整展示项供跳转前校验。 */
@@ -145,6 +139,13 @@ fun ReaderBookSheetRoute(
     onOpenChapterUrl: () -> Unit = {},
     onToggleReadUrlInBrowser: () -> Unit = {},
     sourceActions: ReaderBookSourceActions? = null,
+    /** 当前章是否可付费；决定书源菜单里「章节付费」是否出现，与顶栏同一判定。 */
+    chapterPayable: Boolean = false,
+    /**
+     * 「本地目录规则」：只对本地 txt 书出现，由宿主导航到规则预览页；应用结果走书页结果通道
+     * 回灌阅读页，规则保存后本面板会随 `bookRepository.flowBook` 自动刷新。
+     */
+    onEditLocalTocRule: (String?) -> Unit = {},
     viewModel: TocViewModel = koinViewModel(key = "reader-book-sheet-$bookUrl"),
 ) {
     val state by viewModel.screenState.collectAsStateWithLifecycle()
@@ -155,25 +156,6 @@ fun ReaderBookSheetRoute(
         ActivityResultContracts.CreateDocument("*/*")
     ) { uri: Uri? ->
         uri?.let { viewModel.onIntent(TocIntent.ExportBookmarks(it, pendingExportMarkdown)) }
-    }
-    val tocRegexLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.onIntent(
-                TocIntent.SaveTocRegex(result.data?.getStringExtra("tocRegex").orEmpty())
-            )
-        }
-    }
-    val fullTocLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            onChapterClick(
-                result.data?.getIntExtra("index", 0) ?: 0,
-                result.data?.getIntExtra("chapterPos", 0) ?: 0,
-            )
-        }
     }
 
     LaunchedEffect(bookUrl) {
@@ -207,36 +189,18 @@ fun ReaderBookSheetRoute(
             when (tab) {
                 ReaderBookSheetTab.Information -> onOpenFullBookInfo()
                 ReaderBookSheetTab.Toc -> {
-                    if (onOpenFullToc != null) {
-                        onOpenFullToc()
-                    } else {
-                        fullTocLauncher.launch(
-                            Intent(context, TocActivity::class.java)
-                                .putExtra("bookUrl", bookUrl)
-                                .putExtra("initialPage", 0)
-                        )
-                    }
+                    onOpenFullToc(0)
                 }
 
                 ReaderBookSheetTab.Bookmarks -> {
-                    fullTocLauncher.launch(
-                        Intent(context, TocActivity::class.java)
-                            .putExtra("bookUrl", bookUrl)
-                            .putExtra("initialPage", 1)
-                    )
+                    onOpenFullToc(1)
                 }
 
-                // 笔记页无全屏落地（TocActivity 暂无对应页）
+                // 笔记页暂无对应的全屏页。
                 ReaderBookSheetTab.Marks -> Unit
             }
         },
-        onEditLocalTocRule = { regex ->
-            tocRegexLauncher.launch(
-                Intent(context, TxtTocRulePreviewActivity::class.java)
-                    .putExtra("bookUrl", bookUrl)
-                    .putExtra("tocRegex", regex)
-            )
-        },
+        onEditLocalTocRule = onEditLocalTocRule,
         onExportBookmarks = { isMarkdown, fileName ->
             pendingExportMarkdown = isMarkdown
             exportLauncher.launch(fileName)
@@ -246,6 +210,7 @@ fun ReaderBookSheetRoute(
         onOpenChapterUrl = onOpenChapterUrl,
         onToggleReadUrlInBrowser = onToggleReadUrlInBrowser,
         sourceActions = sourceActions,
+        chapterPayable = chapterPayable,
     )
 }
 
@@ -269,6 +234,7 @@ private fun ReaderBookSheet(
     onOpenChapterUrl: () -> Unit = {},
     onToggleReadUrlInBrowser: () -> Unit = {},
     sourceActions: ReaderBookSourceActions? = null,
+    chapterPayable: Boolean = false,
 ) {
     val initialPage = initialTab.ordinal
     val pagerState = rememberPagerState(initialPage = initialPage) { ReaderBookSheetTab.entries.size }
@@ -303,6 +269,7 @@ private fun ReaderBookSheet(
                 onOpenChapterUrl = onOpenChapterUrl,
                 onToggleReadUrlInBrowser = onToggleReadUrlInBrowser,
                 sourceActions = sourceActions,
+                chapterPayable = chapterPayable,
             )
         }
         CardTabRow(
@@ -331,6 +298,8 @@ private fun ReaderBookSheet(
         )
         HorizontalPager(
             state = pagerState,
+            // Sheet 内到边界时，平台 stretch 过冲会在松手后反向回弹。
+            overscrollEffect = null,
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
@@ -405,6 +374,7 @@ internal fun ReaderBookHeader(
     onOpenChapterUrl: (() -> Unit)? = null,
     onToggleReadUrlInBrowser: (() -> Unit)? = null,
     sourceActions: ReaderBookSourceActions? = null,
+    chapterPayable: Boolean = false,
 ) {
     val current = ((book?.durChapterIndex ?: -1) + 1).coerceAtLeast(0)
     val total = book?.totalChapterNum?.coerceAtLeast(0) ?: 0
@@ -482,11 +452,15 @@ internal fun ReaderBookHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    ReaderBookSourceDropdown(
+                    ReadMenuSourceDropdown(
                         expanded = sourceMenuExpanded,
-                        onDismiss = { sourceMenuExpanded = false },
+                        onDismissRequest = { sourceMenuExpanded = false },
                         bookSource = bookSource,
-                        sourceActions = sourceActions,
+                        payVisible = chapterPayable,
+                        onLogin = sourceActions.onLogin,
+                        onPay = sourceActions.onPay,
+                        onEdit = sourceActions.onEdit,
+                        onDisable = sourceActions.onDisable,
                     )
                 }
             }
@@ -524,56 +498,6 @@ internal fun ReaderBookHeader(state: ReaderBookHeaderState) {
             totalChapterNum = state.chapterCount,
         ),
     )
-}
-
-@Composable
-private fun ReaderBookSourceDropdown(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    bookSource: BookSource?,
-    sourceActions: ReaderBookSourceActions,
-) {
-    RoundDropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-    ) {
-        if (!bookSource?.loginUrl.isNullOrBlank()) {
-            RoundDropdownMenuItem(
-                leadingIcon = { MenuItemIcon(Icons.AutoMirrored.Filled.Login) },
-                text = stringResource(R.string.login),
-                onClick = {
-                    onDismiss()
-                    sourceActions.onLogin()
-                },
-            )
-        }
-        if (!bookSource?.getContentRule()?.payAction.isNullOrBlank()) {
-            RoundDropdownMenuItem(
-                leadingIcon = { MenuItemIcon(Icons.Default.Payment) },
-                text = stringResource(R.string.chapter_pay),
-                onClick = {
-                    onDismiss()
-                    sourceActions.onPay()
-                },
-            )
-        }
-        RoundDropdownMenuItem(
-            leadingIcon = { MenuItemIcon(Icons.Default.Edit) },
-            text = stringResource(R.string.edit_source),
-            onClick = {
-                onDismiss()
-                sourceActions.onEdit()
-            },
-        )
-        RoundDropdownMenuItem(
-            leadingIcon = { MenuItemIcon(Icons.Default.Block) },
-            text = stringResource(R.string.disable_source),
-            onClick = {
-                onDismiss()
-                sourceActions.onDisable()
-            },
-        )
-    }
 }
 
 @Composable
@@ -666,7 +590,7 @@ private fun CompactSearchField(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Icon(
+                AppIcon(
                     imageVector = Icons.Default.Search,
                     contentDescription = null,
                     tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -717,7 +641,7 @@ private fun CompactToolIconBox(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
+        AppIcon(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = contentColor,
@@ -748,6 +672,8 @@ private fun ReaderBookTocPage(
         action.selectedIds.size,
     )
     val cancelText = stringResource(R.string.cancel)
+    val deleteAssignmentText = stringResource(R.string.cast_assignment_delete)
+    val deleteAudioText = stringResource(R.string.read_aloud_audio_download_delete)
     val fabItems = remember(
         selected,
         action.selectedIds,
@@ -755,6 +681,8 @@ private fun ReaderBookTocPage(
         invertText,
         bookmarkText,
         downloadSelectedText,
+        deleteAssignmentText,
+        deleteAudioText,
         cancelText,
     ) {
         listOf(
@@ -769,6 +697,12 @@ private fun ReaderBookTocPage(
             },
             FabMenuItem(Icons.Default.Download, downloadSelectedText) {
                 onIntent(TocIntent.DownloadSelected)
+            },
+            FabMenuItem(Icons.Default.Groups, deleteAssignmentText) {
+                onIntent(TocIntent.DeleteAssignmentsForSelected)
+            },
+            FabMenuItem(Icons.Default.DownloadForOffline, deleteAudioText) {
+                onIntent(TocIntent.DeleteAudioDownloadsForSelected)
             },
             FabMenuItem(Icons.Default.Clear, cancelText) {
                 onIntent(TocIntent.ClearSelection)
@@ -933,7 +867,7 @@ private fun ReaderSheetVolumeItem(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
+            AppIcon(
                 imageVector = Icons.Default.ExpandMore,
                 contentDescription = null,
                 modifier = Modifier
@@ -982,49 +916,53 @@ private fun ReaderSheetChapterItem(
             .fillMaxWidth()
             .padding(start = (item.tocLevel.coerceIn(0, 6) * 10).dp),
     ) {
-        Row(
-            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (item.isVip && !item.isPay) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = stringResource(R.string.a11y_vip_locked),
-                            tint = LegadoTheme.colorScheme.error,
-                            modifier = Modifier
-                                .size(14.dp)
-                                .padding(end = 4.dp),
-                        )
-                    }
-                    AppText(
-                        text = item.title,
-                        style = LegadoTheme.typography.labelMediumEmphasized,
-                        color = contentColor,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+            // 尾部状态图标跟随标题行居中，而不是跟随「标题 + 附加信息」整列居中，
+            // 否则有 tag 时图标会落在两行之间，且没有 tag 时还会被标题行的底部留白顶偏。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (item.isVip && !item.isPay) {
+                    AppIcon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = stringResource(R.string.a11y_vip_locked),
+                        tint = LegadoTheme.colorScheme.error,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .padding(end = 4.dp),
                     )
                 }
-                if (!item.tag.isNullOrBlank()) {
-                    AppText(
-                        text = item.tag,
-                        style = LegadoTheme.typography.labelSmall,
-                        color = contentColor.copy(alpha = 0.72f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                AppText(
+                    text = item.title,
+                    modifier = Modifier.weight(1f),
+                    style = LegadoTheme.typography.labelMediumEmphasized,
+                    color = contentColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                ChapterStatusIcons(
+                    item = item,
+                    iconSize = 14.dp,
+                    spacing = 3.dp,
+                    modifier = Modifier.padding(start = 4.dp),
+                )
+                ReaderSheetChapterStatus(
+                    item = item,
+                    showWordCount = showWordCount,
+                    enabled = !selectionMode,
+                    onDownloadClick = onDownloadClick,
+                )
             }
-            ReaderSheetChapterStatus(
-                item = item,
-                showWordCount = showWordCount,
-                enabled = !selectionMode,
-                onDownloadClick = onDownloadClick,
-            )
+            if (!item.tag.isNullOrBlank()) {
+                AppText(
+                    text = item.tag,
+                    modifier = Modifier.padding(top = 2.dp),
+                    style = LegadoTheme.typography.labelSmall,
+                    color = contentColor.copy(alpha = 0.72f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -1069,30 +1007,47 @@ private fun ReaderSheetChapterStatus(
         item.downloadState == DownloadState.SUCCESS -> ReaderSheetStatusIcon(
             imageVector = Icons.Default.CheckCircle,
         )
-        item.downloadState == DownloadState.ERROR -> IconButton(
-            onClick = onDownloadClick,
+        item.downloadState == DownloadState.ERROR -> ReaderSheetStatusIconButton(
+            imageVector = Icons.Default.Refresh,
             enabled = enabled,
-            modifier = Modifier.size(32.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = stringResource(R.string.a11y_retry_chapter, item.title),
-                tint = LegadoTheme.colorScheme.error,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-        item.downloadState == DownloadState.NONE -> IconButton(
+            contentDescription = stringResource(R.string.a11y_retry_chapter, item.title),
             onClick = onDownloadClick,
+        )
+
+        item.downloadState == DownloadState.NONE -> ReaderSheetStatusIconButton(
+            imageVector = Icons.Outlined.DownloadForOffline,
             enabled = enabled,
-            modifier = Modifier.size(32.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.DownloadForOffline,
-                contentDescription = stringResource(R.string.download_chapter, item.title),
-                tint = LegadoTheme.colorScheme.outline,
-                modifier = Modifier.size(16.dp),
-            )
-        }
+            contentDescription = stringResource(R.string.download_chapter, item.title),
+            onClick = onDownloadClick,
+        )
+    }
+}
+
+/**
+ * 可点击的状态图标：与 [ReaderSheetStatusIcon] 占同一槽位（32dp 宽 × 16dp 高），
+ * 不再用 32dp 见方的按钮，避免下载/重试态把整行撑高、让上下留白看起来比别的大。
+ */
+@Composable
+private fun ReaderSheetStatusIconButton(
+    imageVector: ImageVector,
+    enabled: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(width = 32.dp, height = 16.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        AppIcon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = LegadoTheme.colorScheme.onSurfaceVariant
+                .copy(alpha = if (enabled) 1f else 0.38f),
+            modifier = Modifier.size(16.dp),
+        )
     }
 }
 
@@ -1100,7 +1055,7 @@ private fun ReaderSheetChapterStatus(
 private fun ReaderSheetStatusIcon(
     imageVector: ImageVector,
 ) {
-    Icon(
+    AppIcon(
         imageVector = imageVector,
         contentDescription = null,
         tint = LegadoTheme.colorScheme.secondary,
@@ -1311,7 +1266,7 @@ private fun ReaderSheetBookmarkItem(
                     modifier = Modifier.weight(1f),
                 )
                 if (item.isDur) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
                         tint = contentColor,
@@ -1448,7 +1403,7 @@ private fun ReaderSheetMarkingItem(
                     )
                 }
                 if (item.isDur) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.LocationOn,
                         contentDescription = null,
                         tint = contentColor,

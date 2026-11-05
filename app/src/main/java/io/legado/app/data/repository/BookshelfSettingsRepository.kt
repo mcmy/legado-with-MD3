@@ -9,6 +9,7 @@ import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.compatDsBoolean
 import io.legado.app.help.config.compatDsInt
 import io.legado.app.help.config.compatDsLong
+import io.legado.app.help.config.rawPrefValue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -43,6 +44,9 @@ internal fun Preferences.toBookshelfSettings() = BookshelfSettings(
     showBookIntro = compatDsBoolean(PreferKey.showBookIntro) ?: false,
     bookshelfShowIntro = compatDsBoolean(PreferKey.bookshelfShowIntro) ?: true,
     bookshelfShowTag = compatDsBoolean(PreferKey.bookshelfShowTag) ?: true,
+    bookshelfShowCustomTags = compatDsBoolean(PreferKey.bookshelfShowCustomTags) ?: true,
+    bookshelfShowSourceTags = compatDsBoolean(PreferKey.bookshelfShowSourceTags) ?: true,
+    bookshelfShowWordCount = compatDsBoolean(PreferKey.bookshelfShowWordCount) ?: true,
     bookshelfShowLatestChapter = compatDsBoolean(PreferKey.bookshelfShowLatestChapter) ?: true,
     bookshelfIntroMaxLines = compatDsInt(PreferKey.bookshelfIntroMaxLines) ?: 0,
     showWaitUpCount = compatDsBoolean(PreferKey.showWaitUpCount) ?: false,
@@ -77,9 +81,13 @@ internal fun Preferences.toBookshelfSettings() = BookshelfSettings(
     bookshelfGroupCoverCount = compatDsInt(PreferKey.bookshelfGroupCoverCount) ?: 4,
     bookshelfListCoverWidth = compatDsInt(PreferKey.bookshelfListCoverWidth) ?: 84,
     bookshelfGridCoverWidth = compatDsInt(PreferKey.bookshelfGridCoverWidth) ?: 120,
+    bookshelfGridFixedColumns = compatDsBoolean(PreferKey.bookshelfGridFixedColumns) ?: true,
+    bookshelfGridFixedCoverWidth = compatDsBoolean(PreferKey.bookshelfGridFixedCoverWidth) ?: true,
     bookshelfSearchActionDirectToSearch = compatDsBoolean(PreferKey.bookshelfSearchActionDirectToSearch) ?: true,
     autoRefreshBook = compatDsBoolean(PreferKey.autoRefresh) ?: false,
-    saveTabPosition = compatDsLong(PreferKey.saveTabPosition) ?: BookGroup.IdAll,
+    saveTabPosition = compatDsLong(PreferKey.bookshelfSelectedGroupId)
+        ?: (rawPrefValue(PreferKey.saveTabPosition) as? Long)
+        ?: BookGroup.IdAll,
 )
 
 internal fun BookshelfSettings.toPrefMap(): Map<String, Any?> = mapOf(
@@ -95,6 +103,9 @@ internal fun BookshelfSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.showBookIntro to showBookIntro,
     PreferKey.bookshelfShowIntro to bookshelfShowIntro,
     PreferKey.bookshelfShowTag to bookshelfShowTag,
+    PreferKey.bookshelfShowCustomTags to bookshelfShowCustomTags,
+    PreferKey.bookshelfShowSourceTags to bookshelfShowSourceTags,
+    PreferKey.bookshelfShowWordCount to bookshelfShowWordCount,
     PreferKey.bookshelfShowLatestChapter to bookshelfShowLatestChapter,
     PreferKey.bookshelfIntroMaxLines to bookshelfIntroMaxLines,
     PreferKey.showWaitUpCount to showWaitUpCount,
@@ -128,7 +139,9 @@ internal fun BookshelfSettings.toPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.bookshelfGroupCoverCount to bookshelfGroupCoverCount,
     PreferKey.bookshelfListCoverWidth to bookshelfListCoverWidth,
     PreferKey.bookshelfGridCoverWidth to bookshelfGridCoverWidth,
+    PreferKey.bookshelfGridFixedColumns to bookshelfGridFixedColumns,
+    PreferKey.bookshelfGridFixedCoverWidth to bookshelfGridFixedCoverWidth,
     PreferKey.bookshelfSearchActionDirectToSearch to bookshelfSearchActionDirectToSearch,
     PreferKey.autoRefresh to autoRefreshBook,
-    PreferKey.saveTabPosition to saveTabPosition,
+    PreferKey.bookshelfSelectedGroupId to saveTabPosition,
 )

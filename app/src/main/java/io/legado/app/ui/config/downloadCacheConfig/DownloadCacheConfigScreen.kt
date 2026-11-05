@@ -27,12 +27,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun DownloadCacheConfigRouteScreen(
     onBackClick: () -> Unit,
+    onNavigateToMaintenance: () -> Unit,
     viewModel: DownloadCacheConfigViewModel = koinViewModel(),
 ) {
     DownloadCacheConfigScreen(
         state = viewModel.uiState.collectAsStateWithLifecycle().value,
         onIntent = viewModel::onIntent,
         onBackClick = onBackClick,
+        onNavigateToMaintenance = onNavigateToMaintenance,
     )
 }
 
@@ -42,6 +44,7 @@ fun DownloadCacheConfigScreen(
     state: DownloadCacheConfigUiState,
     onIntent: (DownloadCacheConfigIntent) -> Unit,
     onBackClick: () -> Unit,
+    onNavigateToMaintenance: () -> Unit,
 ) {
     val settings = state.settings
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
@@ -137,6 +140,20 @@ fun DownloadCacheConfigScreen(
                             onIntent(DownloadCacheConfigIntent.SetPreDownloadNum(it.toInt()))
                         }
                     )
+
+                    SliderSettingItem(
+                        title = stringResource(R.string.pre_download_prev),
+                        description = stringResource(
+                            R.string.pre_download_prev_s,
+                            settings.preDownloadNumPrev
+                        ),
+                        value = settings.preDownloadNumPrev.toFloat(),
+                        defaultValue = 0f,
+                        valueRange = 0f..100f,
+                        onValueChange = {
+                            onIntent(DownloadCacheConfigIntent.SetPreDownloadNumPrev(it.toInt()))
+                        }
+                    )
                 }
 
                 SplicedColumnGroup(title = stringResource(R.string.image_cache)) {
@@ -209,6 +226,11 @@ fun DownloadCacheConfigScreen(
                                 )
                             )
                         }
+                    )
+                    ClickableSettingItem(
+                        title = stringResource(R.string.cache_maintenance_title),
+                        description = stringResource(R.string.cache_maintenance_summary),
+                        onClick = onNavigateToMaintenance,
                     )
                 }
             }

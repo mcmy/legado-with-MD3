@@ -70,6 +70,7 @@ class AiChatViewModel(
             is AiChatIntent.SwitchBranch -> switchBranch(intent.messageId)
             is AiChatIntent.DeleteConversation -> deleteConversation(intent.id)
             is AiChatIntent.RenameConversation -> renameConversation(intent.id, intent.title)
+            is AiChatIntent.SetReadingContext -> _uiState.update { it.copy(readingContext = intent.context) }
         }
     }
 
@@ -292,7 +293,8 @@ class AiChatViewModel(
                 val shortTitle = generationUseCase.generateTitle(
                     userContent = userContent,
                     assistantContent = assistantContent,
-                    reasoningLevel = state.reasoningLevel
+                    reasoningLevel = state.reasoningLevel,
+                    conversationId = conversationId
                 )
                 if (shortTitle.isNotBlank()) {
                     aiChatGateway.updateConversationTitle(conversationId, shortTitle)
@@ -327,7 +329,8 @@ class AiChatViewModel(
                     userContent = parentUserMsg.content,
                     history = historyBeforeParent,
                     reasoningLevel = state.reasoningLevel,
-                    conversationId = conversationId
+                    conversationId = conversationId,
+                    readingContext = state.readingContext
                 )
                 setStreamingPlaceholder()
                 try {
@@ -431,7 +434,8 @@ class AiChatViewModel(
                     userContent = content,
                     history = historySnapshot,
                     reasoningLevel = state.reasoningLevel,
-                    conversationId = conversationIdForMsg
+                    conversationId = conversationIdForMsg,
+                    readingContext = state.readingContext
                 )
                 setStreamingPlaceholder()
                 try {

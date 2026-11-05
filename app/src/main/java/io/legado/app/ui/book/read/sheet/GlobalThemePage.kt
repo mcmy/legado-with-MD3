@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LightMode
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
@@ -52,12 +52,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toColorInt
 import coil3.compose.AsyncImage
 import io.legado.app.R
+import io.legado.app.constant.PageAnim
 import io.legado.app.data.repository.ReadPreferences
 import io.legado.app.domain.model.settings.ReadStyleItem
 import io.legado.app.help.config.ReadStyleResolver
 import io.legado.app.model.ReadBook
 import io.legado.app.ui.book.read.ConfigUpdate
 import io.legado.app.ui.book.read.ReadBookIntent
+import io.legado.app.ui.book.read.ReadBookMenuRoute
 import io.legado.app.ui.book.read.ReadBookSheet
 import io.legado.app.ui.book.read.ReadBookStyleConfig
 import io.legado.app.ui.theme.LegadoTheme
@@ -66,6 +68,7 @@ import io.legado.app.ui.theme.fadingEdge
 import io.legado.app.ui.widget.components.button.series.SmallTonalButton
 import io.legado.app.ui.widget.components.card.NormalCard
 import io.legado.app.ui.widget.components.card.TextCard
+import io.legado.app.ui.widget.components.icon.AppIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenuItem
 import io.legado.app.ui.widget.components.settingItem.TinySettingItem
@@ -130,7 +133,7 @@ fun GlobalThemePage(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.TextFields,
                         contentDescription = stringResource(R.string.compose_type),
                         tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -239,7 +242,7 @@ fun GlobalThemePage(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
+                            AppIcon(
                                 Icons.Default.GridView,
                                 contentDescription = stringResource(R.string.share_layout),
                                 modifier = Modifier.size(20.dp),
@@ -276,6 +279,8 @@ fun GlobalThemePage(
                             config = config,
                             isSelected = styleSelect == index,
                             isNightTheme = isNightTheme,
+                            // 与展开弹窗同一律：完整显示背景图（不裁切）
+                            imageContentScale = ContentScale.FillBounds,
                             onClick = {
                                 onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.StyleSelect(index)))
                                 onStyleSelect(index)
@@ -301,7 +306,7 @@ fun GlobalThemePage(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
+                                AppIcon(
                                     Icons.Default.Add,
                                     contentDescription = null,
                                     modifier = Modifier.size(20.dp),
@@ -310,24 +315,55 @@ fun GlobalThemePage(
                         }
                     }
                 }
+                // 打开阅读主题列表弹窗（固定在最右，不随卡片滑动）
+                NormalCard(
+                    onClick = {
+                        onIntent(ReadBookIntent.OpenReadMenuRoute(ReadBookMenuRoute.ThemeList))
+                    },
+                    modifier = Modifier
+                        .width(40.dp)
+                        .height(56.dp)
+                        .padding(start = 4.dp),
+                    cornerRadius = 8.dp,
+                    containerColor = LegadoTheme.colorScheme.surfaceContainerLow,
+                    // 与左边"共用布局"按钮同款：同底色 + 同一条柔和描边（不然没开全局线框时这个 `>` 会光秃秃的）
+                    border = BorderStroke(
+                        1.dp,
+                        LegadoTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                    ),
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AppIcon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = stringResource(R.string.text_bg_style),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
             }
         }
 
         Spacer(Modifier.height(8.dp))
 
+        // 每一项带自己的 PageAnim 取值：菜单里加一项或换个顺序都不会再让「下标 == 常量值」这个
+        // 隐含约定错位（菜单里加一项或换个顺序都不会再让「下标 == 常量值」这个隐含约定错位）。
         val pageAnimOptions = listOf(
-            R.string.page_anim_cover,
-            R.string.page_anim_slide,
-            R.string.page_anim_simulation,
-            R.string.page_anim_scroll,
-            R.string.page_anim_fade,
-            R.string.page_anim_none,
+            R.string.page_anim_cover to PageAnim.coverPageAnim,
+            R.string.page_anim_slide to PageAnim.slidePageAnim,
+            R.string.page_anim_simulation to PageAnim.simulationPageAnim,
+            R.string.page_anim_ios_curl to PageAnim.iosCurlPageAnim,
+            R.string.page_anim_google_curl to PageAnim.googleCurlPageAnim,
+            R.string.page_anim_parallax to PageAnim.parallaxPageAnim,
+            R.string.page_anim_scroll to PageAnim.scrollPageAnim,
+            R.string.page_anim_fade to PageAnim.fadePageAnim,
+            R.string.page_anim_none to PageAnim.noAnim,
         )
         var showPageAnimMenu by remember { mutableStateOf(false) }
-        val pageAnimEntries = pageAnimOptions.map { stringResource(it) }.toTypedArray()
-        // 菜单项顺序就是 PageAnim 的常量值，直接用 pageAnim 当下标；
-        // 越界（脏配置）时留空，与原先 indexOf 得到 -1 的行为一致。
-        val currentPageAnimDisplay = pageAnimEntries.getOrNull(pageAnim) ?: ""
+        val pageAnimEntries = pageAnimOptions.map { stringResource(it.first) to it.second }
+        val currentPageAnimDisplay = pageAnimEntries.firstOrNull { it.second == pageAnim }?.first ?: ""
 
         val pageAnimSpeedOptions = listOf(
             R.string.page_anim_speed_fastest,
@@ -362,12 +398,12 @@ fun GlobalThemePage(
                     expanded = showPageAnimMenu,
                     onDismissRequest = { showPageAnimMenu = false },
                 ) { dismiss ->
-                    pageAnimEntries.forEachIndexed { index, display ->
+                    pageAnimEntries.forEach { (display, value) ->
                         RoundDropdownMenuItem(
                             text = display,
                             onClick = {
                                 ReadBook.book?.setPageAnim(-1)
-                                onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.PageAnim(index)))
+                                onIntent(ReadBookIntent.UpdateConfig(ConfigUpdate.PageAnim(value)))
                                 dismiss()
                             },
                         )
@@ -385,7 +421,7 @@ fun GlobalThemePage(
                     cornerRadius = 12.dp,
                 ) {
                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                        Icon(
+                        AppIcon(
                             imageVector = Icons.Default.Speed,
                             contentDescription = stringResource(R.string.page_anim_speed),
                             tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -419,7 +455,7 @@ fun GlobalThemePage(
                 cornerRadius = 12.dp,
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.SpaceBar,
                         contentDescription = stringResource(R.string.padding),
                         tint = LegadoTheme.colorScheme.onSurfaceVariant,
@@ -437,8 +473,14 @@ fun StyleCard(
     config: ReadStyleItem,
     isSelected: Boolean,
     isNightTheme: Boolean,
+    // 默认尺寸 = 原横排卡 44×56；弹窗网格传自己的 modifier 铺满格子
+    modifier: Modifier = Modifier
+        .width(44.dp)
+        .height(56.dp),
+    imageContentScale: ContentScale = ContentScale.Crop,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    // 传 null 才不装内层长按监听（管理模式的长按要留给外层拖动）
+    onLongClick: (() -> Unit)? = null,
 ) {
     val mode = ReadStyleResolver.currentMode(isNightTheme)
     val bgType = when (mode) {
@@ -471,9 +513,7 @@ fun StyleCard(
     val bgPath = ReadStyleResolver.backgroundPath(bgType, bgValue)
 
     NormalCard(
-        modifier = Modifier
-            .width(44.dp)
-            .height(56.dp),
+        modifier = modifier,
         cornerRadius = 8.dp,
         containerColor = bgColor,
         onClick = onClick,
@@ -484,7 +524,7 @@ fun StyleCard(
                 AsyncImage(
                     model = bgPath,
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
+                    contentScale = imageContentScale,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -504,16 +544,19 @@ fun StyleCard(
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
                         .height(12.dp)
+                        // 柔和容器色横条 + 反色勾（与阅读菜单"全局"Tab 选中态同色）；
+                        // 对比由 secondaryContainer/onSecondaryContainer 这对配色保证（日=淡底深勾 / 夜=深底淡勾），
+                        // 且不依赖卡片边框 ⇒ 全局"覆盖卡片边框"开着也照样一眼认出"正在使用"
                         .background(
-                            color = LegadoTheme.colorScheme.surfaceContainerHigh
+                            color = LegadoTheme.colorScheme.secondaryContainer
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
+                    AppIcon(
                         imageVector = Icons.Default.Check,
                         contentDescription = null,
                         modifier = Modifier.size(10.dp),
-                        tint = LegadoTheme.colorScheme.primary,
+                        tint = LegadoTheme.colorScheme.onSecondaryContainer,
                     )
                 }
             }

@@ -3,6 +3,7 @@ package io.legado.app.ui.book.manga
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
 import io.legado.app.ui.book.manga.config.MangaDoublePageMode
+import io.legado.app.ui.book.manga.config.MangaScrollMode
 import io.legado.app.ui.book.manga.config.MangaZoomStartPosition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +12,212 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MangaReaderInteractionTest {
+    @Test
+    fun `loading a 300 page previous chapter defers the prepend until scrolling stops`() {
+        val displayed = (0 until 57).map {
+            page(it, 1).copy(key = "page:1:$it", pageCount = 57)
+        }
+        val replacement = (0 until 300).map {
+            page(it, 0).copy(key = "page:0:$it", pageCount = 300)
+        } + displayed
+        val anchor = MangaWebtoonViewportAnchor()
+        anchor.record(displayed, 0, displayed.first().key, 240)
+        assertTrue(shouldDeferMangaPageReplacement(true, displayed, replacement))
+        assertFalse(shouldDeferMangaPageReplacement(false, displayed, replacement))
+        assertEquals(300 to 240, anchor.positionIn(replacement))
+        // 尚未重测的旧下标不能覆盖已保存的图片锚点。
+        anchor.record(replacement, 0, displayed.first().key, 0)
+        assertEquals(300 to 240, anchor.positionIn(replacement))
+        anchor.record(replacement, 300, displayed.first().key, 240)
+        assertEquals(0 to 240, anchor.positionIn(displayed))
+    }
+
+    @Test
+    fun `structural refresh waits for idle but page load state updates do not`() {
+        val displayed = listOf(page(0, 1), page(1, 1))
+        assertFalse(
+            shouldDeferMangaPageReplacement(
+                true, displayed, displayed.map { it.copy(loadState = MangaPageLoadState.Ready) },
+            )
+        )
+        assertTrue(shouldDeferMangaPageReplacement(true, displayed, displayed.reversed()))
+        assertTrue(shouldDeferMangaPageReplacement(true, displayed, displayed.drop(1)))
+        assertFalse(shouldDeferMangaPageReplacement(true, emptyList(), displayed))
+    }
+
+    @Test
+    fun `zoomed offset survives a chapter prefix rebuild at the same visible page`() {
+        val first = page(0, 0)
+        val visible = page(1, 0)
+        val items = listOf(first, visible)
+        val anchor = MangaWebtoonViewportAnchor()
+        anchor.record(items, 1, visible.key, 80)
+        // 缩放后下标与 key 不变，但项内偏移已改变。
+        anchor.record(items, 1, visible.key, 240)
+        assertEquals(0 to 240, anchor.positionIn(listOf(visible)))
+        // 新集合尚未重测时，不得用旧下标上的另一个 key 污染锚点。
+        anchor.record(listOf(visible), 1, first.key, 10)
+        assertEquals(0 to 240, anchor.positionIn(listOf(visible)))
+        assertEquals(null, anchor.positionIn(listOf(first)))
+    }
+
+    @Test
+    fun `hidden chapter boundary respects vertical and horizontal reading direction`() {
+        assertEquals(1, mangaBoundaryChapterDirection(MangaScrollMode.WEBTOON, 0f, -2f))
+        assertEquals(-1, mangaBoundaryChapterDirection(MangaScrollMode.WEBTOON, 0f, 2f))
+        assertEquals(1, mangaBoundaryChapterDirection(MangaScrollMode.PAGE_LEFT_TO_RIGHT, -2f, 0f))
+        assertEquals(1, mangaBoundaryChapterDirection(MangaScrollMode.PAGE_RIGHT_TO_LEFT, 2f, 0f))
+        assertEquals(-1, mangaBoundaryChapterDirection(MangaScrollMode.PAGE_RIGHT_TO_LEFT, -2f, 0f))
+        assertEquals(0, mangaBoundaryChapterDirection(MangaScrollMode.PAGE_TOP_TO_BOTTOM, 2f, 0f))
+    }
+
+    @Test
+    fun `keeping pixel scroll offset during long image zoom moves the reading point`() {
+        val oldOffset = -10_000
+        val focalY = 700f
+        val ratio = 2.5f
+        val originalPoint = focalY - oldOffset
+        val oldBehaviorPosition = oldOffset + originalPoint * ratio
+        assertTrue(kotlin.math.abs(oldBehaviorPosition - focalY) > 10_000)
+    }
+
+    @Test
+    fun `webtoon zoom preserves the original image point under the gesture`() {
+        val visible = listOf(Triple("long", -10_000, 20_000))
+        for (ratio in listOf(0.4f, 0.8f, 1.2f, 2.5f)) {
+            val anchor = requireNotNull(mangaWebtoonZoomAnchor(visible, 700f, setOf("long"), ratio))
+            assertEquals("long", anchor.first)
+            val originalPoint = 700f + 10_000
+            assertEquals(700f, -anchor.second + originalPoint * ratio, 1f)
+        }
+    }
+
+    @Test
+    fun `zoom anchors the touched image with vertical pan across fixed chapter gaps`() {
+        val visible = listOf(
+            Triple("first", -200, 400), Triple("edge", 200, 96),
+            Triple("second", 296, 20_000)
+        )
+        val anchor =
+            requireNotNull(mangaWebtoonZoomAnchor(visible, 500f, setOf("first", "second"), 2f, 30f))
+        assertEquals("second", anchor.first)
+        assertEquals(530f, -anchor.second + (500f - 296) * 2, 1f)
+        assertNull(mangaWebtoonZoomAnchor(visible, 250f, setOf("first", "second"), 2f))
+        assertNull(mangaWebtoonZoomAnchor(visible, 500f, emptySet(), 2f))
+    }
+
+    @Test
+    fun `zoom out restores the same reading point as zoom in`() {
+        val up = requireNotNull(
+            mangaWebtoonZoomAnchor(
+                listOf(Triple("long", -10_000, 20_000)),
+                700f, setOf("long"), 2.5f
+            )
+        )
+        val down = requireNotNull(
+            mangaWebtoonZoomAnchor(
+                listOf(Triple("long", -up.second, 50_000)),
+                700f, setOf("long"), 0.4f
+            )
+        )
+        assertEquals(10_000, down.second)
+    }
+
+    @Test
+    fun `dimension regrouping preserves the second half of a split wide page`() {
+        val items = listOf(page(0), page(1), page(2))
+        val old = buildMangaSpreads(items, false, mapOf("p0" to 2f), splitWidePages = true)
+        val right = old.first { it.slots.single().slice == MangaPageSlice.RIGHT }
+        val changed =
+            buildMangaSpreads(items, false, mapOf("p0" to 2f, "p2" to 2f), splitWidePages = true)
+        val target = mangaSpreadReconcileTarget(changed, 0, right.key)
+        assertEquals(right.key, changed[target].key)
+        assertEquals(MangaPageSlice.RIGHT, changed[target].slots.single().slice)
+    }
+
+    @Test
+    fun `removed double page identity falls back to the current original page`() {
+        val items = listOf(page(0), page(1), page(2))
+        val old = buildMangaSpreads(items, true)
+        val changed = buildMangaSpreads(items, true, mapOf("p0" to 2f))
+        val target = mangaSpreadReconcileTarget(changed, 1, old[0].key)
+        assertTrue(1 in changed[target])
+        assertEquals(-1, mangaSpreadReconcileTarget(changed, 99, null))
+    }
+
+    @Test
+    fun `chapter prefetch prioritizes the viewport and covers the boundary pages of adjacent chapters`() {
+        val pages = listOf(page(0, 0), page(7, 0)) +
+                (0..24).map { page(it, 1) } + page(0, 2)
+        // 可见页是第 1 章的 pageIndex 12（列表下标 2 + 12）。
+        val ordered = mangaChapterPrefetchPages(pages, 14, 0)
+
+        // 当前章当前页附近先执行。
+        assertEquals(listOf(12, 13, 11, 14, 10), ordered.take(5).map { it.pageIndex })
+        assertEquals(12, ordered.take(12).count { it.chapterIndex == 1 })
+        // 紧接着是相邻章紧贴边界的页：上一章末 8 页、下一章首 8 页（此数据下各有一页入选）。
+        assertEquals(
+            listOf(7 to 0, 0 to 2),
+            ordered.drop(12).take(2).map { it.pageIndex to it.chapterIndex },
+        )
+        // 当前章远端页仍全部排队。
+        assertEquals((0..24).toSet(), ordered.filter { it.chapterIndex == 1 }.map { it.pageIndex }.toSet())
+    }
+
+    @Test
+    fun `chapter prefetch falls back to the committed chapter without another chapter to prepare`() {
+        val items = listOf(MangaReaderItemUi.ChapterEdge("edge", "loading"), page(0, 0), page(0, 1))
+        assertEquals(listOf(1), mangaChapterPrefetchPages(items, 0, 1).map { it.chapterIndex })
+        assertEquals(emptyList<MangaReaderItemUi.Page>(), mangaChapterPrefetchPages(items, 0, 2))
+    }
+
+    @Test
+    fun `visible height changes wait for fling to finish while offscreen dimensions prepare immediately`() {
+        val queue = MangaWebtoonResizeQueue()
+        val changes = mutableListOf<String>()
+        var measures = 0
+        val apply: (() -> Unit) -> Unit = { measures++; it() }
+        queue.update("visible", true, true, { changes += "stale" }, apply)
+        queue.update("visible", true, true, { changes += "latest" }, apply)
+        queue.update("removed", true, true, { changes += "removed" }, apply)
+        queue.update("offscreen", true, false, { changes += "offscreen" }, apply)
+        assertEquals(listOf("offscreen"), changes)
+        queue.flush(setOf("visible", "offscreen"), apply)
+        assertEquals(listOf("offscreen", "latest"), changes)
+        assertEquals(2, measures)
+        queue.flush(setOf("visible"), apply)
+        assertEquals(2, measures)
+    }
+
+    @Test
+    fun `a later immediate resize supersedes a pending resize for the same page`() {
+        val queue = MangaWebtoonResizeQueue()
+        var value = 0
+        val apply: (() -> Unit) -> Unit = { it() }
+        queue.update("page", true, true, { value = 1 }, apply)
+        queue.update("page", false, true, { value = 2 }, apply)
+        queue.flush(setOf("page"), apply)
+        assertEquals(2, value)
+    }
+
+    @Test
+    fun `webtoon prefetch follows visible position before reading progress is committed`() {
+        assertEquals(12, mangaImagePrefetchIndex(MangaScrollMode.WEBTOON, 2, 12))
+        assertEquals(12, mangaImagePrefetchIndex(MangaScrollMode.WEBTOON_WITH_GAP, 2, 12))
+        assertEquals(2, mangaImagePrefetchIndex(MangaScrollMode.PAGE_TOP_TO_BOTTOM, 2, 12))
+        assertEquals(2, mangaImagePrefetchIndex(MangaScrollMode.WEBTOON, 2, null))
+    }
+
+    @Test
+    fun `resize preserves loaded image at viewport center instead of unknown placeholder above it`() {
+        val visible = listOf(Triple("placeholder", -100, 400), Triple("loaded", 300, 500))
+        assertEquals("loaded" to -300, mangaWebtoonResizeAnchor(visible, 400, setOf("loaded")))
+        assertEquals(null, mangaWebtoonResizeAnchor(visible, 400, emptySet()))
+        assertEquals(
+            "loaded" to 100,
+            mangaWebtoonResizeAnchor(listOf(Triple("loaded", -100, 900)), 400, setOf("loaded"))
+        )
+    }
 
     @Test
     fun `explicit chapter placeholder stays at target and exposes retry after failure`() {
@@ -33,6 +240,7 @@ class MangaReaderInteractionTest {
         pageIndex = index,
         pageCount = 10,
         chapterName = "chapter",
+        chapterSubject = "chapter",
     )
 
     @Test
@@ -72,13 +280,31 @@ class MangaReaderInteractionTest {
     }
 
     @Test
-    fun `click action cycles through chapter menu and page actions`() {
-        assertEquals(0, nextMangaClickAction(-1))
-        assertEquals(1, nextMangaClickAction(0))
-        assertEquals(2, nextMangaClickAction(1))
-        assertEquals(3, nextMangaClickAction(2))
-        assertEquals(4, nextMangaClickAction(3))
-        assertEquals(-1, nextMangaClickAction(4))
+    fun `pager reconcile stays on the displayed page instead of the stale current index`() {
+        // 相邻章 Ready 前插后，用户已经滑到 p10，而 ViewModel 的 currentItemIndex 还停在 0
+        val pages = listOf(page(0), page(10), page(11))
+        assertEquals(1, mangaPagerReconcilePageIndex(pages, "p10", currentItemIndex = 0))
+        // 显示页还在原位时不应做任何移动
+        assertEquals(0, mangaPagerReconcilePageIndex(pages, "p0", currentItemIndex = 0))
+        // 身份真正失效（页已不在集合里）才回退到 currentItemIndex
+        assertEquals(2, mangaPagerReconcilePageIndex(pages, "gone", currentItemIndex = 2))
+        assertEquals(0, mangaPagerReconcilePageIndex(pages, null, currentItemIndex = 0))
+    }
+
+    @Test
+    fun `spread reconcile follows the displayed spread when a chapter is prepended`() {
+        val before = listOf(page(5), page(6))
+        val displayed = before[1]
+        val after = listOf(page(0), page(1)) + before
+        val spreads = buildMangaSpreads(after, doublePage = false)
+        assertEquals(
+            after.indexOfFirst { it.key == displayed.key },
+            mangaSpreadReconcileTarget(
+                spreads,
+                itemIndex = 0,
+                previousKey = "spread:${displayed.key}",
+            ),
+        )
     }
 
     @Test
@@ -330,6 +556,24 @@ class MangaReaderInteractionTest {
     }
 
     @Test
+    fun `chapter promotion keeps the reading position instead of scrolling to the page top`() {
+        // 章节提升只让可见页的下标前移，key 未丢失：条漫不得按新下标复位，否则画面跳回页首。
+        assertFalse(
+            mangaNeedsPositionScroll(forcePosition = false, anchorFound = true, keyPreserved = true)
+        )
+        // 锚点丢失、key 失效或显式跳章时才需要复位。
+        assertTrue(
+            mangaNeedsPositionScroll(forcePosition = false, anchorFound = false, keyPreserved = false)
+        )
+        assertTrue(
+            mangaNeedsPositionScroll(forcePosition = false, anchorFound = true, keyPreserved = false)
+        )
+        assertTrue(
+            mangaNeedsPositionScroll(forcePosition = true, anchorFound = true, keyPreserved = true)
+        )
+    }
+
+    @Test
     fun `zoom pan clamps within zoomed content bounds`() {
         val viewport = IntSize(500, 800)
         // zoom 2、item 宽 500：maxX = (500*2-500)/2 = 250；内容高 2000：maxY = 2000*2-800 = 3200
@@ -522,5 +766,54 @@ class MangaReaderInteractionTest {
     fun `landscape double page only activates for wide viewport`() {
         assertTrue(isDoublePageActive(MangaDoublePageMode.LANDSCAPE, IntSize(1000, 600)))
         assertFalse(isDoublePageActive(MangaDoublePageMode.LANDSCAPE, IntSize(600, 1000)))
+    }
+
+    @Test
+    fun `back action prioritizes dialog then sheet then settings then menu then close reader`() {
+        assertEquals(
+            MangaBackAction.DISMISS_DIALOG,
+            resolveMangaBackAction(
+                hasActiveDialog = true,
+                hasActiveSheet = true,
+                hasSettingsCategory = true,
+                menuVisible = true,
+            ),
+        )
+        assertEquals(
+            MangaBackAction.DISMISS_SHEET,
+            resolveMangaBackAction(
+                hasActiveDialog = false,
+                hasActiveSheet = true,
+                hasSettingsCategory = true,
+                menuVisible = true,
+            ),
+        )
+        assertEquals(
+            MangaBackAction.CLOSE_SETTINGS,
+            resolveMangaBackAction(
+                hasActiveDialog = false,
+                hasActiveSheet = false,
+                hasSettingsCategory = true,
+                menuVisible = true,
+            ),
+        )
+        assertEquals(
+            MangaBackAction.HIDE_MENU,
+            resolveMangaBackAction(
+                hasActiveDialog = false,
+                hasActiveSheet = false,
+                hasSettingsCategory = false,
+                menuVisible = true,
+            ),
+        )
+        assertEquals(
+            MangaBackAction.CLOSE_READER,
+            resolveMangaBackAction(
+                hasActiveDialog = false,
+                hasActiveSheet = false,
+                hasSettingsCategory = false,
+                menuVisible = false,
+            ),
+        )
     }
 }

@@ -8,6 +8,10 @@ enum class ReaderStyleTarget { ALL, TITLE, BODY }
 data class ReaderCharacterStyle(
     val colorArgb: Int? = null,
     val backgroundArgb: Int? = null,
+    /** 边框颜色：null = 不描边；粗细与圆角只在颜色非空时参与绘制。 */
+    val borderColorArgb: Int? = null,
+    val borderWidthPx: Float = 0f,
+    val borderRadiusPx: Float = 0f,
     val underline: ReaderUnderline? = null,
     val fontPath: String? = null,
     val fontWeight: Int? = null,
@@ -15,6 +19,11 @@ data class ReaderCharacterStyle(
     val fontSizeOffsetPx: Float = 0f,
     val markingId: String? = null,
     val backgroundImage: ReaderTextBackgroundImage? = null,
+    /** 命中排版四条：见 [io.legado.app.feature.reader.core.model.ReaderTextStyle] 上的同名注释。 */
+    val matchSpacingBeforePx: Float = 0f,
+    val matchSpacingAfterPx: Float = 0f,
+    val linePadTopPx: Float = 0f,
+    val linePadBottomPx: Float = 0f,
 )
 
 data class ReaderStyleRange(
@@ -74,7 +83,18 @@ class ReaderCompiledStyleRanges internal constructor(
     private val bodyStyles: Array<ReaderCharacterStyle?>,
     private val titleStyles: Array<ReaderCharacterStyle?>,
 ) {
+    /**
+     * 上次命中的区间下标。每段内的字形位置单调递增，绝大多数查询会落回同一区间，
+     * 先做一次区间命中检查即可省掉二分。非线程安全：一个实例只服务一次 measure。
+     */
+    private var cursor = 0
+
     fun resolve(position: Int, isTitle: Boolean): ReaderCharacterStyle? {
+        if (boundaries.size < 2) return null
+        val last = cursor
+        if (position >= boundaries[last] && position < boundaries[last + 1]) {
+            return if (isTitle) titleStyles[last] else bodyStyles[last]
+        }
         var low = 0
         var high = boundaries.size - 2
         while (low <= high) {
@@ -82,7 +102,10 @@ class ReaderCompiledStyleRanges internal constructor(
             when {
                 position < boundaries[middle] -> high = middle - 1
                 position >= boundaries[middle + 1] -> low = middle + 1
-                else -> return if (isTitle) titleStyles[middle] else bodyStyles[middle]
+                else -> {
+                    cursor = middle
+                    return if (isTitle) titleStyles[middle] else bodyStyles[middle]
+                }
             }
         }
         return null

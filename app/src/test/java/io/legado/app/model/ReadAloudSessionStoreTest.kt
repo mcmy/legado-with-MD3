@@ -17,6 +17,8 @@ class ReadAloudSessionStoreTest {
             chapterPosition = 42,
             chapterLength = 100,
             text = "current paragraph",
+            chapterTitle = "正在朗读的章节",
+            chapterIndex = 3,
         )
 
         store.setStatus(ReadAloudSessionStatus.Playing)
@@ -56,5 +58,17 @@ class ReadAloudSessionStoreTest {
 
         store.restoreReadAloudFollow()
         assertTrue(store.state.value.followReadAloudPosition)
+    }
+
+    @Test
+    fun `updates timer chapters correctly`() {
+        val store = ReadAloudSessionStore()
+        assertEquals(0, store.state.value.timerChapters)
+
+        store.updateTimerChapters(3)
+        assertEquals(3, store.state.value.timerChapters)
+
+        store.updateTimerChapters(0)
+        assertEquals(0, store.state.value.timerChapters)
     }
 }

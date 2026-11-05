@@ -28,7 +28,10 @@ import io.legado.app.help.book.isEpub
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.isMobi
 import io.legado.app.help.bookmark.BookmarkExporter
+import io.legado.app.help.readaloud.cast.CastAssignmentStore
+import io.legado.app.help.readaloud.playback.ReadAloudAudioStore
 import io.legado.app.model.CacheBook
+import io.legado.app.model.ReadAloud
 import io.legado.app.model.ReadBook
 import io.legado.app.model.cache.CacheBookDownloadState
 import io.legado.app.model.localBook.EpubFile
@@ -66,6 +69,7 @@ import kotlinx.coroutines.flow.flatMapMerge
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -83,7 +87,9 @@ data class TocItemUi(
     val isDur: Boolean,
     val isSelected: Boolean,
     val downloadState: DownloadState,
-    val wordCount: String?
+    val wordCount: String?,
+    val hasCastAssignment: Boolean,
+    val hasAudioDownload: Boolean
 ) : SelectableItem<Int>
 
 @Immutable
@@ -154,6 +160,8 @@ sealed interface TocIntent {
     data object ClearSelection : TocIntent
     data object SelectFromLast : TocIntent
     data object AddBookmarksForSelected : TocIntent
+    data object DeleteAssignmentsForSelected : TocIntent
+    data object DeleteAudioDownloadsForSelected : TocIntent
     data object ToggleUseReplace : TocIntent
     data object ToggleShowWordCount : TocIntent
     data object ReverseToc : TocIntent
@@ -170,7 +178,9 @@ sealed interface TocEffect {
 data class TocDomainItem(
     val chapter: BookChapter,
     val displayTitle: String,
-    val downloadState: DownloadState
+    val downloadState: DownloadState,
+    val hasCastAssignment: Boolean = false,
+    val hasAudioDownload: Boolean = false
 )
 
 private data class DownloadContext(
@@ -272,31 +282,50 @@ class TocViewModel(
                 ""
             )
 
+    // 按需阅读写的图片/正文不经过 CacheBook，不会有 cacheSuccessFlow，只能在目录打开时重扫补齐。
+    private val cachedChapterRescan = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     private val _cachedChapterIndices: StateFlow<Set<Int>> = bookState.filterNotNull()
-        .flatMapLatest { book ->
+        .map { it.bookUrl to it.getFolderName() }
+        .distinctUntilChanged()
+        .flatMapLatest { (bookUrl, _) ->
             flow {
-                var cached: Set<Int> = bookRepository.getChapters(book.bookUrl)
-                    .filter { chapter ->
-                        chapter.isVolume || withContext(Dispatchers.IO) {
-                            BookHelp.isChapterCacheComplete(book, chapter)
-                        }
-                    }
-                    .mapTo(mutableSetOf()) { it.index }
-                emit(cached)
-                CacheBook.cacheSuccessFlow
-                    .filter { it.bookUrl == book.bookUrl }
-                    .collect { chapter ->
-                        cached = if (chapter.isVolume ||
-                            withContext(Dispatchers.IO) {
-                                BookHelp.isChapterCacheComplete(book, chapter)
+                suspend fun scanCached(): Set<Int> {
+                    val book = bookRepository.getBook(bookUrl) ?: return emptySet()
+                    return bookRepository.getChapters(bookUrl)
+                        .filter { chapter ->
+                            // 显示用宽松判定：有正文即算已缓存（缺图不再判为未缓存）；
+                            // 下载是否需要补图仍用严格的 isChapterCacheComplete。
+                            chapter.isVolume || withContext(Dispatchers.IO) {
+                                BookHelp.hasContent(book, chapter)
                             }
-                        ) {
-                            cached + chapter.index
-                        } else {
-                            cached - chapter.index
                         }
-                        emit(cached)
+                        .mapTo(mutableSetOf()) { it.index }
+                }
+
+                var cached = scanCached()
+                emit(cached)
+                merge(
+                    CacheBook.cacheSuccessFlow
+                        .filter { it.bookUrl == bookUrl }
+                        .map { chapter -> chapter },
+                    cachedChapterRescan.map { null },
+                ).collect { chapter ->
+                    cached = if (chapter == null) {
+                        scanCached()
+                    } else if (chapter.isVolume ||
+                        withContext(Dispatchers.IO) {
+                            bookRepository.getBook(bookUrl)?.let {
+                                BookHelp.hasContent(it, chapter)
+                            } == true
+                        }
+                    ) {
+                        cached + chapter.index
+                    } else {
+                        cached - chapter.index
                     }
+                    emit(cached)
+                }
             }
         }
         .flowOn(Dispatchers.IO)
@@ -458,13 +487,32 @@ class TocViewModel(
     private var titleCacheJob: Job? = null
     private var lastTitleCacheKey: TitleCacheKey? = null
 
+    /** 目录行右侧那两枚状态图标的数据源：本章分配过角色 / 本章下载过听书音频。 */
+    private data class TocStatusFlags(
+        val assigned: Set<Int> = emptySet(),
+        val downloaded: Set<Int> = emptySet(),
+    )
+
+    private val statusFlagsFlow: Flow<TocStatusFlags> = bookUrlFlow
+        .filterNotNull()
+        .flatMapLatest { url ->
+            combine(
+                CastAssignmentStore.flowAssignedChapters(url),
+                ReadAloudAudioStore.flowDownloadedChapters(url),
+            ) { assigned, downloaded ->
+                TocStatusFlags(assigned.toSet(), downloaded)
+            }
+        }
+        .flowOn(Dispatchers.IO)
+
     override val rawDataFlow: Flow<List<TocDomainItem>> = combine(
         bookState.filterNotNull().map { it.bookUrl }.distinctUntilChanged()
             .flatMapLatest { bookRepository.flowChapters(it) },
         downloadContextFlow,
         uiConfigFlow,
-        titleReplaceState
-    ) { originalChapters, downloadCtx, config, titleState ->
+        titleReplaceState,
+        statusFlagsFlow
+    ) { originalChapters, downloadCtx, config, titleState, statusFlags ->
         val book = bookState.value ?: return@combine emptyList()
 
         val processedChapters = if (config.isReverse) {
@@ -497,7 +545,9 @@ class TocViewModel(
                 TocDomainItem(
                     chapter = chapter,
                     displayTitle = titleState.titles[chapter.index] ?: baseTitle,
-                    downloadState = DownloadState.LOCAL
+                    downloadState = DownloadState.LOCAL,
+                    hasCastAssignment = chapter.index in statusFlags.assigned,
+                    hasAudioDownload = chapter.index in statusFlags.downloaded,
                 )
             }
         }
@@ -521,7 +571,9 @@ class TocViewModel(
             TocDomainItem(
                 chapter,
                 titleState.titles[chapter.index] ?: baseTitle,
-                downloadState
+                downloadState,
+                statusFlags.assigned.contains(chapter.index),
+                statusFlags.downloaded.contains(chapter.index),
             )
         }
 
@@ -591,7 +643,9 @@ class TocViewModel(
             isDur = false,
             isSelected = false,
             downloadState = downloadState,
-            wordCount = wordCountText
+            wordCount = wordCountText,
+            hasCastAssignment = hasCastAssignment,
+            hasAudioDownload = hasAudioDownload,
         )
     }
 
@@ -613,6 +667,7 @@ class TocViewModel(
                     _collapsedVolumes.value = emptySet()
                     bookUrlFlow.value = intent.bookUrl
                 }
+                cachedChapterRescan.tryEmit(Unit)
             }
             is TocIntent.SetSearchMode -> setSearchMode(intent.enabled)
             is TocIntent.SetSearchQuery -> setSearchKey(intent.query)
@@ -630,6 +685,8 @@ class TocViewModel(
             TocIntent.ClearSelection -> clearSelection()
             TocIntent.SelectFromLast -> selectFromLast()
             TocIntent.AddBookmarksForSelected -> addBookmarksForSelected()
+            TocIntent.DeleteAssignmentsForSelected -> deleteAssignmentsForSelected()
+            TocIntent.DeleteAudioDownloadsForSelected -> deleteAudioDownloadsForSelected()
             TocIntent.ToggleUseReplace -> toggleUseReplace()
             TocIntent.ToggleShowWordCount -> toggleShowWordCount()
             TocIntent.ReverseToc -> reverseToc()
@@ -846,6 +903,46 @@ class TocViewModel(
         withContext(Dispatchers.Main) {
             clearSelection()
         }
+    }
+
+    /** 删除所选章节的角色分配（目录长按菜单「删除分配」）。 */
+    fun deleteAssignmentsForSelected() = deleteSelectedChapters(
+        { book, index -> CastAssignmentStore.deleteChapter(book.bookUrl, index) },
+        R.string.cast_assignment_deleted_chapters,
+    )
+
+    /** 删除所选章节的听书音频（目录长按菜单「删除听书」）。 */
+    fun deleteAudioDownloadsForSelected() = deleteSelectedChapters(
+        { book, index -> ReadAloudAudioStore.delete(book.bookUrl, index) },
+        R.string.read_aloud_audio_download_deleted_chapters,
+    )
+
+    /**
+     * 对所选章节逐章执行 [action]，完成后提示删了几章、清掉选择。
+     *
+     * 正在朗读这本书时让朗读侧重排队列，否则用户听完这句还在用刚删掉的分配。
+     */
+    private fun deleteSelectedChapters(
+        action: suspend (Book, Int) -> Unit,
+        doneMessageRes: Int,
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        val book = bookState.value ?: return@launch
+        val indices = uiState.value.items
+            .asSequence()
+            .filter { it.id in uiState.value.selectedIds }
+            .filterNot { it.isVolume }
+            .map { it.id }
+            .toList()
+        if (indices.isEmpty()) {
+            showMessage(R.string.select_chapters)
+            return@launch
+        }
+        indices.forEach { index -> action(book, index) }
+        if (ReadBook.book?.bookUrl == book.bookUrl) {
+            ReadAloud.refreshCastQueue(context)
+        }
+        showMessage(context.getString(doneMessageRes, indices.size))
+        withContext(Dispatchers.Main) { clearSelection() }
     }
 
     fun downloadSelected() {

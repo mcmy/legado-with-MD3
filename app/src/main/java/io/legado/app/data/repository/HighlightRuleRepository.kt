@@ -7,6 +7,7 @@ import io.legado.app.data.dao.HighlightRuleDao
 import io.legado.app.data.entities.HighlightRule
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
+import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.getPrefBoolean
 import io.legado.app.utils.putPrefBoolean
 import splitties.init.appCtx
@@ -19,6 +20,9 @@ class HighlightRuleRepository(
 
     companion object {
         const val backupFileName = "highlightRule.json"
+
+        /** 命中排版四栏与长度偏移的滑杆上限（dp），与编辑弹层里的 valueRange 一致。 */
+        private const val MAX_MATCH_SPACING_DP = 40f
     }
 
     data class BackupData(
@@ -148,7 +152,9 @@ class HighlightRuleRepository(
                 listOf(name, pattern).joinToString("|").hashCode().toUInt().toString(16)
             }"
         }
-        return HighlightRule(
+        // 从 rule 本身 copy：新增字段只要不写进下面这张清单就不会被静默清零。
+        // 逐字段重建会丢命中字距 / 命中行行距 / 九宫格左右偏移（保存后滑杆失效），必须整体 copy。
+        return rule.copy(
             id = id,
             name = name,
             pattern = pattern,
@@ -162,6 +168,9 @@ class HighlightRuleRepository(
             position = runCatching { rule.position }.getOrDefault(0),
             textColor = runCatching { rule.textColor }.getOrNull(),
             bgColor = runCatching { rule.bgColor }.getOrNull(),
+            borderColor = runCatching { rule.borderColor }.getOrNull(),
+            borderWidth = runCatching { rule.borderWidth }.getOrDefault(1f).coerceIn(0.5f, 10f),
+            borderRadius = runCatching { rule.borderRadius }.getOrDefault(4f).coerceIn(0f, 24f),
             underlineMode = runCatching { rule.underlineMode }.getOrDefault(0).coerceIn(0, 7),
             underlineColor = runCatching { rule.underlineColor }.getOrNull(),
             underlineWidth = runCatching { rule.underlineWidth }.getOrDefault(1f)
@@ -177,11 +186,23 @@ class HighlightRuleRepository(
             fontWeight = runCatching { rule.fontWeight }.getOrDefault(400).coerceIn(300, 700),
             isItalic = runCatching { rule.isItalic }.getOrDefault(false),
             fontSizeOffset = runCatching { rule.fontSizeOffset }.getOrDefault(0).coerceIn(-10, 10),
-            npLeft = runCatching { rule.npLeft }.getOrDefault(0.1f).coerceIn(0f, 0.5f),
-            npRight = runCatching { rule.npRight }.getOrDefault(0.1f).coerceIn(0f, 0.5f),
-            npTop = runCatching { rule.npTop }.getOrDefault(0.1f).coerceIn(0f, 0.5f),
-            npBottom = runCatching { rule.npBottom }.getOrDefault(0.1f).coerceIn(0f, 0.5f),
+            npLeft = runCatching { rule.npLeft }.getOrDefault(0.1f).coerceIn(0f, 1f),
+            npRight = runCatching { rule.npRight }.getOrDefault(0.1f).coerceIn(0f, 1f),
+            npTop = runCatching { rule.npTop }.getOrDefault(0.1f).coerceIn(0f, 1f),
+            npBottom = runCatching { rule.npBottom }.getOrDefault(0.1f).coerceIn(0f, 1f),
             manualNineSlice = runCatching { rule.manualNineSlice }.getOrDefault(true),
+            letterSpacingBefore = runCatching { rule.letterSpacingBefore }.getOrDefault(0f)
+                .coerceIn(0f, MAX_MATCH_SPACING_DP),
+            letterSpacingAfter = runCatching { rule.letterSpacingAfter }.getOrDefault(0f)
+                .coerceIn(0f, MAX_MATCH_SPACING_DP),
+            lineSpacingTop = runCatching { rule.lineSpacingTop }.getOrDefault(0f)
+                .coerceIn(0f, MAX_MATCH_SPACING_DP),
+            lineSpacingBottom = runCatching { rule.lineSpacingBottom }.getOrDefault(0f)
+                .coerceIn(0f, MAX_MATCH_SPACING_DP),
+            bgLengthOffsetLeft = runCatching { rule.bgLengthOffsetLeft }.getOrDefault(0f)
+                .coerceIn(-MAX_MATCH_SPACING_DP, MAX_MATCH_SPACING_DP),
+            bgLengthOffsetRight = runCatching { rule.bgLengthOffsetRight }.getOrDefault(0f)
+                .coerceIn(-MAX_MATCH_SPACING_DP, MAX_MATCH_SPACING_DP),
         )
     }
 
@@ -337,11 +358,18 @@ class HighlightRuleRepository(
         )
     }
 
+    /**
+     * 清掉没人引用的背景图。
+     *
+     * 「在用」的集合必须把**角色气泡**算进来：气泡图与规则图共用 `bg_images` 这一目录
+     * （`CastCharacter.bubbleRuleJson` 里存的也是一条 HighlightRule），只查规则表的话
+     * 任何一次保存规则都会把只有角色在用的图物理删掉，角色气泡随之失效、只能重新导入。
+     */
     private fun cleanupUnusedBgImages() {
         val allRules = dao.getAll()
-        val usedPaths = allRules.mapNotNull { it.bgImage }
-            .filter { it.isNotBlank() && !it.startsWith("assets://") }
-            .toSet()
+        val usedPaths = (
+            allRules.mapNotNull { it.bgImage } + castBubblePaths()
+            ).filter { it.isNotBlank() && !it.startsWith("assets://") }.toSet()
         val dir = File(context.filesDir, "bg_images")
         if (!dir.exists()) return
         dir.listFiles()?.forEach { file ->
@@ -350,6 +378,12 @@ class HighlightRuleRepository(
             }
         }
     }
+
+    private fun castBubblePaths(): List<String> = runCatching {
+        appDb.castCharacterDao.getBubbleRefs().mapNotNull { json ->
+            GSON.fromJsonObject<HighlightRule>(json).getOrNull()?.bgImage
+        }
+    }.getOrDefault(emptyList())
 
     private fun restoreRuleBgImage(backupRootPath: String?, bgImage: String?): String? {
         val path = bgImage ?: return null

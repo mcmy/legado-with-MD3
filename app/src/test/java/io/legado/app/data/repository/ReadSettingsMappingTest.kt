@@ -14,11 +14,31 @@ import kotlin.reflect.full.primaryConstructor
 class ReadSettingsMappingTest {
 
     @Test
-    fun `gateway 持久化映射覆盖 ReadSettings 全部 112 个字段`() {
+    fun `旧亮度键仍可读取但只写入独立键`() {
+        val repository = ReadSettingsRepository(
+            settingsRepository = SettingsRepository(),
+            preferencesFlow = MutableStateFlow(mutablePreferencesOf()),
+        )
+        val legacy = mapOf(
+            PreferKey.showBrightnessView to "2",
+            PreferKey.brightnessVwPos to "0",
+        ).toTestPreferences()
+        val settings = with(repository) { legacy.toReadSettings() }
+
+        assertEquals("2", settings.showBrightnessView)
+        assertEquals("0", settings.brightnessVwPos)
+        assertEquals("2", settings.toGatewayPrefMap()[PreferKey.readBrightnessMode])
+        assertEquals("0", settings.toGatewayPrefMap()[PreferKey.readBrightnessControlPosition])
+        assertFalse(settings.toGatewayPrefMap().containsKey(PreferKey.showBrightnessView))
+        assertFalse(settings.toGatewayPrefMap().containsKey(PreferKey.brightnessVwPos))
+    }
+
+    @Test
+    fun `gateway 持久化映射覆盖 ReadSettings 全部 116 个字段`() {
         val actualKeys = ReadSettings().toGatewayPrefMap().keys
         val expectedKeys = ReadSettings().expectedGatewayPrefMap().keys
 
-        assertEquals(112, actualKeys.size)
+        assertEquals(116, actualKeys.size)
         assertEquals(expectedKeys, actualKeys)
     }
 
@@ -102,6 +122,9 @@ class ReadSettingsMappingTest {
         assertFalse(settings.readMenuFloatingIconLiquidGlass)
         assertFalse(settings.showMenuIcon)
         assertFalse(settings.titleBarCompact)
+        assertEquals(10, settings.preDownloadNum)
+        assertEquals(0, settings.preDownloadNumPrev)
+        assertEquals(4, settings.themeGridColumns)
     }
 }
 
@@ -126,7 +149,10 @@ private fun readSettingsMappingSamples(): List<ReadSettings> {
         nextKeys = "next-keys",
         fontFolder = "font-folder",
         systemTypefaces = 23,
+        paragraphBubblePackage = "sample-bubble",
+        forceSoftwareParagraphBubble = true,
         preDownloadNum = 29,
+        preDownloadNumPrev = 7,
         menuAlpha = 1001,
         expandTextMenu = true,
         showSelectMenuIcon = false,
@@ -136,6 +162,7 @@ private fun readSettingsMappingSamples(): List<ReadSettings> {
         useNewTocSheet = false,
         maxLengthWithNoToc = 3000,
         readStyleSelect = 1007,
+        themeGridColumns = 6,
         comicStyleSelect = 1008,
         shareLayout = true,
         readBarStyleFollowPage = true,
@@ -240,8 +267,8 @@ private fun ReadSettings.expectedGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.textBottomJustify to textBottomJustify,
     PreferKey.adaptSpecialStyle to adaptSpecialStyle,
     PreferKey.useZhLayout to useZhLayout,
-    PreferKey.showBrightnessView to showBrightnessView,
-    PreferKey.brightnessVwPos to brightnessVwPos,
+    PreferKey.readBrightnessMode to showBrightnessView,
+    PreferKey.readBrightnessControlPosition to brightnessVwPos,
     PreferKey.brightness to readBrightness,
     PreferKey.brightnessAuto to brightnessAuto,
     PreferKey.useUnderline to useUnderline,
@@ -274,7 +301,10 @@ private fun ReadSettings.expectedGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.showReadTitleAddition to showReadTitleAddition,
     PreferKey.autoReadSpeed to autoReadSpeed,
     PreferKey.systemTypefaces to systemTypefaces,
+    PreferKey.paragraphBubblePackage to paragraphBubblePackage,
+    PreferKey.forceSoftwareParagraphBubble to forceSoftwareParagraphBubble,
     PreferKey.preDownloadNum to preDownloadNum,
+    PreferKey.preDownloadNumPrev to preDownloadNumPrev,
     PreferKey.prevKeys to prevKeys,
     PreferKey.nextKeys to nextKeys,
     PreferKey.tocUiUseReplace to tocUiUseReplace,
@@ -283,6 +313,7 @@ private fun ReadSettings.expectedGatewayPrefMap(): Map<String, Any?> = mapOf(
     PreferKey.maxLengthWithNoToc to maxLengthWithNoToc,
     PreferKey.readUrlOpenInBrowser to readUrlInBrowser,
     PreferKey.readStyleSelect to readStyleSelect,
+    PreferKey.themeGridColumns to themeGridColumns,
     PreferKey.comicStyleSelect to comicStyleSelect,
     PreferKey.shareLayout to shareLayout,
     PreferKey.readBarStyleFollowPage to readBarStyleFollowPage,

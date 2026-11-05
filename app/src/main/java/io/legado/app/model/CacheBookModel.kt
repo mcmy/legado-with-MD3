@@ -8,6 +8,7 @@ import io.legado.app.exception.ConcurrentException
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.coroutine.CompositeCoroutine
 import io.legado.app.help.coroutine.Coroutine
+import io.legado.app.model.cache.CACHE_DOWNLOAD_RETRY_LIMIT
 import io.legado.app.model.cache.CacheChapterProgress
 import io.legado.app.model.cache.CacheChapterProgressPhase
 import io.legado.app.model.cache.CacheDownloadCandidate
@@ -17,6 +18,7 @@ import io.legado.app.model.cache.CacheDownloadRequest
 import io.legado.app.model.cache.CacheDownloadSource
 import io.legado.app.model.cache.CacheDownloadStateStore
 import io.legado.app.model.cache.ChapterSelection
+import io.legado.app.model.cache.cacheRetryBackoffMs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -40,7 +42,7 @@ class CacheBookModel(
     interface Host {
         val stateStore: CacheDownloadStateStore
         val cacheBookMap: ConcurrentHashMap<String, CacheBookModel>
-        fun incrementSuccessCount(): Int
+        fun incrementSuccessCount(bookUrl: String, chapterIndex: Int): Int
         fun onTaskQueuesChanged(bookUrl: String)
         fun onTaskRemoved(bookUrl: String, clearState: Boolean = false)
         fun onExplicitBookQueued(bookUrl: String)
@@ -185,7 +187,7 @@ class CacheBookModel(
      */
     @Synchronized
     fun hasLaunchableChapters(): Boolean {
-        return !isPaused && (queue.waitingCount() > 0 || isLoading)
+        return !isPaused && (queue.hasLaunchableChapter(onDownloadSet) || isLoading)
     }
 
     @Synchronized
@@ -342,7 +344,7 @@ class CacheBookModel(
         synchronized(this) {
             onDownloadSet.remove(chapter.index)
             chapterTasks.remove(chapter.index)
-            host.incrementSuccessCount()
+            host.incrementSuccessCount(book.bookUrl, chapter.index)
             retryCountMap.remove(chapter.index)
             host.stateStore.markSuccess(book.bookUrl, chapter.index)
         }
@@ -366,13 +368,20 @@ class CacheBookModel(
     private fun onPostError(chapter: BookChapter, error: Throwable) {
         synchronized(this) {
             val retryCount = retryCountMap[chapter.index] ?: 0
-            if (retryCount < 3 && !isStopped) {
+            if (retryCount < CACHE_DOWNLOAD_RETRY_LIMIT && !isStopped) {
                 queue.enqueue(ChapterSelection.Single(chapter.index))
             } else {
                 AppLog.put("下载${book.name}-${chapter.title}失败\n${error.localizedMessage}", error)
             }
             waitingRetry = false
         }
+    }
+
+    /** 本次失败后还会重试则返回重试序号（1 起），否则返回 0（不必再等退避）。 */
+    @Synchronized
+    private fun retryAttemptAfterFailure(index: Int): Int {
+        val attempt = retryCountMap[index] ?: 0
+        return if (attempt in 1 until CACHE_DOWNLOAD_RETRY_LIMIT && !isStopped) attempt else 0
     }
 
     private fun onError(chapter: BookChapter, error: Throwable) {
@@ -508,7 +517,7 @@ class CacheBookModel(
             onSkipped(chapterIndex)
             return
         }
-        if (repository.hasImageContent(book, chapter)) {
+        if (repository.hasImageContent(book, chapter, queue.isExplicitDownload(chapter.index))) {
             onSkipped(chapterIndex)
             return
         }
@@ -521,6 +530,7 @@ class CacheBookModel(
                 bookSource = bookSource,
                 book = book,
                 chapter = chapter,
+                explicitDownload = queue.isExplicitDownload(chapter.index),
                 start = CoroutineStart.LAZY,
                 onProgress = { completed, total ->
                     reportImageDownloadProgress(chapter, completed, total)
@@ -619,15 +629,25 @@ class CacheBookModel(
         content: String? = null,
     ) {
         task.onSuccess(IO) {
-            if (chainImagesAfterContent && !repository.hasImageContent(book, chapter)) {
-                startImageCacheTask(scope, context, chapter, chapterIndex, it as String)
-                return@onSuccess
+            synchronized(this@CacheBookModel) {
+                // 与 addRequest 共用锁：用途复核和完成提交之间不能插入新的显式请求。
+                val explicitDownload = queue.isExplicitDownload(chapterIndex)
+                if ((chainImagesAfterContent || explicitDownload) &&
+                    !repository.hasImageContent(book, chapter, explicitDownload)) {
+                    startImageCacheTask(
+                        scope, context, chapter, chapterIndex,
+                        (it as? String) ?: content ?: BookHelp.getContent(book, chapter).orEmpty(),
+                    )
+                    return@onSuccess
+                }
+                completeChapterCache(chapter, content ?: (it as? String))
             }
-            completeChapterCache(chapter, content ?: (it as? String))
         }.onError(IO) {
             onPreError(chapter, it)
+            // 按失败次数退避；用满次数的最后一次不再空等，避免整书在队首挂住。
+            val attempt = retryAttemptAfterFailure(chapter.index)
             try {
-                delay(1000)
+                if (attempt > 0) delay(cacheRetryBackoffMs(attempt))
             } finally {
                 onPostError(chapter, it)
             }
@@ -676,6 +696,7 @@ class CacheBookModel(
             bookSource = bookSource,
             book = book,
             chapter = chapter,
+            explicitDownload = queue.isExplicitDownload(chapter.index),
             start = CoroutineStart.LAZY,
             onProgress = { completed, total ->
                 reportImageDownloadProgress(chapter, completed, total)
@@ -721,12 +742,13 @@ class CacheBookModel(
     }
 
     private suspend fun ensureChapterImagesCached(chapter: BookChapter) {
-        if (repository.hasImageContent(book, chapter)) return
+        if (repository.hasImageContent(book, chapter, queue.isExplicitDownload(chapter.index))) return
         reportImageDownloadProgress(chapter, completed = 0)
         repository.saveCachedImagesAwait(
             bookSource = bookSource,
             book = book,
             chapter = chapter,
+            explicitDownload = queue.isExplicitDownload(chapter.index),
             onProgress = { completed, total ->
                 reportImageDownloadProgress(chapter, completed, total)
             },

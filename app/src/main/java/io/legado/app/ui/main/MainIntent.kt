@@ -18,6 +18,7 @@ object MainIntent {
     const val EXTRA_CHARACTER_ID = "characterId"
     const val EXTRA_ENTRY_ID = "entryId"
     const val EXTRA_EVENT_ID = "eventId"
+    const val EXTRA_OPEN_READ_ALOUD_PLAYER = "openReadAloudPlayer"
     const val EXTRA_READ_ALOUD = "readAloud"
     const val EXTRA_IN_BOOKSHELF = "inBookshelf"
     const val EXTRA_CHAPTER_CHANGED = "chapterChanged"
@@ -128,6 +129,13 @@ object MainIntent {
             putExtra(EXTRA_SOURCE_URL, sourceUrl)
         }
 
+    /** 段评气泡管理页（系统文件关联导入完气泡包后跳过去看结果）。 */
+    fun createBubbleManageIntent(context: Context): Intent =
+        createLauncherIntent(context).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(EXTRA_START_ROUTE, MainRouteConst.ROUTE_SETTINGS_BUBBLE)
+        }
+
     fun createRssSourceManageIntent(context: Context): Intent =
         createLauncherIntent(context).apply {
             putExtra(EXTRA_START_ROUTE, MainRouteConst.ROUTE_RSS_SOURCE_MANAGE)
@@ -225,7 +233,8 @@ object MainIntent {
     }
 
     fun createReadBookMediaControlIntent(context: Context): Intent =
-        createReadBookIntent(context, readAloud = true).apply {
+        createReadBookIntent(context, bookUrl = io.legado.app.model.ReadAloud.bookSession.book?.bookUrl,
+            readAloud = true).apply {
             // 复用 launcher Activity 并移除其上层的旧 Activity；Nav3 父栈另行重建，
             // 让阅读页返回时始终落到主页。
             addFlags(
@@ -259,6 +268,17 @@ object MainIntent {
     ): Intent = createLauncherIntent(context).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         putExtra(EXTRA_START_ROUTE, MainRouteConst.ROUTE_AUDIO_PLAY)
+        bookUrl?.let { putExtra(EXTRA_BOOK_URL, it) }
+        putExtra(EXTRA_IN_BOOKSHELF, inBookshelf)
+    }
+
+    fun createVideoPlayIntent(
+        context: Context,
+        bookUrl: String? = null,
+        inBookshelf: Boolean = true,
+    ): Intent = createLauncherIntent(context).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        putExtra(EXTRA_START_ROUTE, MainRouteConst.ROUTE_VIDEO_PLAY)
         bookUrl?.let { putExtra(EXTRA_BOOK_URL, it) }
         putExtra(EXTRA_IN_BOOKSHELF, inBookshelf)
     }

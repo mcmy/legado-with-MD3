@@ -14,13 +14,13 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.BaseSource
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.domain.gateway.ImportBookSettingsGateway
+import io.legado.app.domain.gateway.OtherSettingsGateway
+import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.exception.EmptyFileException
 import io.legado.app.exception.NoBooksDirException
 import io.legado.app.exception.NoStackTraceException
 import io.legado.app.exception.TocEmptyException
-import io.legado.app.domain.gateway.ImportBookSettingsGateway
-import io.legado.app.domain.gateway.OtherSettingsGateway
-import io.legado.app.domain.gateway.ReadSettingsGateway
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
@@ -55,10 +55,10 @@ import io.legado.app.utils.inputStream
 import io.legado.app.utils.isAbsUrl
 import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.isDataUrl
+import io.legado.app.utils.parseToUri
 import io.legado.app.utils.printOnDebug
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
-import org.apache.commons.text.StringEscapeUtils
 import org.koin.core.context.GlobalContext
 import splitties.init.appCtx
 import java.io.ByteArrayInputStream
@@ -73,6 +73,9 @@ import java.io.InputStream
  * 支持在线文件(txt epub umd 压缩文件 本地文件
  */
 object LocalBook {
+
+    /** 批量导入的单块提交规模；同时约束块事务持锁时长与书表失效次数 */
+    private const val IMPORT_COMMIT_CHUNK = 200
 
     private val otherSettingsGateway get() = GlobalContext.get().get<OtherSettingsGateway>()
     private val readSettingsGateway get() = GlobalContext.get().get<ReadSettingsGateway>()
@@ -179,7 +182,7 @@ object LocalBook {
     }
 
     fun getContent(book: Book, chapter: BookChapter): String? {
-        var content = try {
+        val content = try {
             when {
                 book.isEpub -> {
                     EpubFile.getContent(book, chapter)
@@ -206,17 +209,25 @@ object LocalBook {
             AppLog.put("获取本地书籍内容失败\n${e.localizedMessage}", e)
             "获取本地书籍内容失败\n${e.localizedMessage}"
         }
-        if (book.isEpub) {
-            content ?: return null
-            if (content.indexOf('&') > -1) {
-                content = content.replace("&lt;img", "&lt; img", true)
-                return StringEscapeUtils.unescapeHtml4(content)
-            }
-        }
-        if (content.isNullOrEmpty() && !chapter.isVolume) {
-            return null
-        }
+        // EPUB's mixed-channel emitter already decodes plain text once. Rich text is
+        // decoded by the reader parser; decoding here would corrupt literal entities.
+        // An empty chapter body ("") is a valid blank page and renders through the
+        // title pipeline; only null means the content is genuinely unavailable.
         return content
+    }
+
+    /** Optional original markup. Failure must never replace the authoritative chapter text. */
+    fun getPresentation(book: Book, chapter: BookChapter): io.legado.app.feature.reader.core.source.ReaderLocalPresentation? = try {
+        when {
+            book.isEpub -> EpubFile.getPresentation(book, chapter)
+            book.isMobi -> MobiFile.getPresentation(book, chapter)
+            else -> null
+        }
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        AppLog.put("本地呈现读取失败: chapter=${chapter.index}, ${error.javaClass.simpleName}")
+        null
     }
 
     fun getCoverPath(book: Book): String {
@@ -257,6 +268,12 @@ object LocalBook {
         }
         var book = appDb.bookDao.getBook(bookUrl)
         if (book == null) {
+            // 源文件被删掉后重新导入同名文件时，书架里那条记录只是文件位置失效；
+            // 直接 insert 会再裂出一条同名书，应先把它接回这次导入的文件。
+            val reusableBook = findReusableStaleLocalBook(bookUrl, fileName)
+            if (reusableBook != null) {
+                return rebindLocalBook(reusableBook, bookUrl, fileName)
+            }
             val nameAuthor = analyzeNameAuthor(fileName)
             book = Book(
                 type = BookType.text or BookType.local,
@@ -281,6 +298,55 @@ object LocalBook {
             appDb.bookDao.update(book)
         }
         return book
+    }
+
+    /**
+     * 找出"同名、但文件已经读不到"的旧记录，用于把重新导入的同名文件接回这条记录。
+     * 判据见 [planLocalBookImportReuse]。
+     */
+    private fun findReusableStaleLocalBook(importedBookUrl: String, fileName: String): Book? {
+        if (fileName.isBlank()) return null
+        val existingBook = appDb.bookDao.getBookByFileName(fileName) ?: return null
+        return planLocalBookImportReuse(
+            existingBook = existingBook,
+            existingFileReadable = isBookFileReadable(existingBook),
+            importedFileName = fileName,
+            importedBookUrl = importedBookUrl,
+        )
+    }
+
+    /**
+     * 记录的文件是否还读得到。
+     *
+     * 这里刻意不做 [io.legado.app.help.book.getLocalUri] 那样的兜底搜索：那条路径会顺手
+     * 迁移主键，探测本身不应该有副作用；只按 `bookUrl` 直接开一次流。
+     */
+    private fun isBookFileReadable(book: Book): Boolean {
+        val stream = book.bookUrl.parseToUri().inputStream(appCtx).getOrNull() ?: return false
+        stream.use { }
+        return true
+    }
+
+    /**
+     * 把失效记录迁到新文件上：保留分组、阅读进度等用户数据，清掉旧目录、缓存与封面。
+     */
+    private fun rebindLocalBook(staleBook: Book, newBookUrl: String, fileName: String): Book {
+        val oldBook = staleBook.copy()
+        deleteBook(oldBook, false)
+        val reboundBook = oldBook.copy(bookUrl = newBookUrl, originName = fileName)
+        // 触发 isLocalModified：旧目录的正文偏移对新文件没有意义，必须重新解析
+        reboundBook.latestChapterTime = 0
+        upBookInfo(reboundBook)
+        reboundBook.upKind()
+        appDb.runInTransaction {
+            // 旧主键下的章节随记录一起废弃，避免留下查不到的脏行
+            appDb.bookChapterDao.delByBook(oldBook.bookUrl)
+            appDb.bookDao.replace(oldBook, reboundBook)
+            BookHelp.updateCacheFolder(oldBook, reboundBook)
+        }
+        oldBook.removeLocalUriCache()
+        reboundBook.removeLocalUriCache()
+        return reboundBook
     }
 
     fun importMangaDirectory(directory: FileDoc): Book {
@@ -368,18 +434,30 @@ object LocalBook {
         return books
     }
 
+    /**
+     * 批量导入按块提交：逐本 insert 每本都会广播一次书表失效，书架各 Flow 收到后
+     * 对整架全量重查重排，数千本规模形成 O(n²) 分配风暴。分块事务把失效次数压到
+     * 块数，块内有界持锁。
+     *
+     * 失败语义（骨架见 [importInChunks]）：块事务内不吞异常——Android SQLite 的
+     * 嵌套事务失败会静默毒化外层事务，块内 runCatching 吞掉异常后外层可能已整体
+     * 回滚，而错误计数只记了个别本，计数与落库不一致。任一本抛错即让异常越过块
+     * 事务边界（整块回滚有保证），该块退回逐本无事务重放，单本失败按本隔离计数。
+     */
     fun importFiles(uris: List<Uri>) {
         var errorCount = 0
-        uris.forEach { uri ->
-            val fileDoc = FileDoc.fromUri(uri, false)
-            kotlin.runCatching {
-                importFiles(uri)
-            }.onFailure {
-                AppLog.put("ImportFile Error:\nFile $fileDoc\n${it.localizedMessage}", it)
+        importInChunks(
+            items = uris,
+            chunkSize = IMPORT_COMMIT_CHUNK,
+            importOne = { uri -> importFiles(uri) },
+            runChunkInTransaction = { block -> appDb.runInTransaction { block() } },
+            onImportError = { uri, error ->
+                val fileDoc = FileDoc.fromUri(uri, false)
+                AppLog.put("ImportFile Error:\nFile $fileDoc\n${error.localizedMessage}", error)
                 errorCount += 1
-            }
-        }
-        if (errorCount == uris.size) {
+            },
+        )
+        if (uris.isNotEmpty() && errorCount >= uris.size) {
             throw NoStackTraceException("ImportFiles Error:\nAll input files occur error")
         }
     }

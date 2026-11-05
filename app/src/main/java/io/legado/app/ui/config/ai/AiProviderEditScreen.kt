@@ -1,13 +1,21 @@
 package io.legado.app.ui.config.ai
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -16,12 +24,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -43,11 +54,17 @@ import io.legado.app.ui.widget.components.alert.AppAlertDialog
 import io.legado.app.ui.widget.components.settingItem.ClickableSettingItem
 import io.legado.app.ui.widget.components.settingItem.DropdownListSettingItem
 import io.legado.app.ui.widget.components.settingItem.InputSettingItem
+import io.legado.app.ui.widget.components.settingItem.TinyClickableSettingItem
+import io.legado.app.ui.widget.components.settingItem.TinyDropdownSettingItem
+import io.legado.app.ui.widget.components.settingItem.TinySwitchSettingItem
+import io.legado.app.ui.widget.components.text.AppText
 import io.legado.app.ui.widget.components.topbar.GlassMediumFlexibleTopAppBar
 import io.legado.app.ui.widget.components.topbar.GlassTopAppBarDefaults
 import io.legado.app.ui.widget.components.topbar.TopBarNavigationButton
+import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
@@ -78,14 +95,14 @@ fun AiProviderEditScreen(
 ) {
     val scrollBehavior = GlassTopAppBarDefaults.defaultScrollBehavior()
     val snackbarHostState = remember { SnackbarHostState() }
+    val imageProvider = state.protocol in AiProtocol.imageProtocols
+    val visiblePresets = state.providerPresets.filter { if (imageProvider) it.protocol in AiProtocol.imageProtocols else it.protocol == state.protocol }
     val providerPresetEntries = arrayOf(stringResource(R.string.ai_custom_provider)) +
-            state.providerPresets
-                .filter { it.protocol == state.protocol }
+            visiblePresets
                 .map { it.name }
                 .toTypedArray()
     val providerPresetValues = arrayOf("") +
-            state.providerPresets
-                .filter { it.protocol == state.protocol }
+            visiblePresets
                 .map { it.id }
                 .toTypedArray()
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -93,6 +110,21 @@ fun AiProviderEditScreen(
     var apiKeyVisible by remember { mutableStateOf(false) }
     var showDeleteProviderDialog by remember { mutableStateOf(false) }
     var showDeleteModelDialog by remember { mutableStateOf<String?>(null) }
+    var showHeadersDialog by remember { mutableStateOf(false) }
+    var headerRows by remember { mutableStateOf<List<AiProviderHeaderUi>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+    val localNetworkDeniedMessage = stringResource(R.string.ai_local_network_permission_denied)
+    // Android 17+ 访问局域网内的 AI 服务需要本地网络权限；待重试的动作由 ViewModel 持有，
+    // 授权后回发 intent，这样配置变更/重建也不会丢失重试。
+    val localNetworkPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            onIntent(AiProviderEditIntent.RetryAfterLocalNetworkPermission)
+        } else {
+            scope.launch { snackbarHostState.showSnackbar(localNetworkDeniedMessage) }
+        }
+    }
 
     LaunchedEffect(Unit) {
         effects.collectLatest { effect ->
@@ -100,6 +132,8 @@ fun AiProviderEditScreen(
                 is AiProviderEditEffect.ShowMessage -> snackbarHostState.showSnackbar(effect.message)
                 AiProviderEditEffect.NavigateBack -> onBackClick()
                 AiProviderEditEffect.NavigateBackAfterDelete -> onBackClick()
+                AiProviderEditEffect.RequestLocalNetworkPermission ->
+                    localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
             }
         }
     }
@@ -133,6 +167,10 @@ fun AiProviderEditScreen(
         ) {
             item {
                 SplicedColumnGroup(title = stringResource(R.string.ai_provider)) {
+                    DropdownListSettingItem(stringResource(R.string.ai_service_type), if (imageProvider) "image" else "text",
+                        arrayOf(stringResource(R.string.ai_service_text), stringResource(R.string.ai_service_image)), arrayOf("text", "image")) {
+                        onIntent(AiProviderEditIntent.UpdateProtocol(if (it == "image") AiProtocol.OPENAI_IMAGES else AiProtocol.OPENAI_CHAT_COMPLETIONS))
+                    }
                     InputSettingItem(
                         title = stringResource(R.string.ai_provider_name),
                         value = state.providerName,
@@ -141,8 +179,10 @@ fun AiProviderEditScreen(
                     DropdownListSettingItem(
                         title = stringResource(R.string.ai_protocol),
                         selectedValue = state.protocol,
-                        displayEntries = arrayOf("OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages"),
-                        entryValues = arrayOf(
+                        displayEntries = if (imageProvider) arrayOf("OpenAI Images", "Gemini Interactions", "Gemini generateContent", "Doubao Seedream", "DashScope Qwen Images", "xAI Images (JSON)", "SiliconFlow Images")
+                            else arrayOf("OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages"),
+                        entryValues = if (imageProvider) arrayOf(AiProtocol.OPENAI_IMAGES, AiProtocol.GEMINI_IMAGES, AiProtocol.GEMINI_IMAGES_LEGACY,
+                            AiProtocol.SEEDREAM_IMAGES, AiProtocol.DASHSCOPE_IMAGES, AiProtocol.XAI_IMAGES, AiProtocol.SILICONFLOW_IMAGES) else arrayOf(
                             AiProtocol.OPENAI_CHAT_COMPLETIONS,
                             AiProtocol.OPENAI_RESPONSES,
                             AiProtocol.ANTHROPIC_MESSAGES
@@ -161,6 +201,7 @@ fun AiProviderEditScreen(
                         value = state.baseUrl,
                         onConfirm = { onIntent(AiProviderEditIntent.UpdateBaseUrl(it)) }
                     )
+                    if (imageProvider) AppText(stringResource(R.string.ai_image_provider_hint))
                     ClickableSettingItem(
                         title = stringResource(R.string.ai_api_key),
                         description = stringResource(R.string.ai_api_key_summary),
@@ -209,6 +250,21 @@ fun AiProviderEditScreen(
                         value = state.modelsUrl,
                         description = stringResource(R.string.ai_models_url_summary),
                         onConfirm = { onIntent(AiProviderEditIntent.UpdateModelsUrl(it)) }
+                    )
+                    ClickableSettingItem(
+                        title = stringResource(R.string.ai_custom_headers),
+                        description = if (state.customHeaders.none { it.name.isNotBlank() }) {
+                            stringResource(R.string.ai_custom_headers_summary)
+                        } else {
+                            stringResource(
+                                R.string.ai_custom_headers_count,
+                                state.customHeaders.count { it.name.isNotBlank() }
+                            )
+                        },
+                        onClick = {
+                            headerRows = state.customHeaders
+                            showHeadersDialog = true
+                        }
                     )
                 }
             }
@@ -262,88 +318,7 @@ fun AiProviderEditScreen(
         onDismiss = { showApiKeyDialog = false }
     )
 
-    AppAlertDialog(
-        data = state.editingModel,
-        onDismissRequest = { onIntent(AiProviderEditIntent.DismissModelEditor) },
-        title = stringResource(R.string.ai_model_edit),
-        content = { model ->
-            Column {
-                AppTextField(
-                    value = model.modelName,
-                    onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingModelName(it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                    label = stringResource(R.string.ai_model_name)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                AppTextField(
-                    value = model.modelId,
-                    onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingModelId(it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                    label = stringResource(R.string.ai_model_id)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                AppTextField(
-                    value = model.contextWindow,
-                    onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingContextWindow(it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                    label = stringResource(R.string.ai_context_window),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                AppTextField(
-                    value = model.maxOutputTokens,
-                    onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingMaxOutputTokens(it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                    label = stringResource(R.string.ai_max_output_tokens),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                AppTextField(
-                    value = model.temperature,
-                    onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingTemperature(it)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = LegadoTheme.colorScheme.surface,
-                    label = stringResource(R.string.ai_temperature),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                DropdownListSettingItem(
-                    title = stringResource(R.string.ai_thinking_strength),
-                    selectedValue = model.reasoningLevel.effort,
-                    displayEntries = arrayOf(
-                        stringResource(R.string.ai_reasoning_level_low),
-                        stringResource(R.string.ai_reasoning_level_medium),
-                        stringResource(R.string.ai_reasoning_level_high),
-                        stringResource(R.string.ai_reasoning_level_xhigh),
-                        stringResource(R.string.ai_reasoning_level_max)
-                    ),
-                    entryValues = AiReasoningLevel.modelConfigEntries
-                        .map { it.effort }
-                        .toTypedArray(),
-                    onValueChange = {
-                        onIntent(AiProviderEditIntent.UpdateEditingReasoningLevel(AiReasoningLevel.fromEffort(it)))
-                    }
-                )
-                if (model.modelProfileId != null) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    ClickableSettingItem(
-                        title = stringResource(R.string.ai_delete_model),
-                        onClick = {
-                            showDeleteModelDialog = model.modelProfileId
-                        }
-                    )
-                }
-            }
-        },
-        confirmText = stringResource(R.string.ai_save_model),
-        onConfirm = { onIntent(AiProviderEditIntent.SaveEditingModel) },
-        dismissText = stringResource(R.string.cancel),
-        onDismiss = { onIntent(AiProviderEditIntent.DismissModelEditor) }
-    )
+    AiProviderModelDialog(state.editingModel, onIntent) { showDeleteModelDialog = it }
 
     AppAlertDialog(
         show = showDeleteProviderDialog,
@@ -372,6 +347,199 @@ fun AiProviderEditScreen(
         dismissText = stringResource(R.string.cancel),
         onDismiss = { showDeleteModelDialog = null }
     )
+
+    AppAlertDialog(
+        show = showHeadersDialog,
+        onDismissRequest = { showHeadersDialog = false },
+        title = stringResource(R.string.ai_custom_headers),
+        content = {
+            HeaderRowsEditor(
+                rows = headerRows,
+                onRowsChange = { headerRows = it }
+            )
+        },
+        confirmText = stringResource(R.string.ok),
+        onConfirm = {
+            onIntent(AiProviderEditIntent.UpdateCustomHeaders(headerRows.toImmutableList()))
+            showHeadersDialog = false
+        },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = { showHeadersDialog = false }
+    )
+}
+
+@Composable
+private fun HeaderRowsEditor(
+    rows: List<AiProviderHeaderUi>,
+    onRowsChange: (List<AiProviderHeaderUi>) -> Unit
+) {
+    Column {
+        rows.forEachIndexed { index, row ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AppTextField(
+                    value = row.name,
+                    onValueChange = { value ->
+                        onRowsChange(rows.toMutableList().also { it[index] = row.copy(name = value) })
+                    },
+                    modifier = Modifier.weight(1f),
+                    backgroundColor = LegadoTheme.colorScheme.surface,
+                    label = stringResource(R.string.ai_header_name),
+                    singleLine = true
+                )
+                AppTextField(
+                    value = row.value,
+                    onValueChange = { value ->
+                        onRowsChange(rows.toMutableList().also { it[index] = row.copy(value = value) })
+                    },
+                    modifier = Modifier.weight(1f),
+                    backgroundColor = LegadoTheme.colorScheme.surface,
+                    label = stringResource(R.string.ai_header_value),
+                    singleLine = true
+                )
+                IconButton(onClick = { onRowsChange(rows.filterIndexed { i, _ -> i != index }) }) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = stringResource(R.string.ai_delete_header)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        TextButton(
+            onClick = { onRowsChange(rows + AiProviderHeaderUi()) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(imageVector = Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            AppText(text = stringResource(R.string.ai_add_header))
+        }
+    }
+}
+
+@Composable
+internal fun AiProviderModelDialog(
+    editor: AiProviderModelEditorUi?,
+    onIntent: (AiProviderEditIntent) -> Unit,
+    onDeleteModel: (String) -> Unit,
+) {
+    AppAlertDialog(
+        data = editor,
+        onDismissRequest = { onIntent(AiProviderEditIntent.DismissModelEditor) },
+        title = stringResource(R.string.ai_model_edit),
+        content = { model ->
+            AiProviderModelFields(model, onIntent, onDeleteModel)
+        },
+        confirmText = stringResource(R.string.ai_save_model),
+        onConfirm = { onIntent(AiProviderEditIntent.SaveEditingModel) },
+        dismissText = stringResource(R.string.cancel),
+        onDismiss = { onIntent(AiProviderEditIntent.DismissModelEditor) }
+    )
+}
+
+@Composable
+internal fun AiProviderModelFields(
+    model: AiProviderModelEditorUi,
+    onIntent: (AiProviderEditIntent) -> Unit,
+    onDeleteModel: (String) -> Unit,
+) {
+    Column {
+        AppTextField(
+            value = model.modelName,
+            onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingModelName(it)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            backgroundColor = LegadoTheme.colorScheme.surface,
+            label = stringResource(R.string.ai_model_name)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        AppTextField(
+            value = model.modelId,
+            onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingModelId(it)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            backgroundColor = LegadoTheme.colorScheme.surface,
+            label = stringResource(R.string.ai_model_id)
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        TinySwitchSettingItem(
+            title = stringResource(R.string.ai_capability_vision),
+            checked = model.vision,
+        ) {
+            onIntent(AiProviderEditIntent.UpdateEditingVision(it))
+        }
+        TinySwitchSettingItem(
+            title = stringResource(R.string.ai_capability_image_generation),
+            checked = model.imageGeneration,
+        ) {
+            onIntent(AiProviderEditIntent.UpdateEditingImageGeneration(it))
+        }
+        TinySwitchSettingItem(
+            title = stringResource(R.string.ai_capability_image_editing),
+            checked = model.imageEditing,
+        ) {
+            onIntent(AiProviderEditIntent.UpdateEditingImageEditing(it))
+        }
+        if (!model.imageGeneration && !model.imageEditing) {
+            Spacer(modifier = Modifier.height(4.dp))
+            AppTextField(
+                value = model.contextWindow,
+                onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingContextWindow(it)) },
+                modifier = Modifier.fillMaxWidth(),
+                backgroundColor = LegadoTheme.colorScheme.surface,
+                label = stringResource(R.string.ai_context_window),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            AppTextField(
+                value = model.maxOutputTokens,
+                onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingMaxOutputTokens(it)) },
+                modifier = Modifier.fillMaxWidth(),
+                backgroundColor = LegadoTheme.colorScheme.surface,
+                label = stringResource(R.string.ai_max_output_tokens),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            AppTextField(
+                value = model.temperature,
+                onValueChange = { onIntent(AiProviderEditIntent.UpdateEditingTemperature(it)) },
+                modifier = Modifier.fillMaxWidth(),
+                backgroundColor = LegadoTheme.colorScheme.surface,
+                label = stringResource(R.string.ai_temperature),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            TinyDropdownSettingItem(
+                title = stringResource(R.string.ai_thinking_strength),
+                selectedValue = model.reasoningLevel.effort,
+                displayEntries = arrayOf(
+                    stringResource(R.string.ai_reasoning_level_low),
+                    stringResource(R.string.ai_reasoning_level_medium),
+                    stringResource(R.string.ai_reasoning_level_high),
+                    stringResource(R.string.ai_reasoning_level_xhigh),
+                    stringResource(R.string.ai_reasoning_level_max)
+                ),
+                entryValues = AiReasoningLevel.modelConfigEntries
+                    .map { it.effort }
+                    .toTypedArray(),
+                onValueChange = {
+                    onIntent(AiProviderEditIntent.UpdateEditingReasoningLevel(AiReasoningLevel.fromEffort(it)))
+                }
+            )
+        }
+        if (model.modelProfileId != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            TinyClickableSettingItem(
+                title = stringResource(R.string.ai_delete_model),
+                onClick = {
+                    onDeleteModel(model.modelProfileId)
+                }
+            )
+        }
+    }
 }
 
 private fun formatFetchedLimit(contextWindow: Int, maxOutputTokens: Int): String? {

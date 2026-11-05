@@ -4,7 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import androidx.core.graphics.drawable.toBitmap
 import com.bumptech.glide.Glide
+import com.google.gson.JsonParser
 import io.legado.app.api.ReturnData
+import io.legado.app.api.ReaderWebChapter
+import io.legado.app.domain.gateway.ReadAloudSettingsGateway
+import io.legado.app.feature.reader.core.source.ReaderChapterSourceParser
+import io.legado.app.feature.reader.platform.AndroidReaderHtmlSemanticTextResolver
+import io.legado.app.help.readaloud.cast.CastAssignmentStore
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
@@ -53,25 +59,31 @@ object BookController {
     /**
      * 书架所有书籍
      */
-    val bookshelf: ReturnData
-        get() {
-            val books = appDb.bookDao.all
-            val returnData = ReturnData()
-            return if (books.isEmpty()) {
-                returnData.setErrorMsg("还没有添加小说")
-            } else {
-                val data = when (bookshelfGateway.currentSettings.bookshelfSort) {
-                    1 -> books.sortedByDescending { it.latestChapterTime }
-                    2 -> books.sortedWith { o1, o2 ->
-                        o1.name.cnCompare(o2.name)
-                    }
-
-                    3 -> books.sortedBy { it.order }
-                    else -> books.sortedByDescending { it.durChapterTime }
-                }
-                returnData.setData(data)
-            }
+    fun getBookshelf(parameters: Map<String, List<String>>): ReturnData {
+        val allBooks = appDb.bookDao.all
+        val books = if (parameters["source"]?.firstOrNull() == "legado-reader") {
+            // 插件 1.5.1 用 author#name 构建 Map，重复键会使整个书架加载失败。
+            allBooks.sortedByDescending { it.durChapterTime }
+                .distinctBy { "${it.author}#${it.name}" }
+        } else {
+            allBooks
         }
+        val returnData = ReturnData()
+        return if (books.isEmpty()) {
+            returnData.setErrorMsg("还没有添加小说")
+        } else {
+            val data = when (bookshelfGateway.currentSettings.bookshelfSort) {
+                1 -> books.sortedByDescending { it.latestChapterTime }
+                2 -> books.sortedWith { o1, o2 ->
+                    o1.name.cnCompare(o2.name)
+                }
+
+                3 -> books.sortedBy { it.order }
+                else -> books.sortedByDescending { it.durChapterTime }
+            }
+            returnData.setData(data)
+        }
+    }
 
     /**
      * 获取封面
@@ -206,26 +218,33 @@ object BookController {
         if (book == null || chapter == null) {
             return returnData.setErrorMsg("未找到")
         }
+        fun response(raw: String): ReturnData = runBlocking {
+            val processor = ContentProcessor.get(book)
+            val settings = processor.captureSettings()
+            val processed = processor.getContent(book, chapter, raw, includeTitle = false,
+                paragraphIndent = null, settings = settings)
+            if (parameters["format"]?.firstOrNull() != "semantic") {
+                return@runBlocking returnData.setData(processed.toString())
+            }
+            val labels = if (GlobalContext.get().get<ReadAloudSettingsGateway>().currentSettings.multiRoleCast) {
+                CastAssignmentStore.labelsForChapter(book.bookUrl, chapter.index)
+            } else emptyMap()
+            val title = chapter.getDisplayTitle(processor.getTitleReplaceRules(),
+                book.getUseReplaceRule(settings.replaceEnableDefault),
+                chineseConverterType = settings.chineseConverterType)
+            val source = ReaderChapterSourceParser.parse(chapter.index, title, processed.textList,
+                false, settings.adaptSpecialStyle, AndroidReaderHtmlSemanticTextResolver, labels)
+            returnData.setData(ReaderWebChapter.fromSource(source))
+        }
         var content: String? = BookHelp.getContent(book, chapter)
         if (content != null) {
-            val contentProcessor = ContentProcessor.get(book.name, book.origin)
-            content = runBlocking {
-                contentProcessor.getContent(book, chapter, content, includeTitle = false)
-                    .toString()
-            }
-            return returnData.setData(content)
+            return response(content)
         }
         val bookSource = appDb.bookSourceDao.getBookSource(book.origin)
             ?: return returnData.setErrorMsg("未找到书源")
         try {
-            content = runBlocking {
-                WebBook.getContentAwait(bookSource, book, chapter).let {
-                    val contentProcessor = ContentProcessor.get(book.name, book.origin)
-                    contentProcessor.getContent(book, chapter, it, includeTitle = false)
-                        .toString()
-                }
-            }
-            returnData.setData(content)
+            content = runBlocking { WebBook.getContentAwait(bookSource, book, chapter) }
+            response(content)
         } catch (e: Exception) {
             returnData.setErrorMsg(e.stackTraceStr)
         }
@@ -269,10 +288,17 @@ object BookController {
 
         return saveBookProgressMutex.withLock {
             val bookDao = appDb.bookDao
-            val book = bookDao.getBook(bookProgress.name, bookProgress.author)
-                ?: return@withLock returnData.setErrorMsg("未找到书籍")
-            val activeBook = ReadBook.book?.takeIf {
+            val url = JsonParser.parseString(postData).asJsonObject["url"]
+                ?.takeUnless { it.isJsonNull }?.asString
+            val book = (if (url.isNullOrEmpty()) {
+                bookDao.getBook(bookProgress.name, bookProgress.author)
+            } else {
+                bookDao.getBook(url)
+            })?.takeIf {
                 it.name == bookProgress.name && it.author == bookProgress.author
+            } ?: return@withLock returnData.setErrorMsg("未找到书籍")
+            val activeBook = ReadBook.book?.takeIf {
+                it.bookUrl == book.bookUrl
             }
             val localProgress = latestLocalProgress(book, activeBook)
             val localOrder = bookProgress.comparePositionTo(

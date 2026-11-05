@@ -10,11 +10,13 @@ import io.legado.app.constant.ReadTipType
 import io.legado.app.data.entities.HighlightRule
 import io.legado.app.data.repository.ReadStyleConfigStore
 import io.legado.app.domain.gateway.ReadSettingsGateway
+import io.legado.app.domain.model.settings.ReadSettings
 import io.legado.app.model.ReadSessionState
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.hexString
 import splitties.init.appCtx
+import java.util.UUID
 
 /**
  * 阅读界面配置
@@ -24,7 +26,14 @@ import splitties.init.appCtx
 object ReadBookConfig {
     private lateinit var configStore: ReadStyleConfigStore
     private lateinit var readSettingsGateway: ReadSettingsGateway
-    private val readSettings get() = readSettingsGateway.currentSettings
+
+    /** 初始化前（单测或极早调用）回退默认值，不抛 lateinit 异常。 */
+    private val readSettings: ReadSettings
+        get() = if (::readSettingsGateway.isInitialized) {
+            readSettingsGateway.currentSettings
+        } else {
+            ReadSettings()
+        }
 
     internal fun initialize(
         configStore: ReadStyleConfigStore,
@@ -230,6 +239,10 @@ object ReadBookConfig {
     val textItalic: Boolean
         get() = config.textItalic
 
+    /** 系统字族（0=默认 / 1=衬线 / 2=等宽）；正文排版与气泡兜底字体共用这一口径。 */
+    val systemTypefaces: Int
+        get() = readSettings.systemTypefaces
+
     val textShadow: Boolean
         get() = config.textShadow
 
@@ -267,6 +280,14 @@ object ReadBookConfig {
         get() = config.titleMode
     val titleSize: Int
         get() = config.titleSize
+
+    /** 是否相对正文。未显式设置（null）时按旧值自动识别，见 [Config.isTitleSizeRelative]。 */
+    val resolvedTitleSizeRelative: Boolean
+        get() = config.isTitleSizeRelative()
+
+    /** 实际渲染用的标题字号（sp）。相对模式 = 正文字号 + 偏移。 */
+    val resolvedTitleSize: Int
+        get() = config.resolvedTitleSizeSp()
 
     val titleSegType: Int
         get() = config.titleSegType
@@ -468,6 +489,7 @@ object ReadBookConfig {
             paragraphSpacing = shareConfig.paragraphSpacing,
             titleMode = shareConfig.titleMode,
             titleSize = shareConfig.titleSize,
+            titleSizeRelative = shareConfig.titleSizeRelative,
             titleTopSpacing = shareConfig.titleTopSpacing,
             titleBottomSpacing = shareConfig.titleBottomSpacing,
             titleColor = shareConfig.titleColor,
@@ -574,7 +596,8 @@ object ReadBookConfig {
         val lineSpacingExtra: Int = 12,//行间距
         val paragraphSpacing: Int = 2,//段距
         val titleMode: Int = 0,//标题位置 0:居左 1:居中 2:隐藏
-        val titleSize: Int = 20,
+        val titleSize: Int = 4,//标题字号：相对模式为相对正文的偏移，绝对模式为绝对 sp
+        val titleSizeRelative: Boolean? = null,//是否相对正文：null 表示按旧值自动识别
         val titleTopSpacing: Int = 0,
         val titleBottomSpacing: Int = 0,
         val titleColor: Int = 0,
@@ -643,8 +666,27 @@ object ReadBookConfig {
         val menuBottomHorizontalMargin: Int = 0,
         @Transient
         val menuBottomBottomMargin: Int = 0,
-        val highlightRules: ArrayList<HighlightRule> = arrayListOf()
+        val highlightRules: ArrayList<HighlightRule> = arrayListOf(),
+        /** 进程内列表身份；不写入主题包，旧配置无需迁移，字段编辑时由 copy 保留。 */
+        @Transient
+        val id: String = UUID.randomUUID().toString(),
     ) {
+
+        /**
+         * 标题字号是否相对正文（标题 = 正文字号 + 偏移）。
+         *
+         * 早期版本用「值是否小于 8」区分相对偏移与绝对字号，后来统一改成了绝对值。为兼容历史
+         * 配置，[titleSizeRelative] 未显式设置（null）时沿用旧约定：`< 8` 视为相对偏移，
+         * `>= 8` 视为绝对字号；用户在标题设置里切换后会写入显式值。
+         */
+        fun isTitleSizeRelative(): Boolean = titleSizeRelative ?: (titleSize < 8)
+
+        /**
+         * 实际渲染用的标题字号（sp）。相对模式 = 正文字号 + 偏移（与旧 View 版
+         * `textSize + titleSize` 完全一致），绝对模式直接用自身。
+         */
+        fun resolvedTitleSizeSp(): Int =
+            (if (isTitleSizeRelative()) textSize + titleSize else titleSize).coerceAtLeast(1)
 
         @Transient
         private var textColorIntEInk = -1
@@ -735,6 +777,7 @@ object ReadBookConfig {
             "paragraphSpacing" to paragraphSpacing,
             "titleMode" to titleMode,
             "titleSize" to titleSize,
+            "titleSizeRelative" to isTitleSizeRelative(),
             "titleTopSpacing" to titleTopSpacing,
             "titleBottomSpacing" to titleBottomSpacing,
             "titleColor" to titleColor,
@@ -925,6 +968,31 @@ object ReadBookConfig {
 
         fun withCurBg(bgType: Int, bg: String): Config =
             ReadStyleResolver.withCurrentBackground(this, bgType, bg)
+
+        /**
+         * 复刻排版做"新样式"：把**背景整组**清回默认（背景图/背景色/背景透明度/状态栏明暗
+         * ⇒ 纯色、默认底色），名字清空留给用户起；其余（字体、字号、间距、标题、页眉页脚、
+         * 配色、翻页动画…）原样保留。
+         *
+         * 默认值直接取自 [Config] 的构造默认值（不写死字符串），构造默认值将来变了也不会漂移。
+         * 注意：`darkStatusIcon*` 跟着背景明暗走，所以必须和背景一起回默认。
+         */
+        fun asNewStyle(): Config {
+            val defaults = Config()
+            return copy(
+                name = "",
+                bgType = defaults.bgType,
+                bgStr = defaults.bgStr,
+                bgTypeNight = defaults.bgTypeNight,
+                bgStrNight = defaults.bgStrNight,
+                bgTypeEInk = defaults.bgTypeEInk,
+                bgStrEInk = defaults.bgStrEInk,
+                bgAlpha = defaults.bgAlpha,
+                darkStatusIcon = defaults.darkStatusIcon,
+                darkStatusIconNight = defaults.darkStatusIconNight,
+                darkStatusIconEInk = defaults.darkStatusIconEInk,
+            )
+        }
 
         fun curBgStr(): String {
             return ReadStyleResolver.currentBackground(this).value

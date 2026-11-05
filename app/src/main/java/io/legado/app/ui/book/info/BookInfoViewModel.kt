@@ -33,7 +33,9 @@ import io.legado.app.domain.gateway.OtherSettingsGateway
 import io.legado.app.domain.gateway.PrivateAccessGateway
 import io.legado.app.domain.gateway.PrivateContentGateway
 import io.legado.app.domain.gateway.ThemeSettingsGateway
+import io.legado.app.domain.model.BookMatchKey
 import io.legado.app.domain.model.BookshelfConflict
+import io.legado.app.domain.model.ConflictBookSummary
 import io.legado.app.domain.model.PrivateAccessState
 import io.legado.app.domain.model.PrivateUnlockTarget
 import io.legado.app.domain.model.settings.CoverSettings
@@ -69,6 +71,7 @@ import io.legado.app.model.ReadBook
 import io.legado.app.model.SourceCallBack
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.localBook.LocalBook
+import io.legado.app.model.webBook.RelatedBooks
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.ui.main.MainIntent
 import io.legado.app.ui.widget.components.image.cover.buildCoverImageRequest
@@ -83,10 +86,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -225,7 +225,6 @@ class BookInfoViewModel(
         currentBook?.bookUrl?.let {
             privateAccessGateway.revoke(PrivateUnlockTarget.Book(it))
         }
-        super.onCleared()
     }
 
     /** 详情页溢出菜单里的"标记/取消私密" */
@@ -289,6 +288,22 @@ class BookInfoViewModel(
 
     /** 命中重复、等待用户在冲突 Sheet 上选择共存还是迁移的那本书。 */
     private var pendingShelfBook: Book? = null
+
+    /**
+     * 书架里同一部作品的其他副本（宽松「疑似」口径，见 [refreshShelfDuplicates]）。
+     *
+     * 未入架时驱动书架按钮的冲突态外观；已入架时给「书架操作」Sheet 列出来。
+     * 只影响展示，不改动任何数据。
+     */
+    private var shelfDuplicates: List<ConflictBookSummary> = emptyList()
+
+    /**
+     * 上一次统计用的归一化身份键（书名 + 作者）。
+     *
+     * upBook 与爬取后各统计一次，而候选集来自一次全表扫描；身份没变就不必重查
+     * （`canReName` 真改写了身份时键会变，仍会重算）。书架的增删由本页动作显式作废。
+     */
+    private var shelfDuplicateIdentity: Pair<String, String>? = null
 
     var inBookshelf = false
         private set
@@ -394,7 +409,7 @@ class BookInfoViewModel(
             BookInfoIntent.SaveVariable -> saveVariableDraft()
             BookInfoIntent.DismissDialog -> dismissDialog()
             is BookInfoIntent.MenuAction -> handleMenuAction(intent.action)
-            is BookInfoIntent.AuthorClick -> onAuthorClick(intent.longClick)
+            is BookInfoIntent.AuthorClick -> onAuthorClick(intent.longClick, intent.author)
             is BookInfoIntent.BookNameClick -> onBookNameClick(intent.longClick)
             BookInfoIntent.OriginClick -> onOriginClick()
             BookInfoIntent.DismissAppLogSheet -> {
@@ -432,11 +447,6 @@ class BookInfoViewModel(
             is BookInfoIntent.SaveCover -> {
                 saveCoverToGallery(intent.path)
             }
-            is BookInfoIntent.ConfirmDelete -> {
-                dismissDialog()
-                deleteBook(intent.deleteOriginal)
-            }
-
             is BookInfoIntent.UpdateRemark -> {
                 dismissDialog()
                 saveRemark(intent.remark)
@@ -466,6 +476,13 @@ class BookInfoViewModel(
             BookInfoIntent.DismissShelfConflict -> {
                 pendingShelfBook = null
                 _screenState.update { it.copy(shelfConflict = null) }
+            }
+
+            is BookInfoIntent.OpenShelfDuplicate -> openShelfDuplicate(intent.summary)
+
+            is BookInfoIntent.ShelfDeleteConfirm -> {
+                dismissSheet()
+                deleteBook(intent.deleteOriginal)
             }
 
             is BookInfoIntent.OpenShelfConflictBook -> {
@@ -648,6 +665,26 @@ class BookInfoViewModel(
                 saveBook(book)
             }
             syncUiState()
+        }
+    }
+
+    private fun toggleReadRecordDisabled() {
+        val book = currentBook?.takeIf { inBookshelf } ?: return
+        val disabled = !book.disableReadRecord
+        execute {
+            bookRepository.setReadRecordDisabled(book.bookUrl, disabled)
+        }.onSuccess { updated ->
+            if (updated != null) {
+                ReadBook.setReadRecordDisabled(updated.bookUrl, updated.disableReadRecord)
+                AudioPlay.book?.takeIf { it.bookUrl == updated.bookUrl }
+                    ?.disableReadRecord = updated.disableReadRecord
+                currentBook?.takeIf { it.bookUrl == updated.bookUrl }?.let {
+                    it.disableReadRecord = updated.disableReadRecord
+                    syncUiState()
+                }
+            }
+        }.onError {
+            showMessage(it.localizedMessage ?: context.getString(R.string.error))
         }
     }
 
@@ -937,7 +974,43 @@ class BookInfoViewModel(
         }
         currentBook = book
         inBookshelf = true
+        // 入架后按钮语义变了（点击=「书架操作」Sheet），副本要按新状态重算：共存会多一本、迁移会少一本
+        invalidateShelfDuplicates()
         syncUiState()
+        viewModelScope.launch { refreshShelfDuplicates(book) }
+    }
+
+    /**
+     * 统计书架里同一部作品的**其他**副本，驱动书架按钮的冲突态与「书架操作」Sheet 的副本列表。
+     *
+     * 判定复用入架查重的同一个用例（[FindBookshelfConflictUseCase]，它按 bookUrl 排除自身），
+     * 因此本书未入架时「按钮是冲突态」⟺「点击真的会弹冲突 Sheet」，入口承诺与实际行为一致；
+     * 已入架时同一份结果就是「还有哪几本是同一部作品」。
+     *
+     * 只影响展示，用户在 Sheet 里仍会看到具体是哪几本，所以用宽松「疑似」口径是安全的：
+     * 没有「静默把人带去另一本书」这种代价，不需要另立严格口径。
+     */
+    private suspend fun refreshShelfDuplicates(book: Book) {
+        val identity = BookMatchKey.of(book.name) to BookMatchKey.of(book.author)
+        // 身份没变就不重查（见 [shelfDuplicateIdentity]）
+        if (identity == shelfDuplicateIdentity) return
+        shelfDuplicateIdentity = identity
+        val copies = findBookshelfConflictUseCase.execute(book)?.candidates.orEmpty()
+        // 期间身份可能已被更可信的一次（爬取后）覆盖，旧结论不能反过来盖掉新的
+        if (shelfDuplicateIdentity == identity) {
+            setShelfDuplicates(copies)
+        }
+    }
+
+    private fun setShelfDuplicates(value: List<ConflictBookSummary>) {
+        if (shelfDuplicates == value) return
+        shelfDuplicates = value
+        syncUiState()
+    }
+
+    /** 书架内容被本页动作改动后，之前的统计结论作废。 */
+    private fun invalidateShelfDuplicates() {
+        shelfDuplicateIdentity = null
     }
 
     /**
@@ -1032,6 +1105,7 @@ class BookInfoViewModel(
         val book = currentBook ?: return
         execute {
             inBookshelf = false
+            invalidateShelfDuplicates()
             if (book.isLocal) {
                 LocalBook.deleteBook(book, deleteOriginal)
             }
@@ -1100,6 +1174,8 @@ class BookInfoViewModel(
                     if (inBookshelf) {
                         loadedBook.save()
                     }
+                    // 爬取后的身份最可信（canReName 可能改写书名/作者），重算一次
+                    refreshShelfDuplicates(loadedBook)
                     syncUiState(isTocLoading = showLoading)
                     refreshMeta(loadedBook)
                     if (loadedBook.isWebFile) {
@@ -1148,6 +1224,8 @@ class BookInfoViewModel(
             currentKindLabels = emptyList()
             syncUiState(isTocLoading = false)
             refreshMeta(it)
+            // 换源会改写书名/作者，旧的副本统计已不对应这本书
+            refreshShelfDuplicates(it)
             postEvent(EventBus.SOURCE_CHANGED, book.bookUrl)
         }
     }
@@ -1169,6 +1247,8 @@ class BookInfoViewModel(
         loadBookEvents(book.bookUrl)
         refreshMeta(book)
         upCoverByRule(book)
+        // 副本统计与书籍加载无关，异步跑即可；爬取路径会在拿到更可信的身份后再重算一次
+        viewModelScope.launch { refreshShelfDuplicates(book) }
         if (book.tocUrl.isEmpty() && !book.isLocal) {
             loadBookInfo(book, runPreUpdateJs = inBookshelf, showLoading = false)
         } else {
@@ -1210,13 +1290,18 @@ class BookInfoViewModel(
 
     private fun refreshMeta(book: Book) {
         execute {
+            val kindBefore = book.kind
             book.upKind()
             val userGroupIds = bookGroupRepository.getIdsSum()
             val groupAnd = userGroupIds and book.group
             val hasCustomGroup = book.group > 0L && groupAnd != 0L
             val groupNames = bookGroupRepository.getGroupNames(book.group).joinToString(",")
             val normalizedGroupNames = groupNames.ifBlank { null }
-            bookRepository.update(book)
+            // 只有 upKind 真改写出过差异才落库：全行写会失效书架查询，让正在播形变转场的
+            // 书架整屏重组（同一口径见 ReadBookLoadDelegate.initData）。
+            if (book.kind != kindBefore) {
+                bookRepository.update(book)
+            }
             val finalKinds = book.getDisplayTagList()
             val enabledRules = highlightTagRuleRepository.getEnabled()
             val (highlighted, regular) = parseHighlightedTags(finalKinds, enabledRules)
@@ -1328,8 +1413,10 @@ class BookInfoViewModel(
     private fun onShelfClick() {
         val book = currentBook ?: return
         if (inBookshelf) {
+            // 已入架：摊开删除 Sheet（其他副本 / 分组 / 删除确认）。
+            // 关掉「删除前提醒」时按设置直接删，不打断。
             if (LocalConfig.bookInfoDeleteAlert) {
-                showDialog(BookInfoDialog.DeleteBook(book.isLocal))
+                setSheet(BookInfoSheet.ShelfDelete)
             } else {
                 deleteBook(LocalConfig.deleteBookOriginal)
             }
@@ -1338,6 +1425,21 @@ class BookInfoViewModel(
         } else {
             addToBookshelf()
         }
+    }
+
+    private fun openShelfDuplicate(summary: ConflictBookSummary) {
+        // 先收起 Sheet 再导航：详情页之间跳转会复用同一份 Sheet 状态，
+        // 不收起来的话新页面一进来就显示 Sheet，并把第一次返回键吃掉。
+        dismissSheet()
+        emitEffect(
+            BookInfoEffect.NavigateToBookInfo(
+                name = summary.name,
+                author = summary.author,
+                bookUrl = summary.bookUrl,
+                origin = summary.origin,
+                coverPath = summary.displayCover,
+            )
+        )
     }
 
     private fun onTocClick() {
@@ -1512,6 +1614,7 @@ class BookInfoViewModel(
             )
 
             BookInfoMenuAction.ToggleCanUpdate -> toggleCanUpdate()
+            BookInfoMenuAction.ToggleReadRecordDisabled -> toggleReadRecordDisabled()
             BookInfoMenuAction.ToggleSplitLongChapter -> toggleSplitLongChapter()
             BookInfoMenuAction.ToggleDeleteAlert -> toggleDeleteAlert()
             BookInfoMenuAction.ClearCache -> emitEffect(
@@ -1528,14 +1631,14 @@ class BookInfoViewModel(
         }
     }
 
-    private fun onAuthorClick(longClick: Boolean) {
+    private fun onAuthorClick(longClick: Boolean, author: String? = null) {
         val book = currentBook ?: return
         emitEffect(
             BookInfoEffect.RunSourceCallback(
                 event = if (longClick) SourceCallBack.LONG_CLICK_AUTHOR else SourceCallBack.CLICK_AUTHOR,
                 source = bookSource,
                 book = book.uiCopy(),
-                action = BookInfoCallbackAction.Search(book.author),
+                action = BookInfoCallbackAction.Search(author ?: book.author),
             )
         )
     }
@@ -1720,6 +1823,7 @@ class BookInfoViewModel(
                 bookSource = bookSource,
                 bookSourceUi = bookSource?.toBookInfoSourceUi(),
                 isTocLoading = isTocLoading,
+                shelfDuplicates = shelfDuplicates.toImmutableList(),
                 deleteAlertEnabled = LocalConfig.bookInfoDeleteAlert,
                 deleteOriginal = LocalConfig.deleteBookOriginal,
             )
@@ -1739,6 +1843,8 @@ class BookInfoViewModel(
     }
 
     private fun onRelatedBooksMore(title: String, resolvedUrl: String) {
+        // 作者搜索兜底模块没有对应的发现页地址
+        if (resolvedUrl.isBlank()) return
         val source = bookSource ?: return
         emitEffect(
             BookInfoEffect.NavigateToExploreShow(
@@ -1891,16 +1997,26 @@ class BookInfoViewModel(
             delay(delayMillis)
             if (!isCurrentBookSource(book, source)) return@launch
 
-            val modules = parseRelatedBookModules(source)
-            if (modules.isEmpty()) {
-                currentRelatedBooks = emptyList()
-                syncUiState()
-                return@launch
-            }
-
             try {
                 val result = withContext(IO) {
-                    loadRelatedBooks(book, source, modules)
+                    val modules = RelatedBooks.load(book, source).map { module ->
+                        RelatedBooksUi(
+                            key = module.key,
+                            title = module.title,
+                            url = module.url,
+                            resolvedUrl = module.resolvedUrl,
+                            books = module.books.toImmutableList(),
+                        )
+                    }
+                    // 书源没有配置关联规则时，可按作者搜索兜底显示“作者其它作品”。
+                    if (modules.isEmpty() &&
+                        themeSettingsGateway.currentSettings.bookInfoAuthorSearchFallback &&
+                        source.ruleBookInfo?.relatedBooks.isNullOrBlank()
+                    ) {
+                        listOfNotNull(loadAuthorOtherWorks(book, source))
+                    } else {
+                        modules
+                    }
                 }
                 if (!isCurrentBookSource(book, source)) return@launch
                 currentRelatedBooks = result
@@ -1908,6 +2024,7 @@ class BookInfoViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
+                AppLog.put("关联书籍 relatedBooks 加载失败", e)
                 if (!isCurrentBookSource(book, source)) return@launch
                 currentRelatedBooks = emptyList()
                 syncUiState()
@@ -1919,56 +2036,46 @@ class BookInfoViewModel(
         return currentBook?.bookUrl == book.bookUrl && bookSource?.bookSourceUrl == source.bookSourceUrl
     }
 
-    private fun parseRelatedBookModules(source: BookSource): List<RelatedBooksDef> {
-        val modulesJson = source.ruleBookInfo?.relatedBooks
-        if (modulesJson.isNullOrBlank()) {
-            return emptyList()
-        }
+    private fun normalizeAuthorName(author: String): String {
+        return author.replace(AppPattern.authorRegex, "").trim()
+    }
+
+    /**
+     * 关联书籍的作者搜索兜底：用当前书源以作者名搜索第一页，
+     * 保留归一化后作者一致、排除当前书的结果。失败时静默为空，不影响页面其他内容。
+     */
+    private suspend fun loadAuthorOtherWorks(book: Book, source: BookSource): RelatedBooksUi? {
+        val author = normalizeAuthorName(book.author)
+        if (author.isBlank()) return null
         return try {
-            GSON.fromJsonArray<RelatedBooksDef>(modulesJson)
-                .getOrNull()
-                ?.filter { !it.url.isNullOrBlank() }
-                ?.map { it.copy(url = it.url!!.replace(Regex("\\s"), "")) }
-                ?: emptyList()
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private suspend fun loadRelatedBooks(
-        book: Book,
-        source: BookSource,
-        modules: List<RelatedBooksDef>,
-    ): List<RelatedBooksUi> {
-        return coroutineScope {
-            modules.map { def ->
-                async {
-                    val url = def.url.orEmpty()
-                    val (resolvedUrl, books) = try {
-                        resolveAndExplore(source, url, book)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        url to emptyList()
-                    }
-                    RelatedBooksUi(
-                        key = def.key ?: def.title.orEmpty(),
-                        title = def.title.orEmpty(),
-                        url = url,
-                        resolvedUrl = resolvedUrl,
-                        books = books.filter { it.bookUrl != book.bookUrl }.toImmutableList(),
-                    )
+            val books = WebBook.searchBookAwait(
+                bookSource = source,
+                key = author,
+                page = 1,
+                filter = { _, itemAuthor, _ ->
+                    normalizeAuthorName(itemAuthor) == author
+                },
+            )
+            val currentName = book.name.trim()
+            val filtered = books
+                .map { it.apply { releaseHtmlData() } }
+                .filter {
+                    it.bookUrl != book.bookUrl && it.name.trim() != currentName
                 }
-            }.awaitAll().filter { it.books.isNotEmpty() }
+                .distinctBy { it.bookUrl.ifBlank { "${it.name}-${it.author}-${it.origin}" } }
+            RelatedBooksUi(
+                key = AUTHOR_OTHER_WORKS_KEY,
+                title = context.getString(R.string.book_other_works),
+                url = "",
+                resolvedUrl = "",
+                books = filtered.toImmutableList(),
+            ).takeIf { filtered.isNotEmpty() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            AppLog.put("按作者搜索关联书籍失败: ${source.bookSourceName}", e)
+            null
         }
-    }
-
-    private suspend fun resolveAndExplore(
-        source: BookSource,
-        url: String,
-        book: Book,
-    ): Pair<String, List<SearchBook>> {
-        return WebBook.exploreBookWithResolvedUrl(source, url, 1, book)
     }
 
     private fun showMessage(resId: Int) = showMessage(context.getString(resId))
@@ -1994,6 +2101,7 @@ class BookInfoViewModel(
             isLocal = isLocal,
             type = type,
             canUpdate = canUpdate,
+            disableReadRecord = disableReadRecord,
             splitLongChapter = getSplitLongChapter(),
             durChapterTitle = durChapterTitle,
             latestChapterTitle = latestChapterTitle,
@@ -2019,6 +2127,11 @@ class BookInfoViewModel(
             snapshot.tocHtml = tocHtml
             snapshot.downloadUrls = downloadUrls
         }
+    }
+
+    companion object {
+        /** 作者搜索兜底模块的固定 key，与书源规则的模块 key 区分开 */
+        private const val AUTHOR_OTHER_WORKS_KEY = "author-other-works"
     }
 }
 
@@ -2048,9 +2161,3 @@ private val BookInfoWebFile.isSupported: Boolean
 
 private val BookInfoWebFile.isSupportDecompress: Boolean
     get() = AppPattern.archiveFileRegex.matches(name)
-
-private data class RelatedBooksDef(
-    val key: String? = null,
-    val title: String? = null,
-    val url: String? = null,
-)

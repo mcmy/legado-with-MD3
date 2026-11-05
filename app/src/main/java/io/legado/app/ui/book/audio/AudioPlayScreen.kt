@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Login
@@ -69,15 +68,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
-import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.blur.hazeBlur
 import dev.chrisbanes.haze.hazeSource
-import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import io.legado.app.R
 import io.legado.app.constant.CoverRatio
 import io.legado.app.constant.ReadAloudBgMode
 import io.legado.app.constant.Status
+import io.legado.app.core.ui.player.PlayerMorphAppearance
+import io.legado.app.core.ui.player.PlayerMorphCover
+import io.legado.app.core.ui.player.TrackPlayerMorphCoverPage
 import io.legado.app.domain.model.PlaybackTimer
 import io.legado.app.model.AudioPlay
 import io.legado.app.ui.theme.LegadoTheme
@@ -87,7 +89,6 @@ import io.legado.app.ui.widget.components.AppScaffold
 import io.legado.app.ui.widget.components.button.series.MediumPlainButton
 import io.legado.app.ui.widget.components.button.series.SmallAnimatedButton
 import io.legado.app.ui.widget.components.icon.AppIcons
-import io.legado.app.ui.widget.components.image.cover.BookCoverImage
 import io.legado.app.ui.widget.components.log.AppLogSheet
 import io.legado.app.ui.widget.components.menuItem.MenuItemIcon
 import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
@@ -108,7 +109,6 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
 fun AudioPlayScreenContent(
     state: AudioPlayUiState,
@@ -120,6 +120,7 @@ fun AudioPlayScreenContent(
         initialPage = 1,
         pageCount = { if (state.lyricLines.isEmpty()) 2 else 3 },
     )
+    TrackPlayerMorphCoverPage(horizontalPagerState)
     var menuExpanded by remember { mutableStateOf(false) }
     val pagerHazeState = remember { HazeState() }
     val hazeEnabled =
@@ -140,12 +141,17 @@ fun AudioPlayScreenContent(
         contentWindowInsets = WindowInsets(0),
         topBar = {
             val hazeModifier = if (hazeEnabled) {
-                Modifier.hazeEffect(state = pagerHazeState, style = overlayHazeStyle) {
-                    progressive = HazeProgressive.verticalGradient(
-                        startIntensity = 1f,
-                        endIntensity = 0f,
-                    )
-                }
+                Modifier.hazeBlur(
+                    input = HazeInput.Sources(pagerHazeState),
+                    style = overlayHazeStyle.then {
+                        progressive(
+                            HazeProgressive.verticalGradient(
+                                startIntensity = 1f,
+                                endIntensity = 0f,
+                            ),
+                        )
+                    },
+                )
             } else {
                 Modifier
             }
@@ -291,12 +297,17 @@ fun AudioPlayScreenContent(
         },
         bottomBar = {
             val hazeModifier = if (hazeEnabled) {
-                Modifier.hazeEffect(state = pagerHazeState, style = overlayHazeStyle) {
-                    progressive = HazeProgressive.verticalGradient(
-                        startIntensity = 0f,
-                        endIntensity = 1f,
-                    )
-                }
+                Modifier.hazeBlur(
+                    input = HazeInput.Sources(pagerHazeState),
+                    style = overlayHazeStyle.then {
+                        progressive(
+                            HazeProgressive.verticalGradient(
+                                startIntensity = 0f,
+                                endIntensity = 1f,
+                            ),
+                        )
+                    },
+                )
             } else {
                 Modifier
             }
@@ -779,10 +790,6 @@ private fun AudioCoverPage(
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        val coverShape = when (state.coverRatio) {
-            CoverRatio.Circle -> CircleShape
-            else -> RoundedCornerShape(8.dp)
-        }
         Box(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.TopCenter,
@@ -800,14 +807,12 @@ private fun AudioCoverPage(
                 else ->
                     Modifier.fillMaxSize(0.64f)
             }
-            BookCoverImage(
-                name = state.bookName,
-                author = state.author,
-                path = state.coverPath,
-                sourceOrigin = state.sourceOrigin,
-                modifier = Modifier
-                    .then(coverModifier)
-                    .clip(coverShape)
+            PlayerMorphCover(
+                appearance = PlayerMorphAppearance(
+                    state.bookName, state.author, state.coverPath, state.sourceOrigin, state.bgMode,
+                ),
+                modifier = coverModifier,
+                circular = state.coverRatio == CoverRatio.Circle,
             )
         }
         Column(

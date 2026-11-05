@@ -1,6 +1,5 @@
 package io.legado.app.ui.book.read.sheet
 
-import android.content.Context
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -17,23 +16,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Brightness6
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FindReplace
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,7 +31,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
@@ -794,6 +775,12 @@ private fun TopBarTab(
                 },
             )
         }
+        TinyClickableSettingItem(
+            title = stringResource(R.string.title_bar_action_buttons),
+            onClick = {
+                onIntent(ReadBookIntent.ShowSheet(ReadBookSheet.TitleBarActionConfig))
+            },
+        )
         TinySwitchSettingItem(
             title = stringResource(R.string.title_bar_compact),
             checked = preferences.titleBarCompact,
@@ -886,58 +873,6 @@ private fun countCustomIcons(value: String): Int {
         ?.count { it.value.isNotBlank() }
         ?: 0
 }
-
-// ========== Helpers ==========
-
-internal data class ReadMenuButtonInfo(
-    val id: String,
-    val icon: ImageVector,
-    val label: String,
-)
-
-internal fun readMenuButtonInfos(context: Context): List<ReadMenuButtonInfo> = listOf(
-    ReadMenuButtonInfo("search", Icons.Default.Search, context.getString(R.string.search_content)),
-    ReadMenuButtonInfo("auto_page", Icons.Default.PlayArrow, context.getString(R.string.auto_next_page)),
-    ReadMenuButtonInfo("catalog", Icons.AutoMirrored.Filled.List, context.getString(R.string.chapter_list)),
-    ReadMenuButtonInfo("read_aloud", Icons.Default.RecordVoiceOver, context.getString(R.string.read_aloud)),
-    ReadMenuButtonInfo("setting", Icons.Default.Settings, context.getString(R.string.setting)),
-    ReadMenuButtonInfo("addBookmark", Icons.Default.Bookmark, context.getString(R.string.bookmark)),
-    ReadMenuButtonInfo("theme", Icons.Default.Brightness6, context.getString(R.string.day_night_switch)),
-    ReadMenuButtonInfo("eye_protection", Icons.Default.Visibility, context.getString(R.string.eye_protection)),
-    ReadMenuButtonInfo("prev_chapter", Icons.Default.SkipPrevious, context.getString(R.string.previous_chapter)),
-    ReadMenuButtonInfo("next_chapter", Icons.Default.SkipNext, context.getString(R.string.next_chapter)),
-    ReadMenuButtonInfo(
-        "replace",
-        Icons.Default.FindReplace,
-        context.getString(R.string.text_processing)
-    ),
-    ReadMenuButtonInfo(
-        "replace_badge",
-        Icons.Default.FindReplace,
-        context.getString(R.string.text_processing)
-    ),
-    ReadMenuButtonInfo("translate", Icons.Default.Translate, context.getString(R.string.translate)),
-    ReadMenuButtonInfo(
-        "refresh_current",
-        Icons.Default.Refresh,
-        context.getString(R.string.menu_refresh_dur)
-    ),
-    ReadMenuButtonInfo(
-        "ai_summary",
-        Icons.Default.AutoAwesome,
-        context.getString(R.string.ai_chapter_summary)
-    ),
-    ReadMenuButtonInfo(
-        "ai_rewrite",
-        Icons.Default.Edit,
-        context.getString(R.string.ai_text_rewrite)
-    ),
-    ReadMenuButtonInfo(
-        "more_actions",
-        Icons.Default.MoreVert,
-        context.getString(R.string.more_actions)
-    ),
-)
 
 // ========== Color Swatch ==========
 

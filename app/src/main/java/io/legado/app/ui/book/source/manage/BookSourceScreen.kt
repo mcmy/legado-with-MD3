@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -38,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -178,6 +182,8 @@ fun BookSourceScreen(
     var showImportOptions by remember { mutableStateOf(false) }
     var showCustomGroup by remember { mutableStateOf(false) }
     val importSuccess = state.importState as? BaseImportUiState.Success
+    // 拖动回调先更新本地顺序，让布局与后续命中计算使用同一顺序。
+    // 松手后提交一次，等数据源追上再撤掉副本，避免列表闪回旧顺序。
     var dragOrder by remember { mutableStateOf<List<BookSourceItemUi>?>(null) }
     val displayedRules = dragOrder ?: rules
     val reorderState = rememberReorderableLazyListState(listState) { from, to ->
@@ -187,16 +193,19 @@ fun BookSourceScreen(
             dragOrder = moved
         }
     }
-    LaunchedEffect(reorderState.isAnyItemDragging, rules) {
-        if (!reorderState.isAnyItemDragging) {
-            dragOrder?.let { pending ->
-                val pendingIds = pending.map { it.id }
-                if (rules.map { it.id } == pendingIds) {
-                    dragOrder = null
-                } else {
-                    onIntent(BookSourceIntent.CommitSortOrder(pendingIds, state.sortAscending))
-                }
-            }
+    val isDragging = reorderState.isAnyItemDragging
+    LaunchedEffect(isDragging) {
+        if (isDragging) return@LaunchedEffect
+        val pending = dragOrder ?: return@LaunchedEffect
+        onIntent(BookSourceIntent.CommitSortOrder(pending.map { it.id }, state.sortAscending))
+    }
+    LaunchedEffect(rules, dragOrder, isDragging) {
+        val pending = dragOrder ?: return@LaunchedEffect
+        val pendingIds = pending.map { it.id }
+        val ruleIds = rules.map { it.id }
+        // 数据源追上顺序，或者条目集合已经变了（删源/过滤）就以数据源为准，避免本地副本卡死
+        if (!isDragging && (ruleIds == pendingIds || ruleIds.toSet() != pendingIds.toSet())) {
+            dragOrder = null
         }
     }
     val cancelLabel = stringResource(R.string.cancel)
@@ -406,9 +415,12 @@ fun BookSourceScreen(
             onIntent(BookSourceIntent.RemoveFromGroup(selectedIds, it)); removeGroup = false
         })
     GroupManageBottomSheet(
-        groupManage, state.groups, { groupManage = false },
+        show = groupManage,
+        groups = state.groups,
+        onDismissRequest = { groupManage = false },
         onUpdateGroup = { old, new -> onIntent(BookSourceIntent.UpdateGroup(old, new)) },
-        onDeleteGroup = { onIntent(BookSourceIntent.DeleteGroup(it)) }
+        onDeleteGroup = { onIntent(BookSourceIntent.DeleteGroup(it)) },
+        onDeleteGroups = { onIntent(BookSourceIntent.DeleteGroups(it)) }
     )
     AppAlertDialog(
         deleteIds,
@@ -644,23 +656,31 @@ fun BookSourceScreen(
                             },
                             title = item.name,
                             supportingContent = if (
-                                item.group != null || item.checkMessage != null
+                                item.group != null || item.checkMessage != null || item.hasExploreUrl
                             ) {
                                 {
-                                    Column {
-                                        item.group?.let { group ->
-                                            AppText(
-                                                text = group,
-                                                style = LegadoTheme.typography.bodySmall,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        if (item.hasExploreUrl) {
+                                            DiscoveryIndicator(item.enabledExplore)
                                         }
-                                        item.checkMessage?.let { message ->
-                                            AppText(
-                                                text = message,
-                                                style = LegadoTheme.typography.bodySmall,
-                                            )
+                                        Column {
+                                            item.group?.let { group ->
+                                                AppText(
+                                                    text = group,
+                                                    style = LegadoTheme.typography.bodySmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
+                                            item.checkMessage?.let { message ->
+                                                AppText(
+                                                    text = message,
+                                                    style = LegadoTheme.typography.bodySmall,
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -801,6 +821,25 @@ private fun CheckBookSourceSheet(
             singleLine = true,
         )
     }
+}
+
+/**
+ * 书源发现状态标志：有发现且已启用为绿点，有发现但未启用为红点，无发现不显示标志。
+ * 标志位于条目信息行（分组名 / 校验信息行）开头。状态文案已由条目 contentDescription
+ * 描述，这里仅作装饰性渲染。
+ */
+@Composable
+private fun DiscoveryIndicator(enabledExplore: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(
+                colorResource(
+                    if (enabledExplore) R.color.md_green_500 else R.color.md_red_400
+                )
+            )
+    )
 }
 
 private enum class CheckSheet { Run, Settings }
