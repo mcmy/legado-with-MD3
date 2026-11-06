@@ -9,6 +9,7 @@ import type {
   SeachBook,
 } from '@/book'
 import type { webReadConfig } from '@/web'
+import { normalizeSpaceScrollDuration } from '@/utils/spaceScrollDuration'
 import { ElMessage, ElMessageBox } from 'element-plus/es'
 
 type PartialWebReadConfig = Partial<
@@ -28,6 +29,7 @@ const default_config: webReadConfig = {
   infiniteLoading: false,
   customFontName: '',
   jumpDuration: 1000,
+  spaceScrollDuration: 1000,
   autoPage: false,
   autoPageSpeed: 10,
   customTheme: {
@@ -50,6 +52,7 @@ const webReadConfigSyncStorageKey = 'legado_web_read_config_sync'
 const normalizeReadConfig = (config?: PartialWebReadConfig): webReadConfig => ({
   ...default_config,
   ...config,
+  spaceScrollDuration: normalizeSpaceScrollDuration(config?.spaceScrollDuration),
   customTheme: {
     ...default_config.customTheme,
     ...config?.customTheme,

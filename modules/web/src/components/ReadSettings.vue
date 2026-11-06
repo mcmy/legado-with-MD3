@@ -204,6 +204,31 @@
             >开启</span
           >
         </li>
+        <li class="paragraph-spacing space-scroll-duration">
+          <i><label for="space-scroll-duration">空格滚动时长（毫秒）</label></i>
+          <div class="resize">
+            <div class="resize">
+              <span class="less" @click="lessSpaceScrollDuration">
+                <em class="iconfont">&#xe625;</em>
+              </span>
+              <b></b>
+              <input
+                id="space-scroll-duration"
+                class="lang"
+                type="number"
+                min="100"
+                max="30000"
+                step="100"
+                :value="store.config.spaceScrollDuration"
+                @change="setSpaceScrollDuration"
+              />
+              <b></b>
+              <span class="more" @click="moreSpaceScrollDuration">
+                <em class="iconfont">&#xe626;</em>
+              </span>
+            </div>
+          </div>
+        </li>
         <li class="infinite-loading">
           <i>自动翻页</i>
           <span
@@ -246,6 +271,7 @@ import '../assets/fonts/popfont.css'
 import '../assets/fonts/iconfont.css'
 import settings from '../config/themeConfig'
 import { useDebounceFn } from '@vueuse/shared'
+import { normalizeSpaceScrollDuration } from '@/utils/spaceScrollDuration'
 
 const store = useBookStore()
 const saveConfigDebounce = useDebounceFn(
@@ -493,6 +519,19 @@ const lessJumpDuration = () => {
   store.config.jumpDuration -= 100
 }
 
+const setSpaceScrollDuration = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  store.config.spaceScrollDuration = normalizeSpaceScrollDuration(input.valueAsNumber)
+  input.value = String(store.config.spaceScrollDuration)
+}
+
+const lessSpaceScrollDuration = () => {
+  store.config.spaceScrollDuration = normalizeSpaceScrollDuration(store.config.spaceScrollDuration - 100)
+}
+const moreSpaceScrollDuration = () => {
+  store.config.spaceScrollDuration = normalizeSpaceScrollDuration(store.config.spaceScrollDuration + 100)
+}
+
 //无限加载
 const infiniteLoading = computed(() => {
   return store.config.infiniteLoading
@@ -522,6 +561,25 @@ const lessAutoPageSpeed = () => {
 </script>
 
 <style lang="scss" scoped>
+.space-scroll-duration .resize input {
+  box-sizing: border-box;
+  width: 89px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  vertical-align: middle;
+  appearance: textfield;
+  -moz-appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+  }
+}
+
 :deep(.iconfont) {
   font-family: iconfont;
   font-style: normal;

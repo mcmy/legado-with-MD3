@@ -117,6 +117,7 @@ import { useThrottleFn } from '@vueuse/shared'
 import { isNullOrBlank } from '@/utils/utils'
 import { initXboxGamepad } from '@/utils/xboxGamepad'
 import { createChapterPrefetcher } from '@/utils/chapterPrefetch'
+import { normalizeSpaceScrollDuration, spaceScrollDistance } from '@/utils/spaceScrollDuration'
 import {
   chapterWindowIndices, chapterSpacerHeights, captureChapterAnchor,
   restoreChapterAnchor, scrollChapterBy, type ScrollAnchor,
@@ -335,9 +336,15 @@ watch([popCataVisible, readSettingsVisible], ([cata, settings]) => {
   }
 })
 // 用户滚轮/触摸交互时暂停，停止操作一段时间后自动恢复（touchmove 保证长按拖动期间持续暂停）
-const onUserWheel = () => pauseAutoPage()
+const onUserWheel = () => {
+  pauseAutoPage()
+  onReaderScroll()
+}
 const onUserTouch = () => pauseAutoPage()
-const onUserTouchMove = () => pauseAutoPage()
+const onUserTouchMove = () => {
+  pauseAutoPage()
+  onReaderScroll()
+}
 
 // 字体
 const fontFamily = computed(() => {
@@ -505,8 +512,10 @@ const displayChapter = (index: number, data: { title: string; paragraphs: Reader
 
 const refreshChapterWindow = (center: number) => {
   if (!infiniteLoading.value || !windowReady || readerDisposed || !catalog.value[center]) return
-  windowCenter = center
-  void updateChapterLayout(items => items)
+  if (windowCenter !== center) {
+    windowCenter = center
+    void updateChapterLayout(items => items)
+  }
   const generation = contentGeneration
   for (const [index, request] of chapterPrefetcher.loadWindow(
     store.readingBook.bookUrl, center, catalog.value.length,
@@ -551,7 +560,9 @@ const onReaderScroll = () => {
   scrollFrame = requestAnimationFrame(() => {
     scrollFrame = 0
     const visible = visibleChapterIndex()
-    if (visible !== undefined && visible !== windowCenter) refreshChapterWindow(visible)
+    // Also retry missing chapters while staying in the same chapter. Wheel/touch
+    // events reach here even at the page boundary, where no scroll event fires.
+    refreshChapterWindow(visible ?? windowCenter)
   })
 }
 
@@ -785,6 +796,33 @@ const handleKeyPress = (event: KeyboardEvent) => {
 
 // 阻止默认滚动事件
 const ignoreKeyPress = (event: KeyboardEvent) => {
+  if (event.code === 'Space' || event.key === ' ') {
+    const target = event.target
+    if (
+      event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey ||
+      event.isComposing || popCataVisible.value || readSettingsVisible.value ||
+      (target instanceof Element && target.closest(
+        'input, textarea, select, button, a[href], [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="button"], [role="slider"]',
+      ))
+    ) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.repeat || !canJump || !windowReady) return
+    pauseAutoPage()
+    onReaderScroll()
+    const pageHeight = document.documentElement.clientHeight
+    const distance = spaceScrollDistance(pageHeight, store.config.fontSize, store.config.spacing.line)
+      * (event.shiftKey ? -1 : 1)
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - pageHeight)
+    const targetScroll = Math.min(maxScroll, Math.max(0, window.scrollY + distance))
+    if (Math.abs(targetScroll - window.scrollY) < 1) return
+    canJump = false
+    jump(targetScroll - window.scrollY, {
+      duration: normalizeSpaceScrollDuration(store.config.spaceScrollDuration),
+      callback: () => (canJump = true),
+    })
+    return
+  }
   if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
     event.preventDefault()
     event.stopPropagation()

@@ -122,3 +122,32 @@ test('rolling window fetches two chapters on either side and reuses them in reve
   assert.deepEqual([...end.keys()].sort((a, b) => a - b), [27, 28, 29])
   await Promise.all(end.values())
 })
+
+test('repeated scroll checks retry only missing chapters and reuse in-flight requests', async () => {
+  const calls = new Map()
+  const slow = deferred()
+  let recover = false
+  const loader = createChapterPrefetcher(async (_, index) => {
+    calls.set(index, (calls.get(index) ?? 0) + 1)
+    if (index === 11 && !recover) return { isSuccess: false }
+    if (index === 12) return slow.promise
+    return { isSuccess: true }
+  }, response => response.isSuccess)
+  const check = () => loader.loadWindow('book', 10, 30)
+  const first = check()
+  await first.get(11)
+  for (let i = 0; i < 5; i++) {
+    const window = check()
+    assert.equal(window.get(12), first.get(12))
+    await window.get(11)
+  }
+  assert.equal(calls.get(11), 6)
+  for (const index of [8, 9, 10, 12]) assert.equal(calls.get(index), 1)
+  recover = true
+  assert.equal((await check().get(11)).isSuccess, true)
+  for (let i = 0; i < 20; i++) check()
+  assert.equal(calls.get(11), 7)
+  assert.equal(calls.get(12), 1)
+  slow.resolve({ isSuccess: true })
+  await Promise.all(check().values())
+})
