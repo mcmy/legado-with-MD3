@@ -1,6 +1,7 @@
 package io.legado.app.ui.book.toc
 
 import android.app.Application
+import android.util.Log
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
@@ -13,6 +14,7 @@ import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookMarking
 import io.legado.app.data.entities.Bookmark
+import io.legado.app.data.entities.ReadAloudAudioDownload
 import io.legado.app.data.entities.ReplaceRule
 import io.legado.app.data.repository.BookRepository
 import io.legado.app.data.repository.BookSourceRepository
@@ -26,6 +28,7 @@ import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.book.isEpub
 import io.legado.app.help.book.isLocal
+import io.legado.app.help.book.isMarkdown
 import io.legado.app.help.book.isMobi
 import io.legado.app.help.bookmark.BookmarkExporter
 import io.legado.app.help.readaloud.cast.CastAssignmentStore
@@ -59,7 +62,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -70,10 +73,21 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+enum class TocAudioDownloadState { None, Complete, Partial, Unverified }
+
+internal fun ReadAloudAudioDownload.toTocAudioDownloadState(): TocAudioDownloadState = when {
+    sentenceCount <= 0 -> TocAudioDownloadState.None
+    isComplete -> TocAudioDownloadState.Complete
+    expectedSentenceCount == null -> TocAudioDownloadState.Unverified
+    else -> TocAudioDownloadState.Partial
+}
 
 @Immutable
 data class TocItemUi(
@@ -89,7 +103,7 @@ data class TocItemUi(
     val downloadState: DownloadState,
     val wordCount: String?,
     val hasCastAssignment: Boolean,
-    val hasAudioDownload: Boolean
+    val audioDownloadState: TocAudioDownloadState = TocAudioDownloadState.None,
 ) : SelectableItem<Int>
 
 @Immutable
@@ -140,10 +154,12 @@ data class TocUiState(
     val markings: ImmutableList<TocMarkingItemUi> = persistentListOf(),
     val isSplitLongChapter: Boolean = false,
     val isReverse: Boolean = false,
+    /** 章节表尚未首次发射。用于区分「加载中」与「目录确实为空」。 */
+    val isLoading: Boolean = true,
 )
 
 sealed interface TocIntent {
-    data class LoadBook(val bookUrl: String) : TocIntent
+    data class LoadBook(val bookUrl: String, val book: Book? = null) : TocIntent
     data class SetSearchMode(val enabled: Boolean) : TocIntent
     data class SetSearchQuery(val query: String) : TocIntent
     data class ToggleVolume(val id: Int) : TocIntent
@@ -180,7 +196,7 @@ data class TocDomainItem(
     val displayTitle: String,
     val downloadState: DownloadState,
     val hasCastAssignment: Boolean = false,
-    val hasAudioDownload: Boolean = false
+    val audioDownloadState: TocAudioDownloadState = TocAudioDownloadState.None,
 )
 
 private data class DownloadContext(
@@ -260,17 +276,36 @@ class TocViewModel(
 ) {
 
     private val bookUrlFlow = MutableStateFlow(savedStateHandle.get<String>("bookUrl"))
-    val bookState = bookUrlFlow
+
+    /**
+     * 阅读页宿主提供的内存 Book。books 表不是可靠的书籍信息来源：未在架/临时书、
+     * URL 漂移，或 Room Flow 首帧尚未发射时，flowBook 都可能给不出 Book，而整棵
+     * 目录树（章节列表、Header、书签、笔记）原本都卡在 bookState 非 null 上。
+     * DB 值优先，保证设置与进度变更仍然能刷新书籍信息。
+     */
+    private val _hostBook = MutableStateFlow<Book?>(null)
+    private val dbBookFlow = bookUrlFlow
         .filterNotNull()
         .flatMapLatest { url ->
             bookRepository.flowBook(url)
         }
+    val bookState = combine(_hostBook, dbBookFlow.onStart { emit(null) }) { host, db -> db ?: host }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val isSplitLongChapter: Boolean get() = bookState.value?.getSplitLongChapter() ?: false
 
     private val _collapsedVolumes = MutableStateFlow<Set<Int>>(emptySet())
-    val collapsedVolumes = _collapsedVolumes.asStateFlow()
+
+    /**
+     * 章节表首次发射后置 true。目录首帧靠它区分「还在加载」与「目录确实为空」；
+     * 换书时由 [onIntent] 的 LoadBook 复位。
+     */
+    private val _chaptersLoaded = MutableStateFlow(false)
+
+    /** 折叠卷集合 + 章节加载标记合成一路，让 screenState 保持 5 路 combine。 */
+    private val tocMetaFlow = combine(_collapsedVolumes, _chaptersLoaded) { collapsed, loaded ->
+        collapsed to loaded
+    }
     private val _effects = MutableSharedFlow<TocEffect>(extraBufferCapacity = 16)
     val effects = _effects.asSharedFlow()
 
@@ -417,14 +452,20 @@ class TocViewModel(
                 initialValue = emptyList()
             )
 
+    /**
+     * Eagerly：玻璃 sheet 未展开时，其内容所在的 root dialog host 子组合尚未建立，目录
+     * 没有订阅者。VM 一旦由宿主绑定 bookUrl 就立即加载，StateFlow 在订阅建立时回放最新
+     * 一帧，避免打开瞬间出现空白首帧。
+     */
     val screenState: StateFlow<TocUiState> by lazy {
         combine(
             uiState,
             bookState,
-            collapsedVolumes,
+            tocMetaFlow,
             bookmarkUiList,
             markingUiList,
-        ) { action, book, collapsed, bookmarks, markings ->
+        ) { action, book, meta, bookmarks, markings ->
+            val (collapsed, chaptersLoaded) = meta
             TocUiState(
                 action = action,
                 book = book,
@@ -433,10 +474,11 @@ class TocViewModel(
                 markings = markings.toImmutableList(),
                 isSplitLongChapter = book?.getSplitLongChapter() ?: false,
                 isReverse = book?.getReverseToc() ?: false,
+                isLoading = !chaptersLoaded,
             )
         }.stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
+            started = SharingStarted.Eagerly,
             initialValue = TocUiState(),
         )
     }
@@ -490,7 +532,7 @@ class TocViewModel(
     /** 目录行右侧那两枚状态图标的数据源：本章分配过角色 / 本章下载过听书音频。 */
     private data class TocStatusFlags(
         val assigned: Set<Int> = emptySet(),
-        val downloaded: Set<Int> = emptySet(),
+        val audioDownloads: Map<Int, TocAudioDownloadState> = emptyMap(),
     )
 
     private val statusFlagsFlow: Flow<TocStatusFlags> = bookUrlFlow
@@ -498,22 +540,51 @@ class TocViewModel(
         .flatMapLatest { url ->
             combine(
                 CastAssignmentStore.flowAssignedChapters(url),
-                ReadAloudAudioStore.flowDownloadedChapters(url),
+                ReadAloudAudioStore.flowDownloadRecords(url),
             ) { assigned, downloaded ->
-                TocStatusFlags(assigned.toSet(), downloaded)
+                TocStatusFlags(
+                    assigned = assigned.toSet(),
+                    audioDownloads = downloaded.associate { it.chapterIndex to it.toTocAudioDownloadState() },
+                )
             }
         }
         .flowOn(Dispatchers.IO)
 
+    // 章节列表只依赖宿主给定的 bookUrl：books 表查不到（未在架书、URL 漂移、
+    // Room Flow 尚未首帧发射）时，整棵目录树不能因此永远不发射。
+    // 状态类上游也各带首帧默认值，避免等整书缓存扫描和角色/音频表。
     override val rawDataFlow: Flow<List<TocDomainItem>> = combine(
-        bookState.filterNotNull().map { it.bookUrl }.distinctUntilChanged()
+        bookUrlFlow.filterNotNull().distinctUntilChanged()
             .flatMapLatest { bookRepository.flowChapters(it) },
-        downloadContextFlow,
-        uiConfigFlow,
+        downloadContextFlow.onStart {
+            emit(
+                DownloadContext(
+                    downloadState = CacheBook.downloadStateFlow.value
+                        .books[bookState.value?.bookUrl],
+                    cachedChapterIndices = _cachedChapterIndices.value,
+                )
+            )
+        },
+        uiConfigFlow.onStart {
+            // 读同步快照而不是 tocPreferences.value：后者是 WhileSubscribed 的 stateIn，
+            // 首帧还没订阅时会退回默认值，开启标题替换的书会先闪一版原始标题。
+            val settings = readSettingsRepository.currentSettings
+            emit(
+                TocUiConfig(
+                    collapsedVolumes = _collapsedVolumes.value,
+                    useReplace = settings.tocUiUseReplace,
+                    showWordCount = settings.tocCountWords,
+                    isReverse = bookState.value?.getReverseToc() ?: false,
+                    defaultReplaceEnabled = otherSettingsGateway.currentSettings.replaceEnableDefault,
+                    chineseConverterType = settings.chineseConverterType,
+                )
+            )
+        },
         titleReplaceState,
-        statusFlagsFlow
+        statusFlagsFlow.onStart { emit(TocStatusFlags()) }
     ) { originalChapters, downloadCtx, config, titleState, statusFlags ->
-        val book = bookState.value ?: return@combine emptyList()
+        // 兜底 Book 只用于规则/缓存判定，保证即使 books 表无行也先给出章节列表。
+        val book = bookState.value ?: Book(bookUrl = bookUrlFlow.value.orEmpty())
 
         val processedChapters = if (config.isReverse) {
             originalChapters.reverseTocHierarchy()
@@ -547,7 +618,7 @@ class TocViewModel(
                     displayTitle = titleState.titles[chapter.index] ?: baseTitle,
                     downloadState = DownloadState.LOCAL,
                     hasCastAssignment = chapter.index in statusFlags.assigned,
-                    hasAudioDownload = chapter.index in statusFlags.downloaded,
+                    audioDownloadState = statusFlags.audioDownloads[chapter.index] ?: TocAudioDownloadState.None,
                 )
             }
         }
@@ -573,11 +644,19 @@ class TocViewModel(
                 titleState.titles[chapter.index] ?: baseTitle,
                 downloadState,
                 statusFlags.assigned.contains(chapter.index),
-                statusFlags.downloaded.contains(chapter.index),
+                statusFlags.audioDownloads[chapter.index] ?: TocAudioDownloadState.None,
             )
         }
 
     }.flowOn(Dispatchers.Default)
+        .catch { cause ->
+            // 上游任一状态流抛异常时，combine 会永远不发射，UI 便无限转圈。
+            // 结束加载态并留在日志里，避免无反馈的假死，也便于真机定位。
+            Log.e("TocViewModel", "目录数据流失败", cause)
+            _chaptersLoaded.value = true
+            emit(emptyList())
+        }
+        .onEach { _chaptersLoaded.value = true }
 
     val useReplace get() = tocPreferences.value.useReplace
     val showWordCount get() = tocPreferences.value.showWordCount
@@ -645,7 +724,7 @@ class TocViewModel(
             downloadState = downloadState,
             wordCount = wordCountText,
             hasCastAssignment = hasCastAssignment,
-            hasAudioDownload = hasAudioDownload,
+            audioDownloadState = audioDownloadState,
         )
     }
 
@@ -659,14 +738,32 @@ class TocViewModel(
     override suspend fun findOldRule(newRule: TocDomainItem) = null
     override fun saveImportedRules() {}
 
+    /**
+     * 组合期同步绑定输入：幂等、无 I/O。screenState 的订阅建立时 bookUrl 与 Book
+     * 必须已经就绪，否则首次打开会卡在「等 LaunchedEffect 执行」的单点时序上。
+     * 缓存重扫仍只由 [TocIntent.LoadBook] 触发，避免每次重组都全量扫描。
+     */
+    fun bindBook(bookUrl: String, book: Book?) {
+        if (bookUrl.isEmpty()) return
+        val changed = bookUrlFlow.value != bookUrl
+        if (changed) {
+            clearSelection()
+            _collapsedVolumes.value = emptySet()
+            _chaptersLoaded.value = false
+            // 换书必须清掉上一本的兜底，否则 DB 查不到时会显示旧书信息。
+            _hostBook.value = book?.takeIf { it.bookUrl == bookUrl }
+            bookUrlFlow.value = bookUrl
+        } else if (book != null && book.bookUrl == bookUrl &&
+            _hostBook.value?.bookUrl != bookUrl
+        ) {
+            _hostBook.value = book
+        }
+    }
+
     fun onIntent(intent: TocIntent) {
         when (intent) {
             is TocIntent.LoadBook -> {
-                if (bookUrlFlow.value != intent.bookUrl) {
-                    clearSelection()
-                    _collapsedVolumes.value = emptySet()
-                    bookUrlFlow.value = intent.bookUrl
-                }
+                bindBook(intent.bookUrl, intent.book)
                 cachedChapterRescan.tryEmit(Unit)
             }
             is TocIntent.SetSearchMode -> setSearchMode(intent.enabled)
@@ -715,6 +812,9 @@ class TocViewModel(
             }
             if (book.isMobi) {
                 MobiFile.clear()
+            }
+            if (book.isMarkdown) {
+                BookHelp.clearCache(book)
             }
             kotlin.runCatching {
                 LocalBook.getChapterList(book).let {

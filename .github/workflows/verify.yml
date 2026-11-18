@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -46,6 +48,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Prepare pinned UI forks
+        uses: ./.github/actions/prepare-ui-forks
+
       # 与 auto-release.yml 同一处理：settings.gradle 里的 aliyun 镜像面向国内开发机，
       # 在 GitHub runner 上会 502，且 Gradle 一旦判定某仓库失败就整个禁用它。
       - name: Remove Aliyun mirrors (unreliable in CI)
@@ -55,11 +60,12 @@ jobs:
       # Reader semantic golden/contract/consumer/file tests are discovered by the
       # same unfiltered JVM task, preserving per-class Robolectric isolation.
       # 架构检查只跑一次，挂在 core job 上。
+      # 依赖解析命中 Maven Central 限流（HTTP 429）时自动重试一次；真实编译/测试失败不重试。
       - name: Run semantic compatibility, unit tests, lint, architecture check, and debug build
         if: ${{ matrix.product == 'Core' }}
         run: |
           chmod +x gradlew
-          ./gradlew \
+          bash scripts/run-gradle-with-retry.sh ./gradlew \
             testApp${{ matrix.product }}DebugUnitTest \
             lintApp${{ matrix.product }}Debug \
             verifyConfigArchitecture \
@@ -73,7 +79,7 @@ jobs:
         if: ${{ matrix.product == 'Comic' }}
         run: |
           chmod +x gradlew
-          ./gradlew \
+          bash scripts/run-gradle-with-retry.sh ./gradlew \
             testApp${{ matrix.product }}DebugUnitTest \
             lintApp${{ matrix.product }}Debug \
             assembleApp${{ matrix.product }}Debug \

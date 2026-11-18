@@ -55,6 +55,10 @@
 | [TXT 目录正则](./txt-toc)           | 自定义 TXT 书籍的章节识别规则      |
 | [MIME 类型参考](../spec/mime-types) | 支持的文件扩展名和 MIME 类型对照表   |
 
+## 本地分支维护
+
+- [canny_dev 本地功能保留清单](./canny-local-features) — 上游合并时核对本地定制、历史提交与验证记录。
+
 ## 外部资源
 
 - [Legado GitHub](https://github.com/HapeLee/legado-with-MD3) — 项目源码和 Issue 跟踪

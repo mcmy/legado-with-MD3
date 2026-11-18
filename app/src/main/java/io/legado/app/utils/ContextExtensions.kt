@@ -40,8 +40,8 @@ import io.legado.app.constant.AppConst
 import io.legado.app.data.entities.Book
 import io.legado.app.help.IntentHelp
 import io.legado.app.help.book.isAudio
-import io.legado.app.help.book.isImage
 import io.legado.app.help.book.isVideo
+import io.legado.app.help.book.shouldOpenMangaReader
 import io.legado.app.help.config.AppConfigStore
 import io.legado.app.help.config.SettingsWriter
 import io.legado.app.domain.gateway.BookshelfSettingsGateway
@@ -74,16 +74,17 @@ fun Context.startActivityForBook(
     book: Book,
     configIntent: Intent.() -> Unit = {},
 ) {
+    val openMangaReader = book.shouldOpenMangaReader(mangaSettingsGateway.currentSettings.showMangaUi)
     val intent = when {
         book.isVideo -> MainActivity.createVideoPlayIntent(this, book.bookUrl)
         book.isAudio -> MainActivity.createAudioPlayIntent(this, book.bookUrl)
-        book.isImage && mangaSettingsGateway.currentSettings.showMangaUi ->
+        openMangaReader ->
             MainActivity.createReadMangaIntent(this, book.bookUrl)
 
         else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (book.isAudio || (book.isImage && mangaSettingsGateway.currentSettings.showMangaUi)) {
+    if (book.isAudio || openMangaReader) {
         intent.putExtra("bookUrl", book.bookUrl)
     }
     intent.apply(configIntent)
@@ -94,16 +95,17 @@ fun Context.startActivityForBook(
     book: BookShelfItem,
     configIntent: Intent.() -> Unit = {},
 ) {
+    val openMangaReader = book.shouldOpenMangaReader(mangaSettingsGateway.currentSettings.showMangaUi)
     val intent = when {
         book.isVideo -> MainActivity.createVideoPlayIntent(this, book.bookUrl)
         book.isAudio -> MainActivity.createAudioPlayIntent(this, book.bookUrl)
-        book.isImage && mangaSettingsGateway.currentSettings.showMangaUi ->
+        openMangaReader ->
             MainActivity.createReadMangaIntent(this, book.bookUrl)
 
         else -> MainActivity.createReadBookIntent(this, book.bookUrl)
     }
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    if (book.isAudio || (book.isImage && mangaSettingsGateway.currentSettings.showMangaUi)) {
+    if (book.isAudio || openMangaReader) {
         intent.putExtra("bookUrl", book.bookUrl)
     }
     intent.apply(configIntent)
@@ -185,7 +187,10 @@ fun Context.startForegroundServiceCompat(intent: Intent) {
     try {
         ContextCompat.startForegroundService(this, intent)
     } catch (e: Exception) {
-        startService(intent)
+        // 系统可能直接拒绝以前台服务方式启动（如 dataSync 的 24 小时运行配额耗尽）。
+        // 退回普通启动，服务内部若无法进入前台会自行退出，不让异常冒到调用方线程。
+        runCatching { startService(intent) }
+            .onFailure { e2 -> e2.printOnDebug() }
     }
 }
 

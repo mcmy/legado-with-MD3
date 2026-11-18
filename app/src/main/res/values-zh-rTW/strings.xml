@@ -384,7 +384,6 @@
     <string name="book_source_export_failed">匯出失敗：%1$s</string>
     <string name="book_source_upload_success">上傳成功：%1$s</string>
     <string name="book_source_upload_failed">上傳失敗：%1$s</string>
-    <string name="check_select_source">校驗所選</string>
     <string name="progress_show">%1$s      進度 %2$d/%3$d</string>
     <string name="tts_fix">請安裝並選擇中文TTS！</string>
     <string name="tts_init_failed">TTS初始化失敗！</string>
@@ -650,6 +649,8 @@
     <string name="black">黑色</string>
     <string name="content_empty">文章內容為空</string>
     <string name="on_change_source">正在換源請等待…</string>
+    <string name="local_manga_requires_reader">請使用漫畫閱讀器開啟本機漫畫。</string>
+    <string name="local_manga_directory_unavailable">無法存取本機漫畫，請重新選擇漫畫所在資料夾以授予讀取權限。</string>
     <string name="chapter_list_empty">目錄列表為空</string>
     <string name="text_letter_spacing">字距</string>
 
@@ -1106,12 +1107,14 @@
 
     <!-- check source config string -->
     <string name="check_source_config">校驗設定</string>
-    <string name="check_source_item">校驗項目</string>
     <string name="check_source_timeout">單個書源校驗超時(秒)</string>
+    <string name="check_source_thread_count">校驗並發數（1-64）</string>
+    <string name="check_source_quick_mode">快速完整校驗模式</string>
+    <string name="domain">域名</string>
+    <string name="write_source_comment">寫入源註釋</string>
     <string name="timeout">超時</string>
     <string name="seconds">秒</string>
     <string name="less_than">小於</string>
-    <string name="check_source_config_summary">校驗超時：%1$s秒\n校驗項目：%2$s</string>
     <string name="record_debug_log">記錄除錯日誌</string>
     <string name="sub_dir">子資料夾</string>
     <string name="general">全域</string>
@@ -1469,8 +1472,8 @@
     <string name="show_book_count">顯示分組書籍數量</string>
     <string name="dynamic_colors_summary">使用基於桌布的主題顏色</string>
     <string name="input_value_range">輸入數值（%1$d-%2$d）</string>
-    <string name="miuix_monet">Miuix Monet</string>
-    <string name="miuix_monet_summary">為 Miuix 使用 Monet 演算法產生配色。目前主題為動態主題且系統為 Android 12 以上時，會優先使用系統取色；否則使用下方種子色。</string>
+    <string name="miuix_monet">自訂主題色</string>
+    <string name="miuix_monet_summary">為主題風格使用自訂配色。目前主題為動態主題且系統為 Android 12 以上時，會優先使用系統取色；否則使用下方種子色。</string>
 	<string name="layout_setting">佈局設定</string>
 	<string name="cover_info_orientation">封面資訊方向</string>
 	<string name="rule_segment">Rule</string>
@@ -1610,6 +1613,13 @@
     <string name="manual_contrast_value_label">手動值 [-1, 1]</string>
     <string name="manual_contrast_invalid">請輸入 -1 到 1 之間的有效數字</string>
     <string name="predictive_back">預測性返回手勢</string>
+    <string name="navigation_animation">導覽動畫</string>
+    <string name="navigation_animation_scale">縮放</string>
+    <string name="text_animation_level">文字動畫等級</string>
+    <string name="text_animation_slide">滑動（預設）</string>
+    <string name="text_animation_subtle">輕柔</string>
+    <string name="text_animation_standard">標準</string>
+    <string name="text_animation_strong">明顯</string>
     <string name="predictive_back_summary">啟用系統預測性返回手勢</string>
     <string name="restart_to_apply">重新啟動以套用</string>
     <string name="custom_theme">自訂主題</string>
@@ -1983,6 +1993,9 @@
     <string name="show_bottom_nav">顯示導航欄</string>
     <string name="floating_bottom_bar">懸浮底欄</string>
     <string name="floating_bottom_bar_summary">底部導航欄使用獨立膠囊樣式</string>
+    <string name="coui_floating_bottom_bar_summary">COUI 的底部導覽固定使用懸浮樣式</string>
+    <string name="top_bar_button_liquid_glass">頂欄按鈕液態玻璃</string>
+    <string name="top_bar_button_liquid_glass_summary">為頂欄按鈕啟用背景模糊與折射，需要 Android 13 或更新版本</string>
     <string name="floating_bottom_bar_liquid_glass">液態玻璃效果</string>
     <string name="floating_bottom_bar_liquid_glass_summary">為懸浮底欄啟用液態玻璃高亮效果。需要模糊和 Android 13+</string>
     <string name="nav_label_mode">導航欄標籤模式</string>
@@ -2100,6 +2113,7 @@
     <string name="use_underline">強調文字始終使用底線</string>
     <string name="adapt_special_style">適配特殊樣式</string>
     <string name="compose_engine">主題樣式</string>
+    <string name="coui_theme_requires_android_14">COUI（需要 Android 14 與系統模糊支援）</string>
     <string name="container_opacity">容器不透明度</string>
     <string name="container_opacity_summary">%d</string>
     <string name="web_service_auto_start">開啟應用時啟動 Web 服務</string>
@@ -2559,6 +2573,9 @@
     <string name="switch_to_light_mode_action">切換至淺色模式</string>
     <string name="switch_action">切換</string>
     <string name="cover_albums">封面圖集</string>
+    <string name="cover_picker_online_section">線上封面</string>
+    <string name="cover_picker_album_no_images">此封面圖集暫無圖片</string>
+    <string name="cover_picker_select_cover">選擇封面：%1$s</string>
     <string name="manage_cover_albums">管理封面圖集</string>
     <string name="select_cover_album">選擇封面圖集</string>
     <string name="cover_album_none">應用程式內建封面</string>
@@ -3074,6 +3091,8 @@
     <string name="read_aloud_audio_download_deleted_chapters">已刪除 %1$d 章的聽書音頻</string>
     <string name="read_aloud_audio_download_invalid_range">章範圍填得唔對</string>
     <string name="read_aloud_audio_download_state">已下載聽書音頻</string>
+    <string name="read_aloud_audio_download_partial_state">聽書音訊已部分下載</string>
+    <string name="read_aloud_audio_download_unverified_state">已儲存聽書音訊，整章完整性未驗證</string>
     <string name="cast_assignment_state">本章已分配角色</string>
     <string name="cast_assignment_delete">刪除分配</string>
     <string name="cast_assignment_deleted">已刪除 %1$d 條分配</string>
@@ -3105,4 +3124,7 @@
     <string name="a11y_open_playback">開啟播放介面</string>
     <string name="a11y_open_playback_named">開啟《%1$s》的播放介面</string>
     <string name="a11y_reorder_position">第 %1$d 項，共 %2$d 項</string>
+    <string name="hyper_os4_components">HyperOS 4 風格元件</string>
+    <string name="hyper_os4_components_summary">在 Miuix 主題下使用玻璃頂欄、標籤頁與下拉選單。需要 Android 13 與系統模糊支援。</string>
+    <string name="paragraph_comment_height_percent">%1$d%%</string>
 </resources>

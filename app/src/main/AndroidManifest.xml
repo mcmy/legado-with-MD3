@@ -2,7 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+    <!-- COUI entry points are isolated behind the Android 14 theme gate. -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur,top.yukonga.miuix.kmp.glass,com.itos.coui,com.itos.coui.material3,com.itos.coui.icons" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 自 Android 17 (API 37) 起本地网络保护强制生效：接受局域网入站连接需要该运行时权限，
@@ -26,6 +27,7 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -325,6 +327,8 @@
                 <data android:scheme="file" />
                 <!-- text -->
                 <data android:mimeType="text/plain" />
+                <!-- Markdown -->
+                <data android:mimeType="text/markdown" />
                 <!-- json -->
                 <data android:mimeType="application/json" />
                 <!-- EPUB -->
@@ -362,6 +366,13 @@
                 <data android:pathAdvancedPattern=".*\\.[jJ][sS][oO][nN]" />
                 <data android:pathPattern=".*\\.json" />
                 <data android:pathPattern=".*\\.JSON" />
+                <!-- Markdown -->
+                <data android:pathAdvancedPattern=".*\\.[mM][dD]" />
+                <data android:pathPattern=".*\\.md" />
+                <data android:pathPattern=".*\\.MD" />
+                <data android:pathAdvancedPattern=".*\\.[mM][aA][rR][kK][dD][oO][wW][nN]" />
+                <data android:pathPattern=".*\\.markdown" />
+                <data android:pathPattern=".*\\.MARKDOWN" />
                 <!-- EPUB -->
                 <data android:pathAdvancedPattern=".*\\.[eE][pP][uU][bB]" />
                 <data android:pathPattern=".*\\.epub" />
@@ -406,13 +417,23 @@
         <service
             android:name=".service.ExportBookService"
             android:foregroundServiceType="dataSync" />
+        <!--
+          Web 服务是用户主动开启、需要长期运行的本地 HTTP 服务，不属于「数据同步」：
+          dataSync 自 Android 15 起受「任意 24 小时累计 6 小时」运行配额限制，配额耗尽后
+          startForeground 会抛 ForegroundServiceStartNotAllowedException。specialUse 无时长上限。
+        -->
         <service
             android:name=".service.WebService"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="local_http_server" />
+        </service>
+        <!-- 磁贴自身不发前台通知，类型仅与 WebService 保持一致，避免误读。 -->
         <service
             android:name=".service.WebTileService"
             android:exported="true"
-            android:foregroundServiceType="dataSync"
+            android:foregroundServiceType="specialUse"
             android:icon="@drawable/ic_web_service_noti"
             android:label="legado Web Service"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"

@@ -1,8 +1,10 @@
 package io.legado.app.ui.book.manga
 
+import android.content.Intent
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.core.net.toUri
+import io.legado.app.data.entities.Book
 import io.legado.app.domain.model.manga.MangaTranslationPage
 import io.legado.app.feature.manga.translation.MangaTranslationIntent
 import io.legado.app.feature.manga.translation.MangaTranslationSheet
@@ -11,6 +13,8 @@ import io.legado.app.feature.manga.translation.MangaTranslationViewModel
 import kotlinx.collections.immutable.toImmutableList
 import org.koin.androidx.compose.koinViewModel
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -41,6 +45,7 @@ import io.legado.app.ui.main.readerSharedBounds
 import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.openUrl
 import io.legado.app.utils.share
+import io.legado.app.utils.takePersistablePermissionSafely
 import io.legado.app.utils.toggleSystemBar
 import kotlinx.coroutines.flow.collectLatest
 
@@ -76,6 +81,14 @@ fun MangaReaderRouteScreen(
     val platformCapabilities = remember(activity) { AndroidPlatformCapabilities(activity) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val bookDirectoryPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            uri.takePersistablePermissionSafely(activity, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            viewModel.onIntent(MangaReaderIntent.Retry)
+        }
+    }
     val translationViewModel: MangaTranslationViewModel = koinViewModel(key = "manga-translation:$openRequestId")
     val translation by translationViewModel.uiState.collectAsStateWithLifecycle()
     var translationActive by remember(lifecycleOwner) { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
@@ -280,6 +293,7 @@ fun MangaReaderRouteScreen(
     MangaReaderScreen(
         state = translatedState,
         onIntent = viewModel::onIntent,
+        onReselectBookDirectory = { bookDirectoryPicker.launch(null) },
         onOpenTranslation = openTranslation,
         onTranslatePage = if (!translation.loaded || translation.busy) null else { key, force ->
             (state.pages.firstOrNull { it.key == key } as? MangaReaderItemUi.Page)?.let { page ->
@@ -330,6 +344,11 @@ fun MangaReaderRouteScreen(
         ReaderBookSheetRoute(
             show = true,
             bookUrl = state.bookUrl,
+            book = Book(
+                bookUrl = state.bookUrl,
+                name = state.bookName,
+                author = state.bookAuthor,
+            ),
             initialTab = ReaderBookSheetTab.Toc,
             currentChapterIndex = state.pendingChapterIndex ?: state.chapterIndex,
             onDismissRequest = { viewModel.onIntent(MangaReaderIntent.DismissSheet) },

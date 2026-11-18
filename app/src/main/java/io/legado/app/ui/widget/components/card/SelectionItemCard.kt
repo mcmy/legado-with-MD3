@@ -34,22 +34,23 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import io.legado.app.R
+import io.legado.app.ui.theme.ComposeEngine
 import io.legado.app.ui.theme.LegadoTheme
 import io.legado.app.ui.theme.LegadoTheme.composeEngine
-import io.legado.app.ui.theme.ThemeResolver
 import io.legado.app.ui.widget.components.AdaptiveSwitch
 import io.legado.app.ui.widget.components.reorderAccessibility
 import io.legado.app.ui.widget.components.button.series.SmallPlainButton
 import io.legado.app.ui.widget.components.checkBox.AppCheckbox
 import io.legado.app.ui.widget.components.icon.AppIcons
-import io.legado.app.ui.widget.components.menuItem.RoundDropdownMenu
+import io.legado.app.ui.widget.components.menu.AppAnchoredPanel
 import io.legado.app.ui.widget.components.text.AppText
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.ReorderableLazyListState
@@ -78,14 +79,18 @@ fun SelectionItemCard(
     editContentDescription: String? = null,
     moreContentDescription: String? = null
 ) {
-    val composeEngine = ThemeResolver.isMiuixEngine(composeEngine)
+    val isMiuix = composeEngine == ComposeEngine.Miuix
+    // 多选行只保留卡片一个焦点：名称（含副标题）提升为卡片描述，
+    // 由 Checkbox 角色承载勾选态，一次读完“未勾选，名称”。
+    val a11yDescription = contentDescription
+        ?: if (subtitle.isNullOrBlank()) title else "$title, $subtitle"
     val animatedContainerColor by animateColorAsState(
         targetValue = if (isSelected)
             selectedContainerColor
-                ?: if (composeEngine) LegadoTheme.colorScheme.secondaryContainer else LegadoTheme.colorScheme.secondaryContainer
+                ?: if (isMiuix) LegadoTheme.colorScheme.secondaryContainer else LegadoTheme.colorScheme.secondaryContainer
         else
             containerColor
-                ?: if (composeEngine) LegadoTheme.colorScheme.surfaceContainer else LegadoTheme.colorScheme.surfaceContainerLow,
+                ?: if (isMiuix) LegadoTheme.colorScheme.surfaceContainer else LegadoTheme.colorScheme.surfaceContainerLow,
         animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
         label = "CardColor"
     )
@@ -97,11 +102,18 @@ fun SelectionItemCard(
             .then(
                 if (contentDescription != null || inSelectionMode) {
                     Modifier.semantics {
-                        contentDescription?.let { this.contentDescription = it }
                         if (inSelectionMode) {
-                            selected = isSelected
+                            // 多选行整卡即勾选目标：用 Checkbox 角色承载勾选态，
+                            // TalkBack 才会播报“已勾选/未勾选”；复选框本体已被清空语义，
+                            // 状态与名称合并后只留一个焦点。
+                            role = Role.Checkbox
+                            toggleableState =
+                                if (isSelected) ToggleableState.On else ToggleableState.Off
+                            this.contentDescription = a11yDescription
+                        } else {
+                            contentDescription?.let { this.contentDescription = it }
+                            role = Role.Button
                         }
-                        role = Role.Button
                     }
                 } else {
                     Modifier
@@ -182,35 +194,23 @@ fun SelectionItemCardContent(
             }
         }
 
-        if (ThemeResolver.isMiuixEngine(composeEngine)) {
-            BasicComponent(
-                modifier = Modifier.weight(1f)
-            ) {
-                AppText(
-                    text = title,
-                    style = LegadoTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                when {
-                    supportingContent != null -> supportingContent()
-                    !subtitle.isNullOrBlank() -> {
-                        AppText(
-                            text = subtitle,
-                            style = LegadoTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        } else {
-            ListItem(
-                modifier = Modifier.weight(1f),
-                supportingContent = when {
-                    supportingContent != null -> supportingContent
-                    !subtitle.isNullOrBlank() -> {
-                        {
+        when (composeEngine) {
+            ComposeEngine.Miuix -> {
+                BasicComponent(
+                    // 多选模式下卡片根已承载名称与勾选态；内部容器自带合并边界会把
+                    // 标题文本拆成第二个焦点，这里整块清空。
+                    modifier = Modifier.weight(1f)
+                        .then(if (inSelectionMode) Modifier.clearAndSetSemantics { } else Modifier)
+                ) {
+                    AppText(
+                        text = title,
+                        style = LegadoTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    when {
+                        supportingContent != null -> supportingContent()
+                        !subtitle.isNullOrBlank() -> {
                             AppText(
                                 text = subtitle,
                                 style = LegadoTheme.typography.bodySmall,
@@ -219,16 +219,36 @@ fun SelectionItemCardContent(
                             )
                         }
                     }
-                    else -> null
-                },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-            ) {
-                AppText(
-                    text = title,
-                    style = LegadoTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                }
+            }
+            ComposeEngine.Material, ComposeEngine.Mochi, ComposeEngine.Coui -> {
+                ListItem(
+                    // 同上：多选模式下清空内部容器语义，避免标题文本成为第二个焦点。
+                    modifier = Modifier.weight(1f)
+                        .then(if (inSelectionMode) Modifier.clearAndSetSemantics { } else Modifier),
+                    supportingContent = when {
+                        supportingContent != null -> supportingContent
+                        !subtitle.isNullOrBlank() -> {
+                            {
+                                AppText(
+                                    text = subtitle,
+                                    style = LegadoTheme.typography.bodySmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        else -> null
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                ) {
+                    AppText(
+                        text = title,
+                        style = LegadoTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
 
@@ -267,19 +287,22 @@ fun SelectionItemCardContent(
             }
 
             if (dropdownContent != null) {
-                Box {
-                    SmallPlainButton(
-                        onClick = { showMenu = true },
-                        icon = AppIcons.MoreVert,
-                        contentDescription = moreContentDescription ?: defaultMoreDescription
-                    )
-                    RoundDropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        dropdownContent { showMenu = false }
-                    }
-                }
+                // 弹层分派收编到 AppAnchoredPanel 的兼容路径：⋮ 按钮仍由卡片渲染
+                // （外观与无障碍名称不变）；content 与公共插槽同构，6 个调用点零改动，
+                // 菜单项仍由各调用点自己决定是否 dismiss()。
+                AppAnchoredPanel(
+                    expanded = showMenu,
+                    onExpandedChange = { showMenu = it },
+                    externalTrigger = true,
+                    trigger = {
+                        SmallPlainButton(
+                            onClick = { open() },
+                            icon = AppIcons.MoreVert,
+                            contentDescription = moreContentDescription ?: defaultMoreDescription
+                        )
+                    },
+                    content = dropdownContent,
+                )
             }
         }
     }

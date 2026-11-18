@@ -3,6 +3,7 @@ package io.legado.app.ui.book.read
 import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
+import io.legado.app.domain.model.readaloud.ReadAloudProgress
 import io.legado.app.constant.ReadMenuBlurMode
 import io.legado.app.constant.ReadMenuBlurStyle
 import io.legado.app.data.entities.Book
@@ -146,6 +147,9 @@ data class ReadSheetConfigUiState(
     val titleColorNight: Int = 0,
     val textColorDay: Int = 0,
     val textColorNight: Int = 0,
+    /** 预览底色：白天/夜间那两套阅读背景（背景是图时为 0，预览回落到主题表面）。 */
+    val bgColorDay: Int = 0,
+    val bgColorNight: Int = 0,
     val textShadow: Boolean = false,
     val textShadowColor: Int = 0,
     val shadowRadius: Float = 0f,
@@ -351,6 +355,8 @@ data class ReadBookUiState(
     val multiRoleCast: Boolean = false,
     /** 背景音乐分配开关（正文段首配乐胶囊 + 朗读时的独立配乐轨）。 */
     val bgmAssign: Boolean = false,
+    /** 每章开头是否朗读章节标题；与正文标题是否显示（`titleMode`）无关。 */
+    val readChapterTitle: Boolean = true,
     /** 背景音乐总音量（0f–1f），与曲目自身音量、段内音量相乘。 */
     val bgmVolume: Float = 1f,
     val defaultReadAloudInterface: String = ReadAloudSettingsRepository.DEFAULT_INTERFACE_CLASSIC,
@@ -950,7 +956,7 @@ sealed interface ReadBookIntent {
 
     // Media / TTS
     data class MediaButtonPressed(val play: Boolean) : ReadBookIntent
-    data class TtsProgress(val chapterStart: Int) : ReadBookIntent
+    data class TtsProgress(val progress: ReadAloudProgress) : ReadBookIntent
 
     // Dialog callback bridge
     data object ReadAloudAction : ReadBookIntent
@@ -1013,6 +1019,9 @@ sealed interface ReadBookIntent {
 
     /** 背景音乐分配开关：正文段首渲染配乐胶囊，朗读时按场景换 BGM。 */
     data class SetBgmAssign(val value: Boolean) : ReadBookIntent
+
+    /** 朗读章节标题开关：只影响朗读队列，不改正文渲染（正文标题仍由 `titleMode` 决定）。 */
+    data class SetReadChapterTitle(val value: Boolean) : ReadBookIntent
 
     /** 背景音乐总音量（0f–1f）：与曲目音量、段内音量相乘，朗读设置里那根滑杆。 */
     data class SetBgmVolume(val value: Float) : ReadBookIntent
@@ -2046,6 +2055,9 @@ sealed interface ConfigUpdate {
     }
 
     data class BookmarkBadgeSize(val value: Int) : ConfigUpdate {
+        override val actions = emptySet<ConfigUpdateAction>()
+    }
+    data class ParagraphCommentHeight(val percent: Int) : ConfigUpdate {
         override val actions = emptySet<ConfigUpdateAction>()
     }
     data class SliderVibrator(val value: Boolean) : ConfigUpdate {

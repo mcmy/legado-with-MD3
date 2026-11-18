@@ -26,6 +26,11 @@ internal class ScrollPageDrawData(val page: ReaderPage) {
     // 背景图不许开抗锯齿：九宫格相邻两格各画一条半覆盖的边会合成出一条透底的切割线。
     val textBackgroundPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     val decorationDrawCache = ReaderPageDecorationDrawCache.create(page)
+    /** 通过真实字体 advance 校验的合并正文；命中、朗读状态变化时复用。 */
+    val textDrawRuns: Map<ReaderElement.Text, ReaderTextDrawRun> =
+        buildMergedTextRuns(page.elements, paints)
+    /** 整段绘制时临时承载字距的画笔，避免改动 [paints] 里共用的画笔。 */
+    val mergedRunPaint = Paint()
 
     /** Text-background bitmaps are owned by ReaderTextBackgroundLoader's byte-bounded LRU. */
     val textBackgroundRevision = mutableIntStateOf(0)
@@ -37,31 +42,28 @@ internal class ScrollPageDrawData(val page: ReaderPage) {
  * 重建。超容量按 LRU 淘汰。
  */
 internal class ScrollPageDrawCache(capacity: Int = 8) {
-    /**
-     * 按 elements 的引用而非内容比较。每次查询都会创建新的 key 包装对象，故必须
-     * 显式实现引用相等；Object 默认实现会把包装对象本身作为身份，令缓存永远 miss。
-     */
-    private class ElementsKey(private val elements: List<ReaderElement>) {
-        override fun equals(other: Any?): Boolean =
-            other is ElementsKey && elements === other.elements
-
-        override fun hashCode(): Int = System.identityHashCode(elements)
-    }
-
-    private val entries = object : LinkedHashMap<ElementsKey, ScrollPageDrawData>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<ElementsKey, ScrollPageDrawData>): Boolean =
+    private val entries = object : LinkedHashMap<ReaderPageElementsKey, ScrollPageDrawData>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<ReaderPageElementsKey, ScrollPageDrawData>): Boolean =
             size > capacity
     }
 
     fun put(page: ReaderPage, data: ScrollPageDrawData) {
-        synchronized(this) { entries[ElementsKey(page.elements)] = data }
+        synchronized(this) { entries[ReaderPageElementsKey(page.elements)] = data }
     }
 
     fun peek(page: ReaderPage): ScrollPageDrawData? = synchronized(this) {
-        entries[ElementsKey(page.elements)]
+        entries[ReaderPageElementsKey(page.elements)]
     }
 
     /** draw 期兜底：miss 时主线程同步构建，保正确性不缺字；正常路径由预热先行。 */
     fun ensure(page: ReaderPage): ScrollPageDrawData =
         peek(page) ?: ScrollPageDrawData(page).also { put(page, it) }
+}
+
+/** 按不可变排版元素列表的引用区分页内容，无须逐字计算缓存键。 */
+internal class ReaderPageElementsKey(private val elements: List<ReaderElement>) {
+    override fun equals(other: Any?): Boolean =
+        other is ReaderPageElementsKey && elements === other.elements
+
+    override fun hashCode(): Int = System.identityHashCode(elements)
 }
