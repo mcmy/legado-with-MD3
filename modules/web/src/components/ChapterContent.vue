@@ -5,6 +5,7 @@
     :key="index"
     ref="paragraphRef"
     :data-chapterpos="para.start"
+    :data-chapterend="para.endExclusive"
   >
     <img
       class="full"
@@ -80,6 +81,7 @@ onMounted(() => {
             'readedLengthChange',
             props.chapterIndex,
             parseInt((target as HTMLElement).dataset.chapterpos as string),
+            Number((target as HTMLElement).dataset.chapterend ?? 0),
           )
         }
       }

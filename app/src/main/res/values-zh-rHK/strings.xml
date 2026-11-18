@@ -3122,4 +3122,5 @@
     <string name="hyper_os4_components">HyperOS 4 風格元件</string>
     <string name="hyper_os4_components_summary">在 Miuix 主題下使用玻璃頂欄、標籤頁與下拉選單。需要 Android 13 與系統模糊支援。</string>
     <string name="paragraph_comment_height_percent">%1$d%%</string>
+    <string name="quick_read_style_selection_hint">勾選至少兩個主題可循環切換；未勾選時在前兩個主題之間切換。</string>
 </resources>

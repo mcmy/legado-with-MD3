@@ -118,6 +118,7 @@ import { isNullOrBlank } from '@/utils/utils'
 import { initXboxGamepad } from '@/utils/xboxGamepad'
 import { createChapterPrefetcher } from '@/utils/chapterPrefetch'
 import { normalizeSpaceScrollDuration, spaceScrollDistance } from '@/utils/spaceScrollDuration'
+import { positionWithinVisibleParagraph } from '@/utils/chapterProgress'
 import {
   chapterWindowIndices, chapterSpacerHeights, captureChapterAnchor,
   restoreChapterAnchor, scrollChapterBy, type ScrollAnchor,
@@ -643,6 +644,12 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
   })
 }
 
+// Remote progress is restored in this reader, without reloading the application.
+watch(() => store.progressRestoreRevision, () => {
+  if (readerDisposed) return
+  void getContent(chapterIndex.value, true, chapterPos.value)
+})
+
 // 章节进度跳转和计算
 const chapter = ref()
 const chapterRef = ref()
@@ -660,12 +667,14 @@ const saveBookProgressThrottle = useThrottleFn(
   60000,
 )
 
-const onReadedLengthChange = (index: number, pos: number) => {
+const onReadedLengthChange = (index: number, pos: number, endExclusive: number) => {
   if (!windowReady) return
   const visible = visibleChapterIndex()
   if (visible !== undefined && visible !== index) return
   if (index !== windowCenter) refreshChapterWindow(index)
-  saveReadingBookProgressToBrowser(index, pos)
+  const position = index === chapterIndex.value
+    ? positionWithinVisibleParagraph(chapterPos.value, pos, endExclusive) : pos
+  saveReadingBookProgressToBrowser(index, position)
   saveBookProgressThrottle()
 }
 

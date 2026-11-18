@@ -10,6 +10,7 @@ import type {
 } from '@/book'
 import type { webReadConfig } from '@/web'
 import { normalizeSpaceScrollDuration } from '@/utils/spaceScrollDuration'
+import { compareBookProgress } from '@/utils/chapterProgress'
 import { ElMessage, ElMessageBox } from 'element-plus/es'
 
 type PartialWebReadConfig = Partial<
@@ -100,6 +101,7 @@ export const useBookStore = defineStore('book', {
         chapterIndex: number
         isSeachBook?: boolean
       },
+      progressRestoreRevision: 0,
       popCataVisible: false,
       contentLoading: true,
       showContent: false,
@@ -312,9 +314,10 @@ export const useBookStore = defineStore('book', {
     async saveBookProgress() {
       const progress = this.bookProgress
       if (!progress) return
+      const bookUrl = this.readingBook.bookUrl
+      const isCurrentBook = () => this.readingBook.bookUrl === bookUrl
 
       const updateShelfProgress = (savedProgress: BookProgress) => {
-        const { bookUrl } = this.readingBook
         const shelfRaw = toRaw(this.shelf)
         const findIndex = shelfRaw.findIndex(book => book.bookUrl === bookUrl)
         if (findIndex > -1) {
@@ -332,6 +335,7 @@ export const useBookStore = defineStore('book', {
       } catch {
         return
       }
+      if (!isCurrentBook()) return
       if (response.data.isSuccess) {
         if (response.data.data === 'updated') updateShelfProgress(progress)
         return
@@ -346,9 +350,26 @@ export const useBookStore = defineStore('book', {
         return
       }
       const remoteProgress = response.data.data
-      if (typeof remoteProgress === 'string') {
+      if (
+        !remoteProgress || typeof remoteProgress === 'string' ||
+        !Number.isInteger(remoteProgress.durChapterIndex) ||
+        remoteProgress.durChapterIndex < 0 || remoteProgress.durChapterIndex >= this.catalog.length ||
+        !Number.isFinite(remoteProgress.durChapterPos) || remoteProgress.durChapterPos < 0
+      ) {
         ElMessage.error('远程阅读进度格式错误')
         return
+      }
+
+      const current = this.bookProgress
+      if (!current || compareBookProgress(remoteProgress, current) <= 0) return
+      // A short page may clamp scrolling before the exact Android position. Once
+      // accepted, this same remote position must not prompt again after refresh.
+      const acceptedKey = `legado_web_accepted_progress:${bookUrl}`
+      try {
+        const accepted = JSON.parse(sessionStorage.getItem(acceptedKey) ?? 'null') as BookProgress | null
+        if (accepted && compareBookProgress(remoteProgress, accepted) <= 0) return
+      } catch {
+        sessionStorage.removeItem(acceptedKey)
       }
 
       progressConflictDialogOpen = true
@@ -359,6 +380,10 @@ export const useBookStore = defineStore('book', {
           distinguishCancelAndClose: true,
           type: 'info',
         })
+        if (!isCurrentBook()) return
+        const latest = this.bookProgress
+        if (!latest || compareBookProgress(remoteProgress, latest) <= 0) return
+        sessionStorage.setItem(acceptedKey, JSON.stringify(remoteProgress))
         this.readingBook.chapterIndex = remoteProgress.durChapterIndex
         this.readingBook.chapterPos = remoteProgress.durChapterPos
         sessionStorage.setItem(
@@ -371,9 +396,7 @@ export const useBookStore = defineStore('book', {
         )
         localStorage.setItem('readingRecent', JSON.stringify(this.readingBook))
         updateShelfProgress(remoteProgress)
-        if (location.hash.includes('/chapter')) {
-          location.reload()
-        }
+        this.progressRestoreRevision++
       } catch {
         // Canceling or closing the dialog intentionally keeps browser progress unchanged.
       } finally {

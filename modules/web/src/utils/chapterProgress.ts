@@ -7,3 +7,15 @@ export const paragraphAtPosition = (
   const index = paragraphs.findIndex(paragraph => paragraph.endExclusive > position)
   return index < 0 ? paragraphs.length - 1 : index
 }
+
+/** Keep Android's exact UTF-16 offset while Web still displays that paragraph. */
+export const positionWithinVisibleParagraph = (
+  current: number,
+  start: number,
+  endExclusive: number,
+): number => current >= start && current <= endExclusive ? current : start
+
+export const compareBookProgress = (
+  left: { durChapterIndex: number; durChapterPos: number },
+  right: { durChapterIndex: number; durChapterPos: number },
+): number => left.durChapterIndex - right.durChapterIndex || left.durChapterPos - right.durChapterPos

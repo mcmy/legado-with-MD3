@@ -4029,4 +4029,5 @@
     <string name="a11y_reorder_position">第 %1$d 项，共 %2$d 项</string>
     <string name="hyper_os4_components">HyperOS 4 风格组件</string>
     <string name="hyper_os4_components_summary">在 Miuix 主题下使用玻璃顶栏、标签页与下拉菜单。需要 Android 13 与系统模糊支持。</string>
+    <string name="quick_read_style_selection_hint">勾选至少两个主题可循环切换；未勾选时在前两个主题之间切换。</string>
 </resources>

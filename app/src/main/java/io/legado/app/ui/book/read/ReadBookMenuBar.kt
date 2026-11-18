@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.lerp
 import com.kyant.backdrop.Backdrop
 import dev.chrisbanes.haze.HazeState
 import io.legado.app.R
+import io.legado.app.feature.reader.dialog.QuickReadStyleDialog
 import io.legado.app.constant.ReadMenuBlurMode
 import io.legado.app.data.repository.ReadPreferences
 import io.legado.app.domain.model.settings.ReadAloudTimerMode
@@ -121,6 +122,16 @@ fun ReadBookMenuBar(
     hazeState: HazeState? = null,
     seekState: StateFlow<ReadSeekUiState>,
 ) {
+    var showQuickStyleDialog by rememberSaveable { mutableStateOf(false) }
+    if (showQuickStyleDialog) {
+        QuickReadStyleDialog(
+            items = state.styleConfig.styleItems,
+            onCheckedChange = { index, enabled ->
+                onIntent(ReadBookIntent.SetQuickStyleSelected(index, enabled))
+            },
+            onDismissRequest = { showQuickStyleDialog = false },
+        )
+    }
     val context = LocalContext.current
     val currentRoute = state.menuState.currentRoute
     val searchMenuVisible = state.isShowingSearchResult &&
@@ -337,6 +348,7 @@ fun ReadBookMenuBar(
                     ) {
                         ReadMenuGlassIconButton(
                             onClick = { onIntent(ReadBookIntent.SwitchQuickReadStyle) },
+                            onLongClick = { showQuickStyleDialog = true },
                             icon = Icons.Default.AutoAwesome,
                             colors = menuColors,
                             backdrop = backdrop,

@@ -122,7 +122,14 @@ class ReadStyleDelegate(
 
     fun switchQuickReadStyle() {
         val styleState = readStyleGateway.currentState
-        val selectedIndex = styleState.selectedIndex
+        // 主题选择写入阅读设置后，Gateway 的 items 快照不一定重新发布。
+        // 每次从当前生效设置读取位置，避免第二次点击仍计算出同一个主题。
+        val settings = readSettingsRepository.currentSettings
+        val selectedIndex = if (ReadSessionState.isComic) {
+            settings.comicStyleSelect
+        } else {
+            settings.readStyleSelect
+        }
         val next = nextQuickStyleIndex(selectedIndex, styleState.items.map { it.quickStyleSelect })
         if (next != null && next != selectedIndex) {
             host.applyConfigUpdate(ConfigUpdate.StyleSelect(next))

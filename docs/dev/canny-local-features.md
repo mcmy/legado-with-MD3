@@ -26,7 +26,7 @@
 | Web 章节容错与语义位置恢复 | `ChapterContent.vue`、`loading.ts`、API 服务端偏移映射 | 现有恢复测试通过；源码原样保留 |
 | Web 窄屏去边框 | `BookChapter.vue` 窄屏 `.chapter` 的 `border: none` | 源码原样保留 |
 | Web 打包与内嵌入口 | `scripts/sync.js`、`assets/web/index.html`、`assets/web/vue` | 生产构建后产物与合并前逐字节一致 |
-| Android 快捷阅读主题 | 菜单 AutoAwesome 按钮 → Intent → ViewModel → ReadStyleDelegate → Gateway/Repository；主题勾选开关、持久化与旧 JSON 默认值 | 全链路保留；使用现有 QuickReadStyle / JSON / ThemeListSelection 测试 |
+| Android 快捷阅读主题 | 菜单 AutoAwesome 按钮 → Intent → ViewModel → ReadStyleDelegate → Gateway/Repository；长按快捷按钮弹窗列表勾选、持久化与旧 JSON 默认值 | 全链路保留；使用现有 QuickReadStyle / JSON / ThemeListSelection 测试 |
 | 阅读菜单动画状态修复 | 历史 `3ca4304de` 修改的是已在此前迁移中删除的 `ReadMenu.kt`；当前 owner 为 Compose `ReadBookMenuBar.kt` | 当前菜单实现保持合并前内容；不恢复旧 View，动画表现待真机复核 |
 | 仓库本地约束与既有配置 | `AGENTS.md`、jsoup 1.16.2、Hutool 5.8.22、宽松 Base64 解码、applicationId、SDK、core/comic 产品维度 | 不放宽基线，不更改本地约束 |
 
@@ -182,3 +182,18 @@ bash ./gradlew testAppCoreDebugUnitTest testAppComicDebugUnitTest \
   '-Pkotlin.daemon.jvmargs=-Xmx6g -Xms256m -XX:MaxMetaspaceSize=1024m -XX:+UseG1GC'
 ```
 - 未执行真机/浏览器连接设备服务的端到端验证，不能据此宣称全部运行时路径无回归。
+
+## 快捷主题交互修订
+
+- 删除背景/文字设置页中的单主题快捷开关；长按阅读菜单快捷主题按钮打开列表弹窗，每行使用 Switch 即时保存勾选。
+- 快捷切换从当前阅读设置读取生效下标，避免 Gateway 缓存下标不更新导致只能切换一次。
+- 按用户要求不执行全量测试，使用 Comic Release 编译、R8、资源和打包检查；交互由用户安装验证。
+
+## Web 远程进度循环恢复修订
+
+- Web 使用段落定位时保留 Android 段落内 UTF-16 偏移，防止定位后被观察器写回段首而触发重复冲突。
+- 接受远程进度后页内重载章节，不再强制刷新浏览器；同一书籍已接受的位置保存在 sessionStorage，短页滚动钳制或刷新后不会重复提示同一远程位置，远程继续前进仍可提示。
+- 异步冲突响应在展示和确认时检查当前书籍与最新位置，避免迟到的请求回退已前进的进度或修改另一本书。
+- 仅执行针对性 Web 回归检查、类型检查、生产构建和 Comic Release 打包；不执行 Android 全量测试；后续按用户要求将本次修复提交到本地。
+
+- 本次验证完成：Web 19 个快速用例、TypeScript 检查、生产构建通过；Comic Release 编译、R8、资源压缩和关键 lint、打包成功；三个 APK 内嵌 Web 资源与最新构建逐字节一致并通过 16 KB ZIP 对齐检查。APK 未签名，未做真机交互验证。
