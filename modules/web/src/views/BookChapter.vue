@@ -14,8 +14,15 @@
           :show-arrow="false"
           v-model:visible="popCataVisible"
           popper-class="pop-cata"
+          @before-enter="openCatalog"
+          @before-leave="catalogVisible = false"
         >
-          <PopCatalog @getContent="getContent" class="popup" />
+          <PopCatalog
+            :current-chapter-index="catalogChapterIndex ?? chapterIndex"
+            :visible="catalogVisible"
+            @getContent="getContent"
+            class="popup"
+          />
           <template #reference>
             <div class="tool-icon" :class="{ 'no-point': false }">
               <div class="iconfont">&#58905;</div>
@@ -110,6 +117,7 @@
 
 <script setup lang="ts">
 import jump from '@/plugins/jump'
+import ChapterContent from '@/components/ChapterContent.vue'
 import settings from '@/config/themeConfig'
 import API, { type ReaderWebParagraph } from '@api'
 import { useLoading } from '@/hooks/loading'
@@ -429,14 +437,14 @@ watch(
 )
 // 顶部底部跳转
 const top = ref()
-const bottom = ref()
+const bottom = ref<HTMLElement>()
 const toTop = () => {
   pauseAutoPage()
   jump(top.value)
 }
 const toBottom = () => {
   pauseAutoPage()
-  jump(bottom.value)
+  if (bottom.value) jump(bottom.value)
 }
 
 // 书架路由切换
@@ -459,6 +467,19 @@ let chapterResizeObserver: ResizeObserver | undefined
 let scrollFrame = 0
 let layoutQueue = Promise.resolve()
 const pendingWindowChapters = new Map<number, Promise<unknown>>()
+
+const restoreReaderAnchor = (anchor?: ScrollAnchor) => {
+  const end = bottom.value
+  if (end) {
+    // A short chapter can need extra scroll range while its next chapter loads.
+    const height = infiniteLoading.value && anchor?.element.isConnected
+      ? window.innerHeight - end.getBoundingClientRect().top +
+        anchor.element.getBoundingClientRect().top - anchor.top
+      : 0
+    end.style.minHeight = height > 0 ? `${Math.ceil(height)}px` : ''
+  }
+  restoreChapterAnchor(anchor)
+}
 
 const measureChapters = () => {
   for (const element of content.value?.querySelectorAll<HTMLElement>('[data-reader-chapter]') ?? []) {
@@ -483,7 +504,7 @@ const updateChapterLayout = (transform: (items: DisplayChapter[]) => DisplayChap
       ? chapterSpacerHeights(chapterHeights, first, last) : { before: 0, after: 0 }
     await nextTick()
     if (readerDisposed || generation !== contentGeneration) return
-    restoreChapterAnchor(anchor)
+    restoreReaderAnchor(anchor)
     measureChapters()
     chapterResizeObserver?.disconnect()
     for (const element of content.value?.querySelectorAll<HTMLElement>('[data-reader-chapter]') ?? []) {
@@ -555,6 +576,13 @@ const visibleChapterIndex = () => {
   }
 }
 
+const catalogVisible = ref(false)
+const catalogChapterIndex = ref<number>()
+const openCatalog = () => {
+  catalogChapterIndex.value = windowReady ? visibleChapterIndex() : undefined
+  catalogVisible.value = true
+}
+
 const onReaderScroll = () => {
   lastAnchor = captureChapterAnchor(content.value)
   if (scrollFrame || !windowReady) return
@@ -593,6 +621,7 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
     chapterResizeObserver?.disconnect()
     chapterHeights.clear()
     spacerHeights.value = { before: 0, after: 0 }
+    bottom.value?.style.removeProperty('min-height')
     flushReadSession()
     readSessionStartTime = 0
     //展示进度条
@@ -625,8 +654,11 @@ const getContent = (index: number, reloadChapter = true, chapterPos = 0) => {
         if (!res.data.isSuccess) {
           throw res.data
         }
-        if (reloadChapter) await toChapterPos(chapterPos)
-        if (!isCurrent()) return
+        if (reloadChapter) {
+          await nextTick()
+          if (!isCurrent()) return
+          toChapterPos(index, chapterPos)
+        }
         windowReady = true
         refreshChapterWindow(index)
         beginReadSession()
@@ -652,12 +684,14 @@ watch(() => store.progressRestoreRevision, () => {
 
 // 章节进度跳转和计算
 const chapter = ref()
-const chapterRef = ref()
-const toChapterPos = async (pos: number) => {
-  await nextTick()
-  const current = chapterRef.value?.find((item: { $props: { chapterIndex: number } }) =>
-    item.$props.chapterIndex === chapterIndex.value)
-  await current?.scrollToReadedLength(pos)
+const chapterRef = ref<InstanceType<typeof ChapterContent>[]>()
+const toChapterPos = (index: number, pos: number) => {
+  // Align the chapter start before earlier chapters are prepended.
+  if (pos !== 0 || (infiniteLoading.value && index > 0)) {
+    const current = chapterRef.value?.find(item => item.$props.chapterIndex === index)
+    const element = current?.elementAtPosition(pos)
+    if (element) restoreReaderAnchor({ element, top: 0 })
+  }
   lastAnchor = captureChapterAnchor(content.value)
 }
 
@@ -841,7 +875,7 @@ const ignoreKeyPress = (event: KeyboardEvent) => {
 onMounted(async () => {
   chapterResizeObserver = new ResizeObserver(() => {
     if (!windowReady || readerDisposed) return
-    restoreChapterAnchor(lastAnchor)
+    restoreReaderAnchor(lastAnchor)
     measureChapters()
     lastAnchor = captureChapterAnchor(content.value)
   })

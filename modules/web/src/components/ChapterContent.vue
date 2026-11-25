@@ -22,7 +22,6 @@
 import { isLegadoUrl } from '@/utils/utils'
 import API, { type ReaderWebParagraph } from '@api'
 import { paragraphAtPosition } from '@/utils/chapterProgress'
-import { scrollChapterBy } from '@/utils/chapterWindow'
 import type { webReadConfig } from '@/web'
 
 const store = useBookStore()
@@ -59,16 +58,13 @@ const proxyImage = (event: Event) => {
 
 const titleRef = ref<HTMLElement>()
 const paragraphRef = ref<HTMLElement[]>([])
-const scrollToReadedLength = (length: number) => {
-  if (length === 0) return
-  const paragraphIndex = paragraphAtPosition(props.contents, length)
-  if (paragraphIndex === -1) return
-  return nextTick(() => {
-    scrollChapterBy(paragraphRef.value![paragraphIndex].getBoundingClientRect().top)
-  })
+const elementAtPosition = (position: number) => {
+  if (position === 0) return titleRef.value
+  const paragraphIndex = paragraphAtPosition(props.contents, position)
+  return paragraphRef.value[paragraphIndex]
 }
 defineExpose({
-  scrollToReadedLength,
+  elementAtPosition,
 })
 let intersectionObserver: IntersectionObserver | null = null
 const emit = defineEmits(['readedLengthChange'])

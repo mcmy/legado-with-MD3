@@ -1,8 +1,5 @@
 <template>
-  <div
-    :class="{ 'cata-wrapper': true, visible: popCataVisible }"
-    :style="popupTheme"
-  >
+  <div class="cata-wrapper" :style="popupTheme">
     <div class="title">目录</div>
     <virtual-list
       style="height: 300px; overflow: auto"
@@ -11,9 +8,10 @@
       data-key="index"
       wrap-class="data-wrapper"
       item-class="cata"
+      :item-style="{ height: `${rowHeight}px`, boxSizing: 'border-box' }"
       :data-sources="virtualListdata"
       :data-component="CatalogItem"
-      :estimate-size="40"
+      :estimate-size="rowHeight"
       :extra-props="{ gotoChapter, currentChapterIndex }"
     />
   </div>
@@ -27,8 +25,9 @@ import CatalogItem from './CatalogItem.vue'
 import type { BookChapter } from '@/book'
 
 const store = useBookStore()
+const props = defineProps<{ currentChapterIndex: number; visible: boolean }>()
 
-const { catalog, popCataVisible, miniInterface } = storeToRefs(store)
+const { catalog, miniInterface } = storeToRefs(store)
 
 //主题
 const isNight = computed(() => store.theme)
@@ -69,28 +68,27 @@ const virtualListdata = computed(() => {
 })
 
 //打开目录 计算当前章节对应的虚拟列表位置
+const rowHeight = 40
 const virtualListRef = ref()
-const currentChapterIndex = computed({
-  get: () => store.readingBook.chapterIndex,
-  set: value => (store.readingBook.chapterIndex = value),
-})
 const virtualListIndex = computed(() => {
-  const index = currentChapterIndex.value
+  const index = props.currentChapterIndex
   if (miniInterface.value) return index
   // pc端 virtualListIitem有2个章节
   return Math.floor(index / 2)
 })
-onUpdated(() => {
-  // dom更新触发ResizeObserver，更新虚拟列表内部的sizes Map
-  if (!popCataVisible.value) return
-  virtualListRef.value.scrollToIndex(virtualListIndex.value)
-})
+watch(
+  [() => props.visible, virtualListIndex, virtualListdata],
+  ([visible, index, rows]) => {
+    if (visible && rows[index]) virtualListRef.value?.scrollToOffset(index * rowHeight)
+  },
+  { flush: 'post' },
+)
 
 // 点击加载对应章节内容
 const emit = defineEmits(['getContent'])
 const gotoChapter = (chapter: BookChapter) => {
   const chapterIndex = catalog.value.indexOf(chapter)
-  currentChapterIndex.value = chapterIndex
+  store.readingBook.chapterIndex = chapterIndex
   store.setPopCataVisible(false)
   store.setContentLoading(true)
   store.saveBookProgress()
@@ -115,8 +113,6 @@ const gotoChapter = (chapter: BookChapter) => {
   }
   :deep(.data-wrapper) {
     .cata {
-      /*width: 50%;*/
-      height: 40px;
       cursor: pointer;
       font:
         16px / 40px PingFangSC-Regular,
